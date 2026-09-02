@@ -103,6 +103,30 @@ def test_warning_detail_formats_safe_facts_actions_and_times():
     assert detail["actions"][0]["action_id"] == "check_again"
 
 
+def test_group_detail_keeps_each_production_meter_reason_and_actions():
+    group = people_performance_view.warning_groups(
+        (
+            _production_warning("Trim Saw 1"),
+            _production_warning("Hand Build #1"),
+        )
+    )[0]
+
+    detail = people_performance_view.warning_group_detail_context(group)
+
+    assert detail["title"] == "Production Meters Unavailable"
+    assert [item["subject"] for item in detail["members"]] == [
+        "Hand Build #1",
+        "Trim Saw 1",
+    ]
+    assert all(item["summary"] for item in detail["members"])
+    assert all(item["checked_at"] == "9:30 AM" for item in detail["members"])
+    assert all(
+        [action["action_id"] for action in item["actions"]]
+        == ["check_again", "open_work_center"]
+        for item in detail["members"]
+    )
+
+
 def test_dashboard_model_carries_assembled_breaks():
     model = busy_dashboard_model()
 

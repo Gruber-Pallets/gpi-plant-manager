@@ -12,7 +12,11 @@ from .. import _http_cache
 from ..deps import client as zira_client
 from ..deps import templates
 from ..people_performance_data import load_dashboard
-from ..people_performance_view import dashboard_context, warning_detail_context
+from ..people_performance_view import (
+    dashboard_context,
+    warning_group_detail_context,
+    warning_groups,
+)
 from ..plant_day import today as plant_today
 
 
@@ -139,13 +143,17 @@ def people_performance_warning(
     selected = _selected_day(day, today=today)
     model = load_dashboard(selected, zira_client, now_utc=now_utc)
     warning = next(
-        (item for item in model.source_warnings if item.key == warning_key_value),
+        (
+            item
+            for item in warning_groups(model.source_warnings)
+            if item.key == warning_key_value
+        ),
         None,
     )
     response = templates.TemplateResponse(
         request,
         "_people_performance_warning_panel.html",
-        {"warning": warning_detail_context(warning)},
+        {"warning": warning_group_detail_context(warning)},
     )
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-People-Performance-Response"] = "warning-detail"

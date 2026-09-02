@@ -8,6 +8,8 @@ from tests.people_performance_fixtures import DAY, busy_dashboard_model
 from zira_dashboard.app import app
 from zira_dashboard.auth import _is_bypass_path
 from zira_dashboard.deps import templates
+from zira_dashboard.people_performance_view import warning_groups
+from zira_dashboard.people_performance_warnings import production_metric_warning
 from zira_dashboard.routes import people_performance as route
 
 
@@ -155,6 +157,45 @@ def test_warning_detail_returns_marked_no_store_partial(client, dashboard_loader
     assert 'data-pp-warning-action="open_diagnostics"' in response.text
     assert 'data-pp-warning-action="review_identities"' not in response.text
     assert "source_unavailable" not in response.text
+
+
+def test_grouped_production_warning_detail_lists_every_meter(client, monkeypatch):
+    warnings = (
+        production_metric_warning(
+            station_name="Trim Saw 1",
+            reason_code="calculation_failure",
+            checked_at_utc=NOW,
+            day=DAY,
+        ),
+        production_metric_warning(
+            station_name="Hand Build #1",
+            reason_code="missing_goal",
+            checked_at_utc=NOW,
+            day=DAY,
+        ),
+    )
+    monkeypatch.setattr(
+        route,
+        "load_dashboard",
+        lambda day, client, now_utc=None: replace(
+            busy_dashboard_model(), source_warnings=warnings
+        ),
+    )
+    monkeypatch.setattr(route, "_utc_now", lambda: NOW)
+    group_key = warning_groups(warnings)[0].key
+
+    response = client.get(
+        f"/people-performance/warnings/{group_key}?day={DAY.isoformat()}"
+    )
+
+    assert response.status_code == 200
+    assert 'data-warning-state="open"' in response.text
+    assert 'id="pp-warning-member-1"' in response.text
+    assert 'id="pp-warning-member-2"' in response.text
+    assert "Hand Build #1" in response.text
+    assert "Trim Saw 1" in response.text
+    assert response.text.count('data-pp-warning-action="open_work_center"') == 2
+    assert 'data-pp-warning-action="review_settings"' in response.text
 
 
 def test_missing_warning_key_returns_cleared_partial(client, dashboard_loader):

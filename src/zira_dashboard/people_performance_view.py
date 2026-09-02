@@ -486,21 +486,8 @@ def warning_group_summary_view(group: DashboardWarningGroup) -> dict:
     }
 
 
-def warning_detail_context(warning: DashboardWarning | None) -> dict:
-    if warning is None:
-        return {
-            "state": "cleared",
-            "title": "Issue cleared",
-            "summary": "Plant Manager checked again and this warning is no longer active.",
-            "impact": "The People page now shows the latest available information.",
-            "facts": (),
-            "checked_at": "",
-            "last_success_at": "",
-            "actions": (),
-        }
+def _warning_member_context(warning: DashboardWarning) -> dict:
     return {
-        "state": "open",
-        "key": warning.key,
         "kind": warning.kind,
         "title": warning.title,
         "summary": warning.summary,
@@ -520,6 +507,49 @@ def warning_detail_context(warning: DashboardWarning | None) -> dict:
                 "href": action.href,
             }
             for action in warning.actions
+        ),
+    }
+
+
+def warning_detail_context(warning: DashboardWarning | None) -> dict:
+    if warning is None:
+        return {
+            "state": "cleared",
+            "title": "Issue cleared",
+            "summary": "Plant Manager checked again and this warning is no longer active.",
+            "impact": "The People page now shows the latest available information.",
+            "facts": (),
+            "checked_at": "",
+            "last_success_at": "",
+            "actions": (),
+            "members": (),
+        }
+    return {
+        "state": "open",
+        "key": warning.key,
+        **_warning_member_context(warning),
+        "members": (),
+    }
+
+
+def warning_group_detail_context(group: DashboardWarningGroup | None) -> dict:
+    if group is None:
+        return warning_detail_context(None)
+    if group.count is None:
+        return warning_detail_context(group.members[0])
+    return {
+        "state": "open",
+        "key": group.key,
+        "kind": group.kind,
+        "title": group.label,
+        "summary": group.summary,
+        "impact": "Production details are hidden for the listed work centers.",
+        "facts": (("Affected meters", str(group.count)),),
+        "checked_at": "",
+        "last_success_at": "",
+        "actions": (),
+        "members": tuple(
+            _warning_member_context(member) for member in group.members
         ),
     }
 
@@ -606,6 +636,7 @@ __all__ = [
     "DashboardWarningGroup",
     "dashboard_context",
     "warning_detail_context",
+    "warning_group_detail_context",
     "warning_group_summary_view",
     "warning_groups",
     "warning_summary_view",
