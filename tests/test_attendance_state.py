@@ -7,6 +7,21 @@ from datetime import datetime, timedelta, timezone
 from zira_dashboard import attendance_state as ast
 
 
+def test_latest_punch_queries_include_raw_punch_time(monkeypatch):
+    statements = []
+    monkeypatch.setattr(
+        ast.db,
+        "query",
+        lambda sql, params=None: statements.append((sql, params)) or [],
+    )
+
+    assert ast.latest_punch(5) is None
+    assert ast.latest_punches_bulk([5]) == {}
+
+    assert len(statements) == 2
+    assert all("occurred_at AS raw_occurred_at" in sql for sql, _params in statements)
+
+
 def test_state_from_log_clocked_out_when_none_or_clockout():
     assert ast.state_from_log(None)["is_clocked_in"] is False
     out = {"action": "clock_out", "wc_name": None, "occurred_at": None,

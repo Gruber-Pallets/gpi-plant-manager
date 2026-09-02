@@ -328,6 +328,7 @@ def test_active_live_dashboard_shows_stale_unknown_without_punch_choice(monkeypa
 
     assert response.status_code == 200
     assert "Odoo attendance is stale" in response.text
+    assert "Your current clock state cannot be verified" in response.text
     assert "Clock state unavailable" in response.text
     assert "/timeclock/clock-in/" not in response.text
     assert "/timeclock/clock-out/" not in response.text

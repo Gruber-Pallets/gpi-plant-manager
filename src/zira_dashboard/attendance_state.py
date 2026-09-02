@@ -10,7 +10,7 @@ See docs/superpowers/specs/2026-06-01-timeclock-odoo-state-reconciliation-design
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from . import db, live_cache
 
@@ -36,6 +36,7 @@ def latest_punch(person_odoo_id: int) -> dict | None:
     rows = db.query(
         "SELECT action, wc_name, "
         "COALESCE(rounded_at, occurred_at) AS occurred_at, "
+        "occurred_at AS raw_occurred_at, "
         "odoo_attendance_id, synced_to_odoo, synced_at "
         "FROM timeclock_punches_log WHERE person_odoo_id = %s "
         "ORDER BY occurred_at DESC, id DESC LIMIT 1",
@@ -54,6 +55,7 @@ def latest_punches_bulk(person_odoo_ids) -> dict[int, dict]:
     rows = db.query(
         "SELECT DISTINCT ON (person_odoo_id) person_odoo_id, action, wc_name, "
         "COALESCE(rounded_at, occurred_at) AS occurred_at, "
+        "occurred_at AS raw_occurred_at, "
         "odoo_attendance_id, synced_to_odoo, synced_at "
         "FROM timeclock_punches_log WHERE person_odoo_id = ANY(%s) "
         "ORDER BY person_odoo_id, COALESCE(rounded_at, occurred_at) DESC, id DESC",
@@ -95,6 +97,17 @@ def trust_local(latest: dict | None, refreshed_at: datetime | None) -> bool:
     return refreshed_at <= synced_at
 
 
+def _local_punch_is_recent(latest: dict | None) -> bool:
+    """Whether the raw punch time is recent enough to override a stale mirror."""
+    if latest is None:
+        return False
+    punch_at = latest.get("raw_occurred_at") or latest.get("occurred_at")
+    if not isinstance(punch_at, datetime) or punch_at.utcoffset() is None:
+        return False
+    age = datetime.now(UTC) - punch_at.astimezone(UTC)
+    return age.total_seconds() >= 0 and age <= live_cache.STALE_THRESHOLD
+
+
 def current_state(
     person_odoo_id: int,
     snapshot: dict | None = None,
@@ -109,8 +122,10 @@ def current_state(
     Sources: the Odoo open-attendance snapshot (live_cache, refreshed ~30s by
     the warmer) and the latest timeclock_punches_log row. Odoo is authoritative
     EXCEPT for very-recent local punches the snapshot can't have seen yet (see
-    trust_local). If the snapshot is missing or stale, we degrade to the local
-    log so an Odoo/warmer outage never blanks everyone to 'clocked out'.
+    trust_local). Before mirror ownership, a missing or stale legacy snapshot
+    degrades to the local log. Once the mirror owns reads, unavailable or stale
+    data produces an unknown state so the kiosk cannot present an old open row
+    or work center as current.
 
     Batch callers (the auto-lunch worker) pass the already-read ``snapshot`` +
     ``refreshed_at`` and the person's pre-fetched ``latest`` punch row (from
@@ -140,7 +155,9 @@ def current_state(
     if mirror_owned:
         if source_stale is None:
             source_stale = live_cache.is_stale(refreshed_at)
-        if trust_local(latest, refreshed_at):
+        if trust_local(latest, refreshed_at) and (
+            not source_stale or _local_punch_is_recent(latest)
+        ):
             return {
                 **state_from_log(latest),
                 "attendance_source_unavailable": not source_available,
@@ -158,25 +175,26 @@ def current_state(
                 "attendance_source_stale": source_stale,
                 "attendance_source_error": source_error,
             }
+        if source_stale:
+            return {
+                **_department_state(None),
+                "is_clocked_in": None,
+                "current_wc": None,
+                "check_in_ts": None,
+                "open_odoo_attendance_id": None,
+                "attendance_source_unavailable": False,
+                "attendance_source_stale": True,
+                "attendance_source_error": source_error,
+            }
         entry = snapshot.get(str(person_odoo_id))
         if not entry:
-            state = (
-                {
-                    **_department_state(None),
-                    "is_clocked_in": None,
-                    "current_wc": None,
-                    "check_in_ts": None,
-                    "open_odoo_attendance_id": None,
-                }
-                if source_stale
-                else {
-                    **_department_state(None),
-                    "is_clocked_in": False,
-                    "current_wc": None,
-                    "check_in_ts": None,
-                    "open_odoo_attendance_id": None,
-                }
-            )
+            state = {
+                **_department_state(None),
+                "is_clocked_in": False,
+                "current_wc": None,
+                "check_in_ts": None,
+                "open_odoo_attendance_id": None,
+            }
         else:
             check_in = entry.get("check_in")
             state = {

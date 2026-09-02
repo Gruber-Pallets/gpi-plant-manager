@@ -478,7 +478,7 @@ def test_owned_unavailable_open_source_is_not_replaced_by_synced_local_log(monke
     assert state["attendance_source_unavailable"] is True
 
 
-def test_owned_stale_open_source_keeps_last_verified_odoo_state(monkeypatch):
+def test_owned_stale_open_source_does_not_claim_employee_is_still_at_work(monkeypatch):
     stale_at = FIRST_IN + timedelta(minutes=10)
     monkeypatch.setattr(
         live_cache,
@@ -512,8 +512,67 @@ def test_owned_stale_open_source_keeps_last_verified_odoo_state(monkeypatch):
 
     state = attendance_state.current_state(5)
 
+    assert state["is_clocked_in"] is None
+    assert state["current_wc"] is None
+    assert state["attendance_source_stale"] is True
+
+
+def test_owned_stale_source_keeps_a_just_written_unsynced_punch(monkeypatch):
+    recent = datetime.now(UTC)
+    source = SimpleNamespace(
+        payload={},
+        refreshed_at=recent - timedelta(minutes=10),
+        mirror_owned=True,
+        available=True,
+        stale=True,
+        error=None,
+    )
+    latest = {
+        "action": "clock_in",
+        "wc_name": "Bay 3",
+        "occurred_at": recent - timedelta(minutes=15),
+        "raw_occurred_at": recent,
+        "odoo_attendance_id": None,
+        "synced_to_odoo": False,
+        "synced_at": None,
+    }
+
+    state = attendance_state.current_state(5, latest=latest, source=source)
+
     assert state["is_clocked_in"] is True
-    assert state["current_wc"] == "Bay 8"
+    assert state["current_wc"] == "Bay 3"
+
+
+def test_owned_stale_source_rejects_an_old_unsynced_punch(monkeypatch):
+    old = datetime.now(UTC) - timedelta(hours=2)
+    source = SimpleNamespace(
+        payload={
+            "5": {
+                "att_id": 91,
+                "check_in": old.isoformat(),
+                "wc_name": "Bay 8",
+            }
+        },
+        refreshed_at=old,
+        mirror_owned=True,
+        available=True,
+        stale=True,
+        error="sync stalled",
+    )
+    latest = {
+        "action": "clock_in",
+        "wc_name": "Bay 3",
+        "occurred_at": old,
+        "raw_occurred_at": old,
+        "odoo_attendance_id": None,
+        "synced_to_odoo": False,
+        "synced_at": None,
+    }
+
+    state = attendance_state.current_state(5, latest=latest, source=source)
+
+    assert state["is_clocked_in"] is None
+    assert state["current_wc"] is None
     assert state["attendance_source_stale"] is True
 
 
@@ -541,7 +600,8 @@ def test_owned_open_state_uses_the_frozen_source_stale_decision(monkeypatch):
 
     state = attendance_state.current_state(5)
 
-    assert state["current_wc"] == "Bay 8"
+    assert state["is_clocked_in"] is None
+    assert state["current_wc"] is None
     assert state["attendance_source_stale"] is True
 
 

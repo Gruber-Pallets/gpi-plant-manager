@@ -20,6 +20,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **A plan is ready to keep each feedback card and its matching owner task on the same step.** Starting work will move both forward. Finishing or declining work will close the task with a clear note. Nothing in the app has changed yet.
 
+### Stop showing an old work area as current
+
+- **The timeclock no longer says you are still at an old work area when its attendance update is late.** It now asks you to see a manager until it can check your current clock state.
+
 ### Use People page totals and warnings
 
 - **The People page totals can now filter the list.** Warning buttons explain what went wrong and show a safe next step. You can also match unknown forklift drivers to the right active employee in Settings, and every change is recorded.
