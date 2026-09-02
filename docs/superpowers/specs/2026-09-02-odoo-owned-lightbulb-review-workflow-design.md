@@ -138,6 +138,18 @@ action must not overwrite the request text.
 
 ## Odoo-owned actions
 
+### 2026-09-02 transport decision
+
+Use Odoo 19's native Studio `/web/hook/<uuid>` endpoint without a custom Odoo
+controller or module. HTTP 200 with exact JSON `{"status":"ok"}` is only an
+acknowledgement that the Execute Code action returned without error. Immediately
+afterward, the calling application's server reads the exact reference identity
+and linked task through authenticated JSON-RPC, constructs the typed action
+result locally, and validates the requested transition before showing success.
+After a timeout or unknown outcome, it performs that exact readback before any
+retry and accepts the result only when the requested transition demonstrably
+landed.
+
 Odoo implements the five review operations once. Sales Manager and OS Manager
 invoke those same operations by authoritative task/reference identity and then
 read both records back. An app must not claim success from its request alone.
@@ -149,7 +161,11 @@ The Odoo action layer is responsible for:
 3. Confirming that the current reference state permits the requested action.
 4. Applying the task and reference changes as one business operation.
 5. Recording the action in Odoo history.
-6. Returning the final task and reference state for verification.
+6. Returning without error so the native endpoint can acknowledge the transaction.
+
+The calling application's server owns the immediate authenticated readback,
+constructs the typed final state, and rejects any result that does not prove the
+requested transition.
 
 An app may use its own server integration credentials for transport, but it
 must send the authenticated employee identity. Odoo validates that identity;

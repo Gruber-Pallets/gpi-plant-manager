@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Check the shared review setup safely
+
+- **A new check can find missing parts of the shared Odoo review setup without showing its secret link.** A test copy of Odoo must pass extra safety checks before the review steps can be tried.
+
 ### Get ready for one shared review task
 
 - **Plant Manager can now recognize both the old and new shared feedback lists.** This keeps today’s feedback working while the new review choices stay hidden until the full workflow is ready.

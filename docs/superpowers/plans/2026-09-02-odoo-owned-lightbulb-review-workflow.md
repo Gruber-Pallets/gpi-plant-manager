@@ -21,6 +21,16 @@
 - Do not create, delete, archive, merge, or rewrite unrelated Odoo improvement rows.
 - Never expose the Odoo webhook URL or secret to browser code, logs, error messages, screenshots, fixtures, or version control.
 - Every mutation must verify the configured Odoo database/company immediately before the call and must read both the task and reference back before reporting success.
+
+**2026-09-02 explicit transport decision:** Use the native Odoo Studio
+`/web/hook/<uuid>` endpoint and no custom controller/module. Treat only HTTP 200
+with exact JSON `{"status":"ok"}` as acknowledgement, never as final state.
+Immediately read the exact reference identity and linked task through
+authenticated JSON-RPC, construct and validate `ReviewActionResult` in the
+calling app's server, and report success only when it matches the requested
+transition. On timeout or unknown outcome, perform exact readback before any
+retry and infer success only when the transition demonstrably landed.
+
 - A timeout means “unknown”; read by exact identity before retrying. Never create a replacement task.
 - Existing four-type records and locally owned coding tasks must continue to work throughout rollout.
 - Add a short, child-readable `CHANGELOG.md` entry before every push to a repository's `main` branch.
@@ -60,7 +70,7 @@ This is one coordinated plan because no app can safely ship the requested behavi
 
 - Add the exact `2s Improvement` option to `x_studio_type` in a duplicate database first.
 - Add one scoped on-save automation that creates and links a task only when `x_studio_linked_task` is empty.
-- Add one secret external webhook action that applies Accept, Decline, Assign, Complete, and Move to L10 in Odoo, then returns authoritative task/reference state.
+- Add one secret native external webhook action that applies Accept, Decline, Assign, Complete, and Move to L10 in Odoo. It returns only the native acknowledgement; the server-side adapter performs immediate authoritative task/reference readback.
 - Add task-to-reference lifecycle automation for digital coding tasks so done/cancelled/open state is reflected in the same reference table without using the physical-review controls.
 
 ---
@@ -269,7 +279,7 @@ In-Progress + move_l10 -> stage L10, assignee and reference status unchanged
 terminal + any action -> conflict, no write
 ```
 
-Task and reference changes must occur in one transaction. The action response must be built from records re-read after writes.
+Task and reference changes must occur in one transaction. After the exact native acknowledgement, the calling app must re-read both records and build the action result locally. A mismatch is failure or conflict.
 
 - [ ] **Step 7: Implement the checker and run it read-only against the duplicate database.**
 
@@ -628,7 +638,7 @@ Batch lookup uses `x_studio_linked_task in [...]`; it rejects duplicate referenc
 
 - [ ] **Step 2: Write failing action-client tests.**
 
-Mock `fetch` and prove: URL is read server-side, payload contains exact source identity and authenticated actor Odoo user ID, decline/complete require trimmed notes, assign requires positive target user ID, non-2xx responses are redacted, timeouts trigger exact readback, and success is returned only if task/reference readback matches the requested transition.
+Mock `fetch` and prove: URL is read server-side, payload contains exact source identity and authenticated actor Odoo user ID, decline/complete require trimmed notes, assign requires positive target user ID, only HTTP 200 with exact `{"status":"ok"}` is accepted as acknowledgement, non-2xx responses are redacted, timeouts trigger exact readback before any retry, and success is returned only if the separate authenticated task/reference readback matches the requested transition.
 
 - [ ] **Step 3: Run tests and confirm modules are missing.**
 
