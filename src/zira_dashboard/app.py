@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from markupsafe import Markup
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db
@@ -647,6 +648,22 @@ def _static_v(filename: str) -> str:
 
 
 templates.env.globals["static_v"] = _static_v
+
+
+def _static_text(filename: str) -> Markup:
+    """Embed a trusted local asset in the HTML that selected its markup.
+
+    The People controls must not mix markup from one rolling release with CSS
+    or JavaScript from another. Only files directly inside our static folder
+    can be embedded; template callers supply the fixed filename.
+    """
+    path = (_STATIC_DIR / filename).resolve()
+    if path.parent != _STATIC_DIR.resolve() or path.suffix not in {".css", ".js"}:
+        raise ValueError("Only top-level CSS and JavaScript assets may be embedded")
+    return Markup(path.read_text(encoding="utf-8"))
+
+
+templates.env.globals["static_text"] = _static_text
 
 
 @app.middleware("http")

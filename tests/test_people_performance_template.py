@@ -145,6 +145,16 @@ def test_page_uses_one_compact_live_manager_strip(rendered_html):
     assert '>Today<' not in rendered_html
 
 
+def test_page_embeds_matching_control_styles_and_behavior(rendered_html):
+    assert '<style data-pp-asset="people-performance.css">' in rendered_html
+    assert ".pp-counts button[aria-pressed=\"true\"]" in rendered_html
+    assert '<script data-pp-asset="people-performance.js">' in rendered_html
+    assert "function activateCountFilter(control)" in rendered_html
+    assert "function warningTriggerFor(node)" in rendered_html
+    assert 'href="/static/people-performance.css' not in rendered_html
+    assert 'src="/static/people-performance.js' not in rendered_html
+
+
 def test_warning_strip_uses_safe_semantic_detail_triggers(rendered_html):
     warning = busy_dashboard_model().source_warnings[0]
     warning_strip = rendered_html.split(

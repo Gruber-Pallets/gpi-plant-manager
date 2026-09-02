@@ -2,7 +2,9 @@
 {% block title %}People performance{% endblock %}
 {% block body_attrs %} data-live-polling-disabled="{{ 1 if poll_disabled else 0 }}"{% endblock %}
 {% block extra_head %}
-<link rel="stylesheet" href="/static/people-performance.css?v={{ static_v("people-performance.css") }}">
+<style data-pp-asset="people-performance.css">
+{{ static_text("people-performance.css") }}
+</style>
 {% endblock %}
 {% block content %}
 <section class="pp-page"
@@ -18,5 +20,7 @@
 </section>
 {% endblock %}
 {% block scripts %}
-<script src="/static/people-performance.js?v={{ static_v("people-performance.js") }}"></script>
+<script data-pp-asset="people-performance.js">
+{{ static_text("people-performance.js") }}
+</script>
 {% endblock %}

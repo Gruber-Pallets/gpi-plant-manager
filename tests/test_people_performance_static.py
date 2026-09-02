@@ -14,12 +14,16 @@ TEMPLATE_PATH = ROOT / "src/zira_dashboard/templates/people_performance.html"
 ROWS_TEMPLATE_PATH = ROOT / "src/zira_dashboard/templates/_people_performance_rows.html"
 
 
-def test_people_assets_exist_and_are_loaded_by_the_full_page():
+def test_people_assets_exist_and_are_embedded_in_the_full_page_atomically():
     assert CSS_PATH.exists()
     assert SCRIPT_PATH.exists()
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
-    assert 'static_v("people-performance.css")' in template
-    assert 'static_v("people-performance.js")' in template
+    assert '<style data-pp-asset="people-performance.css">' in template
+    assert '{{ static_text("people-performance.css") }}' in template
+    assert '<script data-pp-asset="people-performance.js">' in template
+    assert '{{ static_text("people-performance.js") }}' in template
+    assert 'href="/static/people-performance.css' not in template
+    assert 'src="/static/people-performance.js' not in template
 
 
 def test_color_shape_readability_and_tablet_contracts_are_present():
