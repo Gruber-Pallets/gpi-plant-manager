@@ -259,6 +259,229 @@ def test_preflight_returns_detached_partial_safe_diagnostics():
     assert "Actual Company" not in serialized
 
 
+def test_readback_diagnostic_uses_saved_binary_and_outputs_only_mismatch_names(
+    monkeypatch,
+):
+    image = normalized("before")
+    fields = {
+        "x_name": "saved private feedback",
+        "x_studio_source_id": "GPI-PM-FB-17",
+        "x_studio_source": SOURCE_VALUE,
+        "x_studio_date_start": "2026-08-20",
+        "x_studio_type": "Digital",
+        "x_studio_status": "Requested",
+    }
+    binaries = {
+        "x_studio_image": {
+            "sha256": image.sha256,
+            "byte_length": image.byte_length,
+        }
+    }
+    manifest = {"fields": fields, "binary_evidence": binaries}
+    digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    attempt = sync_store.Attempt(
+        attempt_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        feedback_id=17,
+        projection_version=3,
+        mutation_kind="create",
+        remote_id=901,
+        manifest=manifest,
+        manifest_digest=digest,
+        binaries=binaries,
+        state="ambiguous",
+        dispatch_marked_at=aware_now() - timedelta(seconds=2),
+        rpc_succeeded_at=aware_now() - timedelta(seconds=1),
+        outcome_detail="readback_mismatch",
+        created_at=aware_now() - timedelta(seconds=3),
+        updated_at=aware_now(),
+    )
+    evidence = sync_store.QuarantinedReadbackEvidence(
+        attempt_id=attempt.attempt_id,
+        feedback_id=17,
+        projection_version=3,
+        remote_id=901,
+        state="quarantined",
+        reason="readback_mismatch",
+        attempt=attempt,
+    )
+    events = []
+    local_read = MagicMock(
+        side_effect=lambda value: events.append(("local", value)) or evidence
+    )
+    monkeypatch.setattr(sync_store, "load_quarantined_readback_evidence", local_read)
+    disposition = MagicMock(side_effect=AssertionError("disposition attempted"))
+    monkeypatch.setattr(sync_store, "apply_quarantine_disposition", disposition)
+    image_read = MagicMock(
+        side_effect=lambda feedback_id, saved: events.append(
+            ("image", feedback_id, tuple(sorted(saved)))
+        )
+        or MappingProxyType({"x_studio_image": image})
+    )
+    monkeypatch.setattr(feedback_store, "attempt_image_snapshot", image_read)
+
+    class DiagnosticClient:
+        create_improvement = MagicMock(side_effect=AssertionError("mutation attempted"))
+        write_improvement = MagicMock(side_effect=AssertionError("mutation attempted"))
+
+        def inspect_target(self):
+            events.append(("preflight",))
+            return good_inspection()
+
+        def read_improvement(self, remote_id, read_fields, *, full_binary):
+            events.append(("read", remote_id, tuple(read_fields), full_binary))
+            return {
+                "id": remote_id,
+                **fields,
+                "x_name": "different private feedback",
+                "x_studio_image": "ZGlmZmVyZW50LXByaXZhdGUtaW1hZ2U=",
+            }
+
+    client = DiagnosticClient()
+    report = cli.rollout.readback_diagnostic(
+        attempt_id=attempt.attempt_id,
+        client=client,
+    )
+
+    assert report == cli.rollout.ReadbackDiagnosticReport(
+        attempt_id=attempt.attempt_id,
+        feedback_id=17,
+        projection_version=3,
+        remote_id=901,
+        state="quarantined",
+        reason="readback_mismatch",
+        mismatched_fields=("x_name", "x_studio_image"),
+    )
+    assert events[0] == ("preflight",)
+    assert events[1] == ("local", attempt.attempt_id)
+    assert events[2] == ("image", 17, ("x_studio_image",))
+    assert events[3] == (
+        "read",
+        901,
+        tuple(sorted({*fields, "x_studio_image"})),
+        True,
+    )
+    assert events[4] == ("local", attempt.attempt_id)
+    client.create_improvement.assert_not_called()
+    client.write_improvement.assert_not_called()
+    disposition.assert_not_called()
+    serialized = repr(report)
+    for private in (
+        "saved private feedback",
+        "different private feedback",
+        "different-private-image",
+        image.sha256,
+    ):
+        assert private not in serialized
+
+
+@pytest.mark.parametrize(
+    "inspection",
+    [
+        good_inspection(database_uuid_matches=False),
+        good_inspection(company_matches=False),
+        good_inspection(missing_fields=("x_studio_image",)),
+        good_inspection(source_value_present=False),
+    ],
+)
+def test_readback_diagnostic_requires_fresh_green_preflight_before_local_read(
+    monkeypatch, inspection
+):
+    local_read = MagicMock(side_effect=AssertionError("local evidence read attempted"))
+    monkeypatch.setattr(sync_store, "load_quarantined_readback_evidence", local_read)
+    client = FakeClient(inspection=inspection)
+
+    with pytest.raises(ContractError, match="preflight"):
+        cli.rollout.readback_diagnostic(
+            attempt_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            client=client,
+        )
+
+    assert client.events == [("inspect_target",)]
+    local_read.assert_not_called()
+
+
+def test_readback_diagnostic_report_rejects_nonallowlisted_or_unordered_fields():
+    base = {
+        "attempt_id": UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        "feedback_id": 17,
+        "projection_version": 3,
+        "remote_id": 901,
+        "state": "quarantined",
+        "reason": "readback_mismatch",
+    }
+
+    for mismatched_fields in (
+        ("private_field",),
+        ("x_studio_type", "x_name"),
+        ("x_name", "x_name"),
+    ):
+        with pytest.raises(ValueError):
+            cli.rollout.ReadbackDiagnosticReport(
+                **base,
+                mismatched_fields=mismatched_fields,
+            )
+
+
+def test_readback_diagnostic_rejects_authority_change_after_remote_read(monkeypatch):
+    attempt_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    manifest = {
+        "fields": {
+            "x_name": "private feedback",
+            "x_studio_source_id": "GPI-PM-FB-17",
+            "x_studio_source": SOURCE_VALUE,
+            "x_studio_date_start": "2026-08-20",
+            "x_studio_type": "Digital",
+            "x_studio_status": "Requested",
+        },
+        "binary_evidence": {},
+    }
+    digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    attempt = sync_store.Attempt(
+        attempt_id=attempt_id,
+        feedback_id=17,
+        projection_version=3,
+        mutation_kind="update",
+        remote_id=901,
+        manifest=manifest,
+        manifest_digest=digest,
+        binaries={},
+        state="ambiguous",
+        dispatch_marked_at=aware_now() - timedelta(seconds=2),
+        rpc_succeeded_at=aware_now() - timedelta(seconds=1),
+        outcome_detail="readback_mismatch",
+        created_at=aware_now() - timedelta(seconds=3),
+        updated_at=aware_now(),
+    )
+    first = sync_store.QuarantinedReadbackEvidence(
+        attempt_id=attempt_id,
+        feedback_id=17,
+        projection_version=3,
+        remote_id=901,
+        state="quarantined",
+        reason="readback_mismatch",
+        attempt=attempt,
+        attempt_count=0,
+    )
+    changed = dataclasses.replace(first, attempt_count=1)
+    monkeypatch.setattr(
+        sync_store,
+        "load_quarantined_readback_evidence",
+        MagicMock(side_effect=[first, changed]),
+    )
+    client = MagicMock()
+    client.inspect_target.return_value = good_inspection()
+    client.read_improvement.return_value = {"id": 901, **attempt.manifest["fields"]}
+
+    with pytest.raises(sync_store.StateTransitionError, match="changed"):
+        cli.rollout.readback_diagnostic(attempt_id=attempt_id, client=client)
+
+    client.read_improvement.assert_called_once()
+
+
 def _contract_fields() -> dict[str, dict[str, object]]:
     fields = {field_name: {"type": "char", "readonly": False} for field_name in TARGET_FIELDS}
     fields.update(
@@ -2053,6 +2276,7 @@ def test_rollout_cli_exposes_only_the_exact_planned_subcommands():
         "reconcile",
         "canary-report",
         "quarantine-list",
+        "quarantine-readback-diagnostic",
         "quarantine-disposition",
         "quarantine-release-pre-attempt",
     }
@@ -2225,10 +2449,133 @@ def _install_cli_fakes(monkeypatch):
     monkeypatch.setattr(cli.rollout, "enqueue_history_batch", MagicMock())
     monkeypatch.setattr(cli.rollout, "reconciliation_counts", MagicMock())
     monkeypatch.setattr(cli.rollout, "canary_report", MagicMock())
+    monkeypatch.setattr(cli.rollout, "readback_diagnostic", MagicMock())
     monkeypatch.setattr(cli.sync_store, "list_quarantined", MagicMock())
     monkeypatch.setattr(cli.sync_store, "apply_quarantine_disposition", MagicMock())
     monkeypatch.setattr(cli.sync_store, "release_pre_attempt_quarantine", MagicMock())
     return client
+
+
+def test_readback_diagnostic_parser_requires_exact_uuid_and_read_only_confirmation():
+    attempt_id = "50bf66d9-c8d0-44f0-8e7f-10906330046b"
+    args = cli.build_parser().parse_args(
+        [
+            "quarantine-readback-diagnostic",
+            "--attempt-id",
+            attempt_id,
+            "--confirm-read-only",
+        ]
+    )
+
+    assert vars(args) == {
+        "command": "quarantine-readback-diagnostic",
+        "attempt_id": UUID(attempt_id),
+        "confirm_read_only": True,
+    }
+    for malformed in (
+        attempt_id.upper(),
+        "50bf66d9c8d044f08e7f10906330046b",
+        "{50bf66d9-c8d0-44f0-8e7f-10906330046b}",
+        "not-a-private-attempt-value",
+    ):
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(
+                [
+                    "quarantine-readback-diagnostic",
+                    "--attempt-id",
+                    malformed,
+                    "--confirm-read-only",
+                ]
+            )
+
+
+def test_readback_diagnostic_cli_requires_confirmation_before_dependencies(monkeypatch):
+    bomb = MagicMock(side_effect=AssertionError("dependency reached before guard"))
+    monkeypatch.setattr(cli.ImprovementsClient, "from_env", bomb)
+    monkeypatch.setattr(cli.rollout, "readback_diagnostic", bomb)
+
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "quarantine-readback-diagnostic",
+                "--attempt-id",
+                "50bf66d9-c8d0-44f0-8e7f-10906330046b",
+            ]
+        )
+
+    bomb.assert_not_called()
+
+
+def test_readback_diagnostic_cli_emits_only_bounded_authority_and_field_names(
+    monkeypatch, capsys
+):
+    client = _install_cli_fakes(monkeypatch)
+    attempt_id = UUID("50bf66d9-c8d0-44f0-8e7f-10906330046b")
+    cli.rollout.readback_diagnostic.return_value = cli.rollout.ReadbackDiagnosticReport(
+        attempt_id=attempt_id,
+        feedback_id=44,
+        projection_version=2,
+        remote_id=234,
+        state="quarantined",
+        reason="readback_mismatch",
+        mismatched_fields=("x_studio_image",),
+    )
+
+    assert (
+        cli.main(
+            [
+                "quarantine-readback-diagnostic",
+                "--attempt-id",
+                str(attempt_id),
+                "--confirm-read-only",
+            ]
+        )
+        == 0
+    )
+
+    assert json.loads(capsys.readouterr().out) == {
+        "command": "quarantine-readback-diagnostic",
+        "report": {
+            "attempt_id": str(attempt_id),
+            "feedback_id": 44,
+            "projection_version": 2,
+            "remote_id": 234,
+            "state": "quarantined",
+            "reason": "readback_mismatch",
+            "mismatched_fields": ["x_studio_image"],
+        },
+    }
+    cli.rollout.readback_diagnostic.assert_called_once_with(
+        attempt_id=attempt_id,
+        client=client,
+    )
+
+
+def test_readback_diagnostic_cli_hides_malformed_remote_values(monkeypatch, capsys):
+    _install_cli_fakes(monkeypatch)
+    cli.rollout.readback_diagnostic.side_effect = ReadbackMismatch(
+        "private note email@example.com ZGlmZmVyZW50LXByaXZhdGUtaW1hZ2U="
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        cli.main(
+            [
+                "quarantine-readback-diagnostic",
+                "--attempt-id",
+                "50bf66d9-c8d0-44f0-8e7f-10906330046b",
+                "--confirm-read-only",
+            ]
+        )
+
+    assert str(caught.value) == "feedback rollout command failed safely"
+    captured = capsys.readouterr()
+    exposed = captured.out + captured.err + repr(caught.value)
+    for forbidden in (
+        "private note",
+        "email@example.com",
+        "ZGlmZmVyZW50LXByaXZhdGUtaW1hZ2U=",
+    ):
+        assert forbidden not in exposed
 
 
 def test_cli_dispatches_all_bounded_commands_through_fakes_and_emits_safe_json(monkeypatch, capsys):

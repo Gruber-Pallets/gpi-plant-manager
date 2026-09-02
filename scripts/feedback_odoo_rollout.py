@@ -126,6 +126,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("quarantine-list", allow_abbrev=False)
 
+    readback_diagnostic = commands.add_parser(
+        "quarantine-readback-diagnostic",
+        allow_abbrev=False,
+    )
+    readback_diagnostic.add_argument(
+        "--attempt-id",
+        required=True,
+        type=_canonical_uuid,
+    )
+    readback_diagnostic.add_argument("--confirm-read-only", action="store_true")
+
     disposition = commands.add_parser("quarantine-disposition", allow_abbrev=False)
     disposition.add_argument("--attempt-id", required=True, type=_canonical_uuid)
     disposition.add_argument(
@@ -154,6 +165,7 @@ def _approved_report_types() -> tuple[type, ...]:
         rollout.LegacyMigrationReport,
         rollout.EnqueueReport,
         rollout.CanaryReport,
+        rollout.ReadbackDiagnosticReport,
         sync_store.QuarantineItem,
         sync_store.QuarantineDispositionResult,
         sync_store.PreAttemptReleaseResult,
@@ -248,6 +260,16 @@ def _command_payload(args: argparse.Namespace) -> dict[str, object]:
         report = rollout.canary_report(feedback_id=args.feedback_id, client=client)
     elif command == "quarantine-list":
         report = sync_store.list_quarantined(limit=100)
+    elif command == "quarantine-readback-diagnostic":
+        require_flag(
+            args.confirm_read_only,
+            "quarantine-readback-diagnostic requires --confirm-read-only",
+        )
+        client = ImprovementsClient.from_env()
+        report = rollout.readback_diagnostic(
+            attempt_id=args.attempt_id,
+            client=client,
+        )
     elif command == "quarantine-disposition":
         if args.disposition == "supersede-and-retry":
             require_flag(

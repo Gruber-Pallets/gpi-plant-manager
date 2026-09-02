@@ -350,6 +350,7 @@ def test_rollout_cli_has_exact_commands_and_no_alias_or_config_overrides():
         "reconcile",
         "canary-report",
         "quarantine-list",
+        "quarantine-readback-diagnostic",
         "quarantine-disposition",
         "quarantine-release-pre-attempt",
     }

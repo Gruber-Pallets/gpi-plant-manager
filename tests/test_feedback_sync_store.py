@@ -1434,6 +1434,116 @@ def pre_attempt_quarantine_row(**changes) -> dict[str, object]:
     return row
 
 
+def quarantined_readback_row(**changes) -> dict[str, object]:
+    row = attempt_row(
+        projection_version=3,
+        state="ambiguous",
+        outcome_detail="readback_mismatch",
+        created_at=aware_now() - timedelta(seconds=3),
+        dispatch_marked_at=aware_now() - timedelta(seconds=2),
+        rpc_succeeded_at=aware_now() - timedelta(seconds=1),
+        updated_at=aware_now(),
+    )
+    row.update(
+        {
+            "sync_desired_version": 3,
+            "sync_last_synced_version": 2,
+            "sync_remote_id": 77,
+            "sync_state": "quarantined",
+            "sync_claim_owner": None,
+            "sync_claim_token": None,
+            "sync_claim_expires_at": None,
+            "sync_active_attempt_id": ATTEMPT_ID,
+            "sync_attempt_count": 0,
+            "sync_quarantine_reason": "readback_mismatch",
+            "sync_quarantined_at": aware_now(),
+            "sync_updated_at": aware_now(),
+            "sync_last_error_class": "readback_mismatch",
+            "sync_last_error_summary": "The Odoo copy did not match the saved feedback.",
+            "feedback_projection_version": 3,
+        }
+    )
+    row.update(changes)
+    return row
+
+
+def test_load_quarantined_readback_evidence_uses_one_exact_read_only_join(monkeypatch):
+    cursor = use_cursor(monkeypatch, [quarantined_readback_row()])
+
+    evidence = store.load_quarantined_readback_evidence(ATTEMPT_ID)
+
+    assert evidence.feedback_id == 17
+    assert evidence.attempt_id == ATTEMPT_ID
+    assert evidence.projection_version == 3
+    assert evidence.remote_id == 77
+    assert evidence.state == "quarantined"
+    assert evidence.reason == "readback_mismatch"
+    assert evidence.attempt.state == "ambiguous"
+    assert len(cursor.executions) == 1
+    sql_text = normalized_sql(cursor, 0)
+    assert "WHERE a.attempt_id = %s" in sql_text
+    assert "s.active_attempt_id = a.attempt_id" in sql_text
+    assert "s.quarantine_reason = 'readback_mismatch'" in sql_text
+    assert "a.outcome_detail = 'readback_mismatch'" in sql_text
+    for chronology_fence in (
+        "a.created_at <= a.dispatch_marked_at",
+        "a.dispatch_marked_at <= a.rpc_succeeded_at",
+        "a.rpc_succeeded_at <= a.updated_at",
+        "s.quarantined_at = a.updated_at",
+        "s.updated_at = a.updated_at",
+    ):
+        assert chronology_fence in sql_text
+    assert "s.attempt_count = 0" not in sql_text
+    assert "LIMIT 2" in sql_text
+    assert "FOR UPDATE" not in sql_text
+    assert not any(word in sql_text for word in ("INSERT ", "UPDATE ", "DELETE "))
+    assert cursor.executions[0][1] == (ATTEMPT_ID,)
+    assert "Safe" not in repr(evidence)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"sync_state": "idle"},
+        {"sync_quarantine_reason": "ambiguous_mutation"},
+        {"sync_active_attempt_id": UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")},
+        {"attempt_state": "rpc_succeeded", "state": "rpc_succeeded"},
+        {"outcome_detail": None},
+        {"sync_remote_id": 88},
+        {"sync_desired_version": 4},
+        {"feedback_projection_version": 4},
+        {"created_at": aware_now() - timedelta(seconds=1)},
+        {"updated_at": aware_now() - timedelta(seconds=2)},
+        {"sync_quarantined_at": aware_now() + timedelta(seconds=1)},
+        {"sync_updated_at": aware_now() + timedelta(seconds=1)},
+    ],
+)
+def test_load_quarantined_readback_evidence_rejects_changed_authority(
+    monkeypatch, changes
+):
+    cursor = use_cursor(monkeypatch, [quarantined_readback_row(**changes)])
+
+    with pytest.raises(store.StateTransitionError):
+        store.load_quarantined_readback_evidence(ATTEMPT_ID)
+
+    assert len(cursor.executions) == 1
+
+
+@pytest.mark.parametrize("attempt_count", [1, 2])
+def test_load_quarantined_readback_evidence_accepts_prior_retry_count(
+    monkeypatch, attempt_count
+):
+    cursor = use_cursor(
+        monkeypatch,
+        [quarantined_readback_row(sync_attempt_count=attempt_count)],
+    )
+
+    evidence = store.load_quarantined_readback_evidence(ATTEMPT_ID)
+
+    assert evidence.attempt_count == attempt_count
+    assert len(cursor.executions) == 1
+
+
 def test_pre_attempt_release_appends_audit_then_releases_only_exact_locked_authority(
     monkeypatch,
 ):

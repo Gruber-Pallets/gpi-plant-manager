@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Find why shared feedback stopped
+
+- **Plant Manager can safely name which parts of a shared feedback item do not match Odoo.** It shows only field names and keeps feedback text and pictures private.
+
 ### Safely retry feedback that stopped early
 
 - **Plant Manager can now safely retry feedback that stopped before it reached Odoo.** It checks the shared list first and keeps a note of who approved the retry.

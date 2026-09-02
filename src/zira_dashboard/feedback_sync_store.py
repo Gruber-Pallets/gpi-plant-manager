@@ -515,6 +515,42 @@ class PreAttemptReleaseResult:
 
 
 @dataclass(frozen=True, repr=False)
+class QuarantinedReadbackEvidence:
+    """Exact local authority and immutable attempt for read-only diagnosis."""
+
+    attempt_id: UUID
+    feedback_id: int
+    projection_version: int
+    remote_id: int
+    state: str
+    reason: str
+    attempt: Attempt
+    attempt_count: int = 0
+
+    def __post_init__(self) -> None:
+        _uuid(self.attempt_id, "attempt id")
+        _positive_signed_64(self.feedback_id, "feedback id")
+        _positive_signed_64(self.projection_version, "projection version")
+        _positive_signed_64(self.remote_id, "remote id")
+        if self.state != "quarantined" or self.reason != "readback_mismatch":
+            raise ValueError("quarantined readback authority is malformed")
+        _attempt_count(self.attempt_count)
+        if (
+            type(self.attempt) is not Attempt
+            or self.attempt.attempt_id != self.attempt_id
+            or self.attempt.feedback_id != self.feedback_id
+            or self.attempt.projection_version != self.projection_version
+            or self.attempt.remote_id != self.remote_id
+            or self.attempt.state != "ambiguous"
+            or self.attempt.outcome_detail != self.reason
+        ):
+            raise ValueError("quarantined readback attempt is malformed")
+
+    def __repr__(self) -> str:
+        return "QuarantinedReadbackEvidence(<redacted>)"
+
+
+@dataclass(frozen=True, repr=False)
 class VerifiedCanaryEvidence:
     """Exact local synchronized authority and its immutable verified attempt."""
 
@@ -2000,6 +2036,143 @@ def list_quarantined(*, limit: int = 100) -> tuple[QuarantineItem, ...]:
     return tuple(items)
 
 
+def load_quarantined_readback_evidence(
+    attempt_id: UUID,
+) -> QuarantinedReadbackEvidence:
+    """Load one exact readback-mismatch quarantine without locking or mutation."""
+    safe_attempt_id = _uuid(attempt_id, "attempt id")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT a.attempt_id, a.feedback_id, a.projection_version,
+                   a.mutation_kind, a.remote_id, a.manifest, a.manifest_digest,
+                   a.before_sha256, a.before_byte_length,
+                   a.after_sha256, a.after_byte_length,
+                   a.state AS attempt_state,
+                   a.dispatch_marked_at, a.rpc_succeeded_at, a.readback_at,
+                   a.settled_at, a.outcome_detail, a.created_at, a.updated_at,
+                   s.desired_version AS sync_desired_version,
+                   s.last_synced_version AS sync_last_synced_version,
+                   s.odoo_improvement_id AS sync_remote_id,
+                   s.state AS sync_state,
+                   s.claim_owner AS sync_claim_owner,
+                   s.claim_token AS sync_claim_token,
+                   s.claim_expires_at AS sync_claim_expires_at,
+                   s.active_attempt_id AS sync_active_attempt_id,
+                   s.attempt_count AS sync_attempt_count,
+                   s.quarantine_reason AS sync_quarantine_reason,
+                   s.quarantined_at AS sync_quarantined_at,
+                   s.updated_at AS sync_updated_at,
+                   s.last_error_class AS sync_last_error_class,
+                   s.last_error_summary AS sync_last_error_summary,
+                   f.projection_version AS feedback_projection_version
+            FROM feedback_odoo_attempts a
+            JOIN feedback_odoo_sync s ON s.feedback_id = a.feedback_id
+            JOIN feedback f ON f.id = s.feedback_id
+            WHERE a.attempt_id = %s
+              AND s.state = 'quarantined'
+              AND s.active_attempt_id = a.attempt_id
+              AND s.quarantine_reason = 'readback_mismatch'
+              AND s.last_error_class = 'readback_mismatch'
+              AND a.state = 'ambiguous'
+              AND a.outcome_detail = 'readback_mismatch'
+              AND a.remote_id IS NOT NULL
+              AND s.odoo_improvement_id = a.remote_id
+              AND s.desired_version = a.projection_version
+              AND s.last_synced_version < s.desired_version
+              AND f.projection_version = s.desired_version
+              AND s.claim_owner IS NULL
+              AND s.claim_token IS NULL
+              AND s.claim_expires_at IS NULL
+              AND a.dispatch_marked_at IS NOT NULL
+              AND a.rpc_succeeded_at IS NOT NULL
+              AND a.created_at IS NOT NULL
+              AND a.updated_at IS NOT NULL
+              AND a.readback_at IS NULL
+              AND a.settled_at IS NULL
+              AND a.created_at <= a.dispatch_marked_at
+              AND a.dispatch_marked_at <= a.rpc_succeeded_at
+              AND a.rpc_succeeded_at <= a.updated_at
+              AND s.quarantined_at = a.updated_at
+              AND s.updated_at = a.updated_at
+            LIMIT 2
+            """,
+            (safe_attempt_id,),
+        )
+        rows = _rows(cursor)
+    if len(rows) != 1:
+        raise StateTransitionError("quarantined readback evidence is not exact")
+    row = rows[0]
+    attempt = _attempt_from_row(row)
+    try:
+        desired = _positive_signed_64(
+            row.get("sync_desired_version"),
+            "desired version",
+        )
+        last_synced = _nonnegative_signed_64(
+            row.get("sync_last_synced_version"),
+            "last synchronized version",
+        )
+        remote_id = _positive_signed_64(row.get("sync_remote_id"), "remote id")
+        feedback_version = _positive_signed_64(
+            row.get("feedback_projection_version"),
+            "feedback projection version",
+        )
+        count = _attempt_count(row.get("sync_attempt_count"))
+        quarantined_at = _aware_datetime(
+            row.get("sync_quarantined_at"),
+            "quarantine time",
+        )
+        sync_updated = _aware_datetime(row.get("sync_updated_at"), "sync update time")
+        created = _aware_datetime(attempt.created_at, "attempt creation time")
+        dispatch = _aware_datetime(attempt.dispatch_marked_at, "dispatch time")
+        succeeded = _aware_datetime(attempt.rpc_succeeded_at, "RPC success time")
+        updated = _aware_datetime(attempt.updated_at, "attempt update time")
+    except (TypeError, ValueError):
+        raise StateTransitionError("quarantined readback evidence is malformed") from None
+    expected_summary = _QUARANTINE_SUMMARIES["readback_mismatch"]
+    if (
+        attempt.attempt_id != safe_attempt_id
+        or attempt.state != "ambiguous"
+        or attempt.outcome_detail != "readback_mismatch"
+        or attempt.remote_id != remote_id
+        or not attempt.projection_version == desired == feedback_version
+        or last_synced >= desired
+        or row.get("sync_state") != "quarantined"
+        or row.get("sync_active_attempt_id") != safe_attempt_id
+        or row.get("sync_quarantine_reason") != "readback_mismatch"
+        or row.get("sync_last_error_class") != "readback_mismatch"
+        or row.get("sync_last_error_summary") != expected_summary
+        or any(
+            row.get(name) is not None
+            for name in (
+                "sync_claim_owner",
+                "sync_claim_token",
+                "sync_claim_expires_at",
+                "readback_at",
+                "settled_at",
+            )
+        )
+        or not created <= dispatch <= succeeded <= updated
+        or quarantined_at != updated
+        or sync_updated != updated
+    ):
+        raise StateTransitionError("quarantined readback evidence changed")
+    try:
+        return QuarantinedReadbackEvidence(
+            attempt_id=safe_attempt_id,
+            feedback_id=attempt.feedback_id,
+            projection_version=attempt.projection_version,
+            remote_id=remote_id,
+            state="quarantined",
+            reason="readback_mismatch",
+            attempt=attempt,
+            attempt_count=count,
+        )
+    except (TypeError, ValueError):
+        raise StateTransitionError("quarantined readback evidence is malformed") from None
+
+
 def _reviewer(value: object) -> str:
     if type(value) is not str:
         raise ValueError("reviewer is malformed")
@@ -2687,6 +2860,7 @@ __all__ = [
     "Claim",
     "DUPLICATE_RISK_WARNING",
     "MAX_MUTATION_ATTEMPTS",
+    "QuarantinedReadbackEvidence",
     "QuarantineDispositionResult",
     "QuarantineItem",
     "RETRY_DELAYS",
@@ -2697,6 +2871,7 @@ __all__ = [
     "defer_unprepared_read_failure",
     "defer_prepared_for_closed_gate",
     "load_active_attempt",
+    "load_quarantined_readback_evidence",
     "load_verified_canary_evidence",
     "list_quarantined",
     "mark_dispatch",

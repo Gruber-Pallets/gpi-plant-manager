@@ -15,6 +15,7 @@ from zira_dashboard.feedback_projection import (
     ReadbackMismatch,
     build_projection,
     build_projection_from_snapshot,
+    readback_mismatched_fields,
     resolve_employee_id,
     source_id_for,
     verify_readback,
@@ -883,6 +884,32 @@ def test_verify_readback_accepts_exact_scalars_many2one_and_binary():
     remote["unrequested_extra"] = "ignored"
 
     verify_readback(projection, remote)
+
+
+def test_readback_diagnostic_reports_every_mismatched_field_without_values():
+    projection = projection_with_before(b"saved-private-image")
+    remote = dict(projection.fields)
+    remote["x_name"] = "different private note"
+    remote["x_studio_image"] = base64.b64encode(b"different-private-image").decode(
+        "ascii"
+    )
+
+    mismatches = readback_mismatched_fields(projection, remote)
+
+    assert mismatches == ("x_name", "x_studio_image")
+    serialized = repr(mismatches)
+    assert "different private note" not in serialized
+    assert "different-private-image" not in serialized
+
+
+@pytest.mark.parametrize("remote", [None, [], object()])
+def test_readback_diagnostic_rejects_malformed_remote_response_without_values(remote):
+    projection = projection_with_before(b"saved-private-image")
+
+    with pytest.raises(ReadbackMismatch, match="readback response was malformed") as caught:
+        readback_mismatched_fields(projection, remote)
+
+    assert "saved-private-image" not in repr(caught.value)
 
 
 @pytest.mark.parametrize("value", [17, [17], [17, "Person", "extra"], (17, "Person"), [17, 3]])
