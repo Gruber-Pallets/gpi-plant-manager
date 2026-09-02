@@ -117,6 +117,26 @@ def test_terminal_action_uses_authenticated_admin_and_optional_after_image(
     assert captured["now"].tzinfo is UTC
 
 
+def test_terminal_action_treats_empty_optional_after_image_as_absent(monkeypatch):
+    monkeypatch.setenv("SUPER_ADMIN_UPNS", "dale@gruberpallets.com")
+    captured = {}
+    monkeypatch.setattr(
+        feedback_store,
+        "transition",
+        lambda **values: captured.update(values) or values,
+    )
+
+    with admin_client("dale@gruberpallets.com") as client:
+        response = client.post(
+            "/admin/feedback/7/status",
+            data={"status": "completed", "resolution_note": "Fixed safely"},
+            files={"after_image": ("after.png", b"", "image/png")},
+        )
+
+    assert response.status_code == 303
+    assert captured["after_image"] is None
+
+
 def test_after_image_read_is_bounded_to_limit_plus_one(monkeypatch):
     monkeypatch.setenv("SUPER_ADMIN_UPNS", "dale@gruberpallets.com")
     captured = {}

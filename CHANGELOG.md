@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Finish feedback without a picture
+
+- **You can now finish feedback when you leave the optional after picture blank.** Plant Manager will save the finished feedback instead of showing an error.
+
 ### Keep printed part-day times clear
 
 - **Printed schedules now hide the small clear mark beside part-day time off.** The time still shows, so the printed name stays easy to read.

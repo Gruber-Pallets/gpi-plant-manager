@@ -44,7 +44,8 @@ async def update_feedback_status(
     try:
         if after_image is not None:
             raw = await after_image.read(MAX_INPUT_BYTES + 1)
-            normalized_after = normalize_image(raw)
+            if raw:
+                normalized_after = normalize_image(raw)
         feedback_store.transition(
             feedback_id=feedback_id,
             status=status,
