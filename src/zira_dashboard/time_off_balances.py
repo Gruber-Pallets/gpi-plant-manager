@@ -62,6 +62,31 @@ def refresh_for_employee(person_odoo_id: int) -> int:
     return _upsert_balances(person_odoo_id, balances)
 
 
+def refresh_for_employees(
+    employee_odoo_ids: list[int],
+) -> dict[int, list[dict]] | None:
+    """Fetch and persist fresh balances for a set of employees in one batch.
+
+    ``None`` uniquely signals an Odoo failure. An empty mapping is a successful
+    refresh with no employees or no balance rows.
+    """
+    ids = list(dict.fromkeys(employee_odoo_ids))
+    if not ids:
+        return {}
+    try:
+        by_employee = odoo_client.fetch_balances_for_many(ids)
+    except Exception as error:  # noqa: BLE001 -- scheduled refresh retries later
+        _log.info("Balance refresh for %d employees failed: %s", len(ids), error)
+        return None
+    rows = [
+        row
+        for person_odoo_id, balances in by_employee.items()
+        for row in _balance_rows(person_odoo_id, balances)
+    ]
+    _upsert_balance_rows(rows)
+    return by_employee
+
+
 def _upsert_balances(person_odoo_id: int, balances: list[dict]) -> int:
     """Upsert one employee's balance rows into the cache table.
     Returns the count of rows written."""
@@ -140,22 +165,10 @@ def refresh_stale(older_than_seconds: int = _STALE_THRESHOLD_SECONDS) -> int:
         (str(older_than_seconds),),
     )
     ids = [r["person_odoo_id"] for r in stale_rows]
-    if not ids:
+    by_emp = refresh_for_employees(ids)
+    if by_emp is None:
         return 0
-    try:
-        by_emp = odoo_client.fetch_balances_for_many(ids)
-    except Exception as e:  # noqa: BLE001 — record and continue, never crash sweep
-        _log.info(
-            "Stale balance refresh for %d employees failed: %s", len(ids), e,
-        )
-        return 0
-    refreshed = 0
-    rows: list[tuple] = []
-    for person_odoo_id, balances in by_emp.items():
-        refreshed += len(balances)
-        rows.extend(_balance_rows(person_odoo_id, balances))
-    _upsert_balance_rows(rows)
-    return refreshed
+    return sum(len(balances) for balances in by_emp.values())
 
 
 def get_for_employee(person_odoo_id: int) -> list[dict]:

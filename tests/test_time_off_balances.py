@@ -14,6 +14,18 @@ import pytest
 from zira_dashboard import time_off_balances
 
 
+def _balance(holiday_status_id, unit, available_practical):
+    return {
+        "holiday_status_id": holiday_status_id,
+        "unit": unit,
+        "allocated_total": available_practical,
+        "taken": 0,
+        "pending": 0,
+        "available": available_practical,
+        "available_practical": available_practical,
+    }
+
+
 @pytest.fixture
 def fake_db(monkeypatch):
     """Capture all DB writes and stub ``db.query`` to empty.
@@ -85,6 +97,37 @@ def test_refresh_for_employee_swallows_odoo_errors(monkeypatch, fake_db):
     )
     # Should not raise
     time_off_balances.refresh_for_employee(5)
+
+
+def test_refresh_for_employees_returns_fresh_rows_after_one_batch(monkeypatch, fake_db):
+    fresh = {5: [_balance(1, "days", 2.5)], 9: [_balance(1, "hours", 6)]}
+    fetch = MagicMock(return_value=fresh)
+    monkeypatch.setattr(time_off_balances.odoo_client, "fetch_balances_for_many", fetch)
+
+    assert time_off_balances.refresh_for_employees([5, 9, 5]) == fresh
+
+    fetch.assert_called_once_with([5, 9])
+    assert len(fake_db["execute_values"]) == 1
+
+
+def test_refresh_for_employees_distinguishes_failure(monkeypatch, fake_db):
+    monkeypatch.setattr(
+        time_off_balances.odoo_client,
+        "fetch_balances_for_many",
+        MagicMock(side_effect=RuntimeError("unavailable")),
+    )
+
+    assert time_off_balances.refresh_for_employees([5]) is None
+    assert fake_db["execute_values"] == []
+
+
+def test_refresh_for_employees_empty_input_does_not_call_odoo(monkeypatch, fake_db):
+    fetch = MagicMock()
+    monkeypatch.setattr(time_off_balances.odoo_client, "fetch_balances_for_many", fetch)
+
+    assert time_off_balances.refresh_for_employees([]) == {}
+
+    fetch.assert_not_called()
 
 
 def test_invalidate_one(monkeypatch, fake_db):
