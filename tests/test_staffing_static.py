@@ -93,9 +93,22 @@ def test_printed_partial_time_off_stays_inline_without_clear_mark():
     print_css = _print_css()
 
     assert html.count('class="partial-clear-mark"') == 3
-    assert ".partial-clear-mark" in print_css
-    assert "display: none !important;" in print_css
+    assert ".partial-clear-mark { display: none !important; }" in print_css
     assert "button.partial-hours-badge" in print_css
+
+
+def test_dynamic_partial_badge_wraps_clear_mark_for_print():
+    js = _script()
+    builder = js.split("function _appendPartialBadge(li, name) {", 1)[1].split(
+        "\n  }", 1
+    )[0]
+
+    assert "btn.textContent = range || (hours + 'h');" in builder
+    assert "const clearMark = document.createElement('span');" in builder
+    assert "clearMark.className = 'partial-clear-mark';" in builder
+    assert "clearMark.setAttribute('aria-hidden', 'true');" in builder
+    assert "clearMark.textContent = ' ✕';" in builder
+    assert "btn.appendChild(clearMark);" in builder
 
 
 def test_printed_staffing_warnings_expand_instead_of_clipping():

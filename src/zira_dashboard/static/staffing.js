@@ -575,7 +575,12 @@
     btn.dataset.bound = '1';
     btn.title = 'Click to clear this partial for ' + name + ' — they actually worked through it';
     btn.setAttribute('aria-label', 'Clear partial time off for ' + name);
-    btn.textContent = (range || (hours + 'h')) + ' ✕';
+    btn.textContent = range || (hours + 'h');
+    const clearMark = document.createElement('span');
+    clearMark.className = 'partial-clear-mark';
+    clearMark.setAttribute('aria-hidden', 'true');
+    clearMark.textContent = ' ✕';
+    btn.appendChild(clearMark);
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();

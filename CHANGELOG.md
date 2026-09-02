@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Keep printed part-day times clear
+
+- **Printed schedules now hide the small clear mark beside part-day time off.** The time still shows, so the printed name stays easy to read.
+
 ### Show who is off on shared schedules
 
 - **Printed schedules and schedules sent to Slack now show everyone who is off all day near the top.** A person who is off for only part of the day keeps the time beside their name.
