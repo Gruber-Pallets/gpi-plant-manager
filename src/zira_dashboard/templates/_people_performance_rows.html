@@ -7,28 +7,32 @@
      data-as-of-iso="{{ as_of_iso }}"
      style="--pp-track-width:{{ schedule_track_width_rem }}rem">
   <form class="pp-manager-strip" action="/people-performance" method="get" aria-label="People dashboard controls">
-    <div class="pp-counts" aria-label="Day totals">
-      <span><strong>{{ working_now }}</strong> working now</span>
-      <span><strong>{{ worked_earlier }}</strong> worked earlier</span>
-      <span><strong>{{ needs_attention }}</strong> need attention</span>
+    <div class="pp-manager-primary">
+      <div class="pp-counts" aria-label="Day totals">
+        <span><strong>{{ working_now }}</strong> working now</span>
+        <span><strong>{{ worked_earlier }}</strong> worked earlier</span>
+        <span><strong>{{ needs_attention }}</strong> need attention</span>
+      </div>
+      <div class="pp-manager-actions">
+        <p class="pp-updated" id="pp-live-status" aria-live="polite">Updated {{ as_of }}</p>
+        <div class="pp-controls">
+          <label class="pp-date-control">
+            <span class="sr-only">Date</span>
+            <input data-pp-auto-submit data-pp-control-key="day" type="date" name="day" value="{{ day }}" max="{{ today }}">
+          </label>
+          <label class="pp-check">
+            <input data-pp-auto-submit data-pp-control-key="attention" type="checkbox" name="attention" value="1"{% if attention_only %} checked{% endif %}>
+            Needs attention
+          </label>
+          {% if not is_today %}<a data-pp-control-key="today" href="/people-performance">Today</a>{% endif %}
+        </div>
+      </div>
     </div>
     {% if source_warnings %}
     <aside class="pp-source-warnings" role="status" aria-label="Source warnings">
       {% for warning in source_warnings %}<span>{{ warning }}</span>{% endfor %}
     </aside>
     {% endif %}
-    <p class="pp-updated" id="pp-live-status" aria-live="polite">Updated {{ as_of }}</p>
-    <div class="pp-controls">
-      <label class="pp-date-control">
-        <span class="sr-only">Date</span>
-        <input data-pp-auto-submit data-pp-control-key="day" type="date" name="day" value="{{ day }}" max="{{ today }}">
-      </label>
-      <label class="pp-check">
-        <input data-pp-auto-submit data-pp-control-key="attention" type="checkbox" name="attention" value="1"{% if attention_only %} checked{% endif %}>
-        Needs attention
-      </label>
-      {% if not is_today %}<a data-pp-control-key="today" href="/people-performance">Today</a>{% endif %}
-    </div>
   </form>
   <div id="people-performance-rows">
     {% for section in sections %}

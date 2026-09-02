@@ -115,6 +115,17 @@ def test_only_production_triggers_carry_precise_hover_data_and_marker(rendered_h
 
 def test_page_uses_one_compact_live_manager_strip(rendered_html):
     assert 'class="pp-manager-strip"' in rendered_html
+    assert 'class="pp-manager-primary"' in rendered_html
+    assert 'class="pp-manager-actions"' in rendered_html
+    assert rendered_html.index('class="pp-manager-primary"') < rendered_html.index(
+        'class="pp-source-warnings"'
+    )
+    primary = rendered_html.split('<div class="pp-manager-primary">', 1)[1].split(
+        '<aside class="pp-source-warnings"', 1
+    )[0]
+    assert primary.index('class="pp-counts"') < primary.index('class="pp-manager-actions"')
+    actions = primary.split('<div class="pp-manager-actions">', 1)[1]
+    assert actions.index('class="pp-updated"') < actions.index('class="pp-controls"')
     assert 'id="pp-live-status"' in rendered_html
     assert '<strong>5</strong> working now' in rendered_html
     assert '<strong>1</strong> worked earlier' in rendered_html
@@ -141,6 +152,8 @@ def test_manager_strip_omits_warning_region_when_sources_are_healthy(client, mon
     response = client.get(f"/people-performance?day={DAY.isoformat()}")
 
     assert response.status_code == 200
+    assert 'class="pp-manager-primary"' in response.text
+    assert 'class="pp-manager-actions"' in response.text
     assert 'class="pp-source-warnings"' not in response.text
 
 
