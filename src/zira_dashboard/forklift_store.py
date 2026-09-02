@@ -298,18 +298,29 @@ def resolve_forklift_driver_ids(
         by_first_name.setdefault(full.split()[0].casefold(), []).append(person)
     overrides = name_map("driver")
     active_people_by_id = {int(person.employee_id): person for person in people}
-    explicit = {
+    configured = forklift_identity_store.mapping_ids()
+    mapped_driver_ids = set(configured)
+    active_allowed_explicit = {
         driver_id: employee_id
-        for driver_id, employee_id in forklift_identity_store.mapping_ids().items()
-        if driver_id in names_by_driver_id
-        and employee_id in active_people_by_id
+        for driver_id, employee_id in configured.items()
+        if employee_id in active_people_by_id
         and (allowed is None or employee_id in allowed)
     }
-    reserved_employee_ids = set(explicit.values())
+    observed_driver_ids = {
+        str(raw_driver_id).strip()
+        for raw_driver_id in names_by_driver_id
+        if str(raw_driver_id).strip()
+    }
+    explicit = {
+        driver_id: employee_id
+        for driver_id, employee_id in active_allowed_explicit.items()
+        if driver_id in observed_driver_ids
+    }
+    reserved_employee_ids = set(active_allowed_explicit.values())
     proposed: dict[str, int] = {}
     for raw_driver_id, raw_names in names_by_driver_id.items():
         driver_id = str(raw_driver_id).strip()
-        if not driver_id or driver_id in explicit:
+        if not driver_id or driver_id in mapped_driver_ids:
             continue
         names = {
             str(value).strip()

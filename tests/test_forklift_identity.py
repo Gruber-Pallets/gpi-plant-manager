@@ -119,12 +119,15 @@ def test_explicit_mapping_to_inactive_employee_fails_closed(monkeypatch):
     monkeypatch.setattr(
         staffing,
         "load_roster",
-        lambda: [staffing.Person(name="Trent Iverson", employee_id=60, active=False)],
+        lambda: [
+            staffing.Person(name="Trent Former", employee_id=60, active=False),
+            _person("Trent Iverson", 61),
+        ],
     )
 
     assert (
         forklift_store.resolve_forklift_driver_ids(
-            {"driver-Trent": {"Trent Iverson"}}, allowed_employee_ids={60}
+            {"driver-Trent": {"Trent"}}, allowed_employee_ids={60, 61}
         )
         == {}
     )
@@ -162,12 +165,33 @@ def test_explicit_mapping_outside_allowed_employee_ids_fails_closed(monkeypatch)
     monkeypatch.setattr(
         staffing,
         "load_roster",
+        lambda: [_person("Trent Former", 60), _person("Trent Iverson", 61)],
+    )
+
+    assert (
+        forklift_store.resolve_forklift_driver_ids(
+            {"driver-Trent": {"Trent Iverson"}}, allowed_employee_ids={61}
+        )
+        == {}
+    )
+
+
+def test_absent_explicit_driver_still_reserves_its_active_employee(monkeypatch):
+    monkeypatch.setattr(
+        forklift_identity_store,
+        "mapping_ids",
+        lambda: {"driver-A": 60},
+    )
+    monkeypatch.setattr(forklift_store, "name_map", lambda kind: {})
+    monkeypatch.setattr(
+        staffing,
+        "load_roster",
         lambda: [_person("Trent Iverson", 60)],
     )
 
     assert (
         forklift_store.resolve_forklift_driver_ids(
-            {"driver-Trent": {"Trent"}}, allowed_employee_ids={61}
+            {"driver-B": {"Trent"}}, allowed_employee_ids={60}
         )
         == {}
     )
