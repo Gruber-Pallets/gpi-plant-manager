@@ -417,8 +417,10 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             const attributes = {};
             return {
               tagName: String(tagName || '').toUpperCase(),
+              isConnected: false,
               hidden: false,
               disabled: false,
+              focusCount: 0,
               removed: false,
               style: {},
               textContent: '',
@@ -428,11 +430,15 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
               parentNode: null,
               appendChild(node) {
                 node.parentNode = this;
+                setConnected(node, this.isConnected);
                 this.children.push(node);
                 return node;
               },
               replaceChildren(...nodes) {
-                this.children.forEach((node) => { node.parentNode = null; });
+                this.children.forEach((node) => {
+                  node.parentNode = null;
+                  setConnected(node, false);
+                });
                 this.children = [];
                 nodes.forEach((node) => this.appendChild(node));
               },
@@ -451,16 +457,48 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
                 return this.parentNode && this.parentNode.closest
                   ? this.parentNode.closest(selector) : null;
               },
+              querySelector(selector) {
+                const actionMatch = selector.match(/^\[data-pp-warning-action="([^"]+)"\]$/);
+                const matches = (
+                  selector === '[data-pp-warning-close]'
+                    && attributes['data-pp-warning-close'] != null
+                ) || (
+                  selector === '[data-pp-warning-action]'
+                    && attributes['data-pp-warning-action'] != null
+                ) || (
+                  actionMatch
+                    && attributes['data-pp-warning-action'] === actionMatch[1]
+                );
+                if (matches) return this;
+                for (const child of this.children) {
+                  const found = child.querySelector ? child.querySelector(selector) : null;
+                  if (found) return found;
+                }
+                return null;
+              },
+              focus(options) {
+                this.focusCount += 1;
+                focusOptions.push(options);
+                document.activeElement = this;
+                document.emit('focusin', {target: this});
+              },
               getBoundingClientRect() { return {width: 220, height: 90}; },
               remove() { this.removed = true; },
             };
           }
 
-          function makeWarningContent(state, label) {
+          function setConnected(node, connected) {
+            if (!node) return;
+            node.isConnected = connected;
+            (node.children || []).forEach((child) => setConnected(child, connected));
+          }
+
+          function makeWarningContent(state, label, controls) {
             const content = makeElement('section');
             content.id = 'pp-warning-panel-content';
             content.dataset = {warningState: state};
             content.textContent = label || state;
+            (controls || []).forEach((control) => content.appendChild(control));
             return content;
           }
 
@@ -476,6 +514,14 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             const button = makeElement('button');
             button.setAttribute('data-pp-warning-close', '');
             return button;
+          }
+
+          function makeWarningLink(action) {
+            const link = makeElement('a');
+            link.setAttribute('data-pp-warning-action', action);
+            link.dataset = {ppWarningAction: action};
+            link.textContent = 'Open diagnostics';
+            return link;
           }
 
           function makeRows(day, isToday, triggers, controls, warnings) {
@@ -520,6 +566,7 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           const warningPanel = makeElement('div');
           warningPanel.id = 'pp-warning-popover';
           warningPanel.hidden = true;
+          warningPanel.isConnected = true;
 
           document.body = {
             appendChild(node) { popover = node; },
@@ -613,6 +660,7 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             makeWarningContent,
             makeWarningAction,
             makeWarningClose,
+            makeWarningLink,
             first,
             dateControl,
             attentionControl,
@@ -1022,6 +1070,68 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           }
           failedCheckController.destroy();
 
+          // A successful row refresh followed by an invalid/failing detail
+          // response keeps the warning pinned with Retry UI and announces that
+          // the manual check could not finish.
+          for (const detailFailureKind of ['http', 'marker']) {
+            const detailFailureEnv = makeEnvironment('1');
+            const detailFailureWarning = detailFailureEnv.makeWarningTrigger(
+              'detail-failure-' + detailFailureKind, 'Detail follow-up fails'
+            );
+            detailFailureEnv.document.rows.warnings = [detailFailureWarning];
+            detailFailureEnv.document.warnings = detailFailureEnv.document.rows.warnings;
+            const detailFailureController = makeController(
+              detailFailureEnv.document, detailFailureEnv.windowObject
+            );
+            detailFailureController.init();
+            detailFailureEnv.document.emit('click', event(detailFailureWarning));
+            const attachedCheckButton = detailFailureEnv.makeWarningAction('check_again');
+            detailFailureEnv.parsed['detailFailureInitial-' + detailFailureKind]
+              = detailFailureEnv.makeWarningContent(
+                'open', 'Initial open detail', [attachedCheckButton]
+              );
+            detailFailureEnv.requests[0].pending.resolve(
+              detailResponse('detailFailureInitial-' + detailFailureKind)
+            );
+            await flush();
+            attachedCheckButton.focus();
+            const failedDetailCheck = detailFailureEnv.document.emit(
+              'click', event(attachedCheckButton)
+            )[0];
+            const detailFailureReplacement = detailFailureEnv.makeWarningTrigger(
+              'detail-failure-' + detailFailureKind, 'Replacement warning'
+            );
+            detailFailureEnv.parsed['detailFailureRows-' + detailFailureKind]
+              = detailFailureEnv.makeRows(
+                '2026-08-28', '1', [], [], [detailFailureReplacement]
+              );
+            detailFailureEnv.requests[1].pending.resolve(
+              response({token: 'detailFailureRows-' + detailFailureKind})
+            );
+            await flush();
+            detailFailureEnv.requests[3].pending.resolve(
+              detailFailureKind === 'http'
+                ? detailResponse('detailHttpFailure', {ok: false, status: 500})
+                : detailResponse('detailMarkerFailure', {header: 'rows'})
+            );
+            if (await failedDetailCheck !== false) {
+              throw new Error('failed detail follow-up reported manual check success');
+            }
+            if (
+              detailFailureEnv.warningPanel.hidden
+              || detailFailureReplacement.getAttribute('aria-expanded') !== 'true'
+              || !elementText(detailFailureEnv.warningPanel).includes(
+                'Details could not be loaded.'
+              )
+              || detailFailureEnv.actionStatus.textContent !== 'The check could not finish.'
+            ) {
+              throw new Error(
+                detailFailureKind + ' detail failure was not retained and announced'
+              );
+            }
+            detailFailureController.destroy();
+          }
+
           // A check started for one warning must not overwrite a newer pinned
           // choice after its row refresh eventually completes.
           const staleCheckEnv = makeEnvironment('1');
@@ -1159,6 +1269,81 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             throw new Error('background warning poll announced an unchanged result');
           }
 
+          // Panel controls are real attached focus targets. Detail replacement
+          // restores the same control identity, or the new close control when
+          // the prior action no longer exists.
+          for (const panelFocusKind of [
+            'check_again', 'retry', 'close', 'open_diagnostics', 'removed_action'
+          ]) {
+            const panelFocusEnv = makeEnvironment('1');
+            const panelFocusWarning = panelFocusEnv.makeWarningTrigger(
+              'panel-focus-' + panelFocusKind, 'Panel focus warning'
+            );
+            panelFocusEnv.document.rows.warnings = [panelFocusWarning];
+            panelFocusEnv.document.warnings = panelFocusEnv.document.rows.warnings;
+            const panelFocusController = makeController(
+              panelFocusEnv.document, panelFocusEnv.windowObject
+            );
+            panelFocusController.init();
+            panelFocusEnv.document.emit('click', event(panelFocusWarning));
+            const oldPanelControl = panelFocusKind === 'close'
+              ? panelFocusEnv.makeWarningClose()
+              : panelFocusKind === 'open_diagnostics'
+                ? panelFocusEnv.makeWarningLink(panelFocusKind)
+                : panelFocusEnv.makeWarningAction(panelFocusKind);
+            panelFocusEnv.parsed['panelFocusInitial-' + panelFocusKind]
+              = panelFocusEnv.makeWarningContent(
+                'open', 'Initial panel detail', [oldPanelControl]
+              );
+            panelFocusEnv.requests[0].pending.resolve(
+              detailResponse('panelFocusInitial-' + panelFocusKind)
+            );
+            await flush();
+            if (!oldPanelControl.isConnected || !panelFocusEnv.warningPanel.contains(oldPanelControl)) {
+              throw new Error('panel focus test control was not attached to the live panel');
+            }
+            oldPanelControl.focus();
+            const panelFocusRefresh = panelFocusController.refreshRows();
+            const replacementPanelWarning = panelFocusEnv.makeWarningTrigger(
+              'panel-focus-' + panelFocusKind, 'Replacement panel focus warning'
+            );
+            panelFocusEnv.parsed['panelFocusRows-' + panelFocusKind]
+              = panelFocusEnv.makeRows(
+                '2026-08-28', '1', [], [], [replacementPanelWarning]
+              );
+            panelFocusEnv.requests[1].pending.resolve(
+              response({token: 'panelFocusRows-' + panelFocusKind})
+            );
+            if (await panelFocusRefresh !== true) {
+              throw new Error('panel focus row refresh failed');
+            }
+            const newPanelControl = panelFocusKind === 'close' || panelFocusKind === 'removed_action'
+              ? panelFocusEnv.makeWarningClose()
+              : panelFocusKind === 'open_diagnostics'
+                ? panelFocusEnv.makeWarningLink(panelFocusKind)
+                : panelFocusEnv.makeWarningAction(panelFocusKind);
+            panelFocusEnv.parsed['panelFocusDetail-' + panelFocusKind]
+              = panelFocusEnv.makeWarningContent(
+                'open', 'Replacement panel detail', [newPanelControl]
+              );
+            panelFocusEnv.requests[2].pending.resolve(
+              detailResponse('panelFocusDetail-' + panelFocusKind)
+            );
+            await flush();
+            if (
+              oldPanelControl.isConnected
+              || !newPanelControl.isConnected
+              || panelFocusEnv.document.activeElement !== newPanelControl
+              || newPanelControl.focusCount !== 1
+              || !panelFocusEnv.focusOptions.some(
+                (value) => value && value.preventScroll === true
+              )
+            ) {
+              throw new Error(panelFocusKind + ' focus was not restored after panel replacement');
+            }
+            panelFocusController.destroy();
+          }
+
           const supersedeEnv = makeEnvironment('1');
           const supersedeWarning = supersedeEnv.makeWarningTrigger(
             'supersede-warning', 'Supersede old poll'
@@ -1186,6 +1371,60 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             throw new Error('manual Check again did not supersede the older row poll');
           }
           supersedeController.destroy();
+
+          // Background timer/visibility refreshes share an in-flight manual
+          // Check again instead of aborting it and producing a false failure.
+          const deferBackgroundEnv = makeEnvironment('1');
+          const deferBackgroundWarning = deferBackgroundEnv.makeWarningTrigger(
+            'defer-background', 'Manual check owns this refresh'
+          );
+          deferBackgroundEnv.document.rows.warnings = [deferBackgroundWarning];
+          deferBackgroundEnv.document.warnings = deferBackgroundEnv.document.rows.warnings;
+          const deferBackgroundController = makeController(
+            deferBackgroundEnv.document, deferBackgroundEnv.windowObject
+          );
+          deferBackgroundController.init();
+          deferBackgroundEnv.document.emit('click', event(deferBackgroundWarning));
+          deferBackgroundEnv.parsed.deferInitial = deferBackgroundEnv.makeWarningContent(
+            'open', 'Initial detail'
+          );
+          deferBackgroundEnv.requests[0].pending.resolve(detailResponse('deferInitial'));
+          await flush();
+          const manualCheckPromise = deferBackgroundEnv.document.emit(
+            'click', event(deferBackgroundEnv.makeWarningAction('check_again'))
+          )[0];
+          const timerDuringManual = deferBackgroundEnv.timers[0].callback();
+          const visibilityDuringManual = deferBackgroundEnv.document.emit(
+            'visibilitychange', {}
+          )[0];
+          if (
+            deferBackgroundEnv.requests.length !== 2
+            || deferBackgroundEnv.aborts[1].signal.aborted
+            || timerDuringManual !== manualCheckPromise
+            || visibilityDuringManual !== manualCheckPromise
+          ) {
+            throw new Error('background refresh superseded an in-flight manual check');
+          }
+          const deferReplacement = deferBackgroundEnv.makeWarningTrigger(
+            'defer-background', 'Replacement warning'
+          );
+          deferBackgroundEnv.parsed.deferRows = deferBackgroundEnv.makeRows(
+            '2026-08-28', '1', [], [], [deferReplacement]
+          );
+          deferBackgroundEnv.requests[1].pending.resolve(response({token: 'deferRows'}));
+          await flush();
+          deferBackgroundEnv.parsed.deferDetail = deferBackgroundEnv.makeWarningContent(
+            'open', 'Still active after shared refresh'
+          );
+          deferBackgroundEnv.requests[3].pending.resolve(detailResponse('deferDetail'));
+          if (
+            await manualCheckPromise !== true
+            || await timerDuringManual !== true
+            || await visibilityDuringManual !== true
+          ) {
+            throw new Error('shared manual/background refresh did not finish together');
+          }
+          deferBackgroundController.destroy();
 
           // Destroy aborts simultaneous independent row and warning requests,
           // but retains the server-owned warning panel host.

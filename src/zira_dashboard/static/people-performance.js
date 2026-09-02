@@ -102,6 +102,43 @@
     return warningPanel;
   }
 
+  function warningActionValue(control) {
+    if (!control) return null;
+    var datasetValue = control.dataset && control.dataset.ppWarningAction;
+    return datasetValue || control.getAttribute("data-pp-warning-action");
+  }
+
+  function warningPanelFocusIdentity(panel) {
+    var focused = document.activeElement;
+    if (!panel || !focused || !panel.contains(focused)) return null;
+    if (warningCloseFor(focused)) return {kind: "close"};
+    var action = warningActionFor(focused);
+    if (action) return {kind: "action", value: warningActionValue(action)};
+    return {kind: "panel"};
+  }
+
+  function replaceWarningContent(panel, content, fallbackTrigger) {
+    var focusIdentity = warningPanelFocusIdentity(panel);
+    panel.replaceChildren(content);
+    if (!focusIdentity) return;
+
+    var focusTarget = null;
+    if (focusIdentity.kind === "close") {
+      focusTarget = content.querySelector("[data-pp-warning-close]");
+    } else if (focusIdentity.kind === "action" && focusIdentity.value) {
+      focusTarget = content.querySelector(
+        '[data-pp-warning-action="' + escapeSelectorValue(focusIdentity.value) + '"]'
+      );
+    }
+    if (!focusTarget) focusTarget = content.querySelector("[data-pp-warning-close]");
+    if (!focusTarget) focusTarget = fallbackTrigger || warningTrigger;
+    if (!focusTarget && panel.focus) {
+      panel.setAttribute("tabindex", "-1");
+      focusTarget = panel;
+    }
+    focusWithoutScrolling(focusTarget, true);
+  }
+
   function renderWarningMessage(message, busy) {
     var panel = ensureWarningPanel();
     if (!panel) return;
@@ -112,7 +149,7 @@
     body.textContent = message;
     content.appendChild(heading);
     content.appendChild(body);
-    panel.replaceChildren(content);
+    replaceWarningContent(panel, content, warningTrigger);
     panel.hidden = false;
     panel.setAttribute("aria-busy", busy ? "true" : "false");
   }
@@ -129,7 +166,7 @@
     retry.setAttribute("data-pp-warning-action", "retry");
     content.appendChild(message);
     content.appendChild(retry);
-    panel.replaceChildren(content);
+    replaceWarningContent(panel, content, warningTrigger);
     panel.hidden = false;
     panel.setAttribute("aria-busy", "false");
   }
@@ -146,7 +183,7 @@
     retry.setAttribute("data-pp-warning-action", "check_again");
     content.appendChild(message);
     content.appendChild(retry);
-    panel.replaceChildren(content);
+    replaceWarningContent(panel, content, warningTrigger);
     panel.hidden = false;
     panel.setAttribute("aria-busy", "false");
   }
@@ -433,7 +470,7 @@
       var parsed = new windowObject.DOMParser().parseFromString(html, "text/html");
       var content = parsed.getElementById("pp-warning-panel-content");
       if (!content) throw new Error("Warning detail response was incomplete");
-      panel.replaceChildren(content);
+      replaceWarningContent(panel, content, trigger || warningTrigger);
       panel.hidden = false;
       panel.setAttribute("aria-busy", "false");
       if (trigger) positionWarning(trigger);
@@ -539,8 +576,20 @@
         return false;
       }
       var replacement = warningTriggerForKey(checkingKey);
-      if (replacement) return pinWarningReplacement(replacement, checkingKey, true);
-      return loadWarningDetail(checkingKey, null, true);
+      var detailPromise = replacement
+        ? pinWarningReplacement(replacement, checkingKey, true)
+        : loadWarningDetail(checkingKey, null, true);
+      return detailPromise.then(function (loaded) {
+        if (
+          !loaded
+          && !destroyed
+          && warningPinned
+          && warningKey === checkingKey
+        ) {
+          announceAction("The check could not finish.");
+        }
+        return loaded;
+      });
     }).finally(function () {
       warningCheckPromise = null;
     });
@@ -691,6 +740,7 @@
     if (destroyed || !page || !rows || document.visibilityState === "hidden") {
       return Promise.resolve(false);
     }
+    if (warningCheckPromise) return warningCheckPromise;
 
     requestEpoch += 1;
     var epoch = requestEpoch;
@@ -857,9 +907,7 @@
     }
     var warningAction = warningActionFor(event.target);
     if (warningAction) {
-      var action = warningAction.dataset
-        ? warningAction.dataset.ppWarningAction
-        : warningAction.getAttribute("data-pp-warning-action");
+      var action = warningActionValue(warningAction);
       if (action === "retry") {
         event.preventDefault();
         renderWarningMessage("Loading warning details…", true);
