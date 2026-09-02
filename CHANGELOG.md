@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Plan a lasting fix for the People page bar
+
+- **A repair plan is ready for the mixed-up People page bar.** It will make saved page styles check for updates, so an old style cannot stay stuck after Plant Manager is updated. Nothing in the app has changed yet.
+
 ### Finish feedback without a picture
 
 - **You can now finish feedback when you leave the optional after picture blank.** Plant Manager will save the finished feedback instead of showing an error.
