@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Plan a smaller production meter alert
+
+- **A plan is ready to combine missing production meters into one alert with a count.** The alert will fit in the top row and open a list with details for each meter. Nothing in the app has changed yet.
+
 ### Credit forklift calls to the right people
 
 - **Forklift names can now match the shorter names shown in Plant Manager.** Calls are credited when one active employee has that first name. Shared names still wait for a manager to choose the right person.
