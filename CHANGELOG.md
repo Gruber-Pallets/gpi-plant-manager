@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Use People page totals and warnings
+
+- **The People page totals can now filter the list.** Warning buttons explain what went wrong and show a safe next step. You can also match unknown forklift drivers to the right active employee in Settings, and every change is recorded.
+
 ### Finish the People status button plan
 
 - **The step-by-step plan for useful People page buttons is ready.** It covers list filters, clear warning details, safe checks, and recorded forklift matches. Nothing in the app has changed yet.
