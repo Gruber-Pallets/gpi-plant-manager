@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-01
 
+### Finish the two-row People bar plan
+
+- **The step-by-step plan for the People page bar is ready.** It shows how to keep warnings on their own row without overlap or a sideways scroll bar. Nothing in the app has changed yet.
+
 ### Plan two clear rows for the People page bar
 
 - **A plan is ready to put People page warnings on their own row.** This will stop the top bar from overlapping or showing a sideways scroll bar. Nothing in the app has changed yet.
