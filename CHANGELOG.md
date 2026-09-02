@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Finish the no-code Odoo light-bulb build plan
+
+- **The step-by-step build plan for all six light-bulb buttons is ready.** It uses the normal shared task system, keeps one matching reference row, and adds no special code inside Odoo. Nothing in the app has changed yet.
+
 ### Make the light-bulb plan simpler
 
 - **The new light-bulb buttons will use the task system the apps already share.** Odoo will not need special code, secret links, or a test copy. The matching reference row may take about one minute to catch up.

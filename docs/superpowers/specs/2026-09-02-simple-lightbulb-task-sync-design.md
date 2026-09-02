@@ -1,7 +1,7 @@
 # Simple Light-Bulb Task Sync Design
 
 **Date:** 2026-09-02  
-**Status:** Approved in conversation; awaiting written-spec review  
+**Status:** Approved in conversation; ready for implementation planning
 **Supersedes:** `2026-09-02-odoo-owned-lightbulb-review-workflow-design.md`
 
 ## Goal
@@ -140,9 +140,10 @@ The task changes are standard Odoo task writes:
 Each action is one atomic write to the task. The same write appends a small,
 human-readable, versioned review event to the task description. The block has
 exact labels for `Event ID`, `Action`, `Actor Odoo user ID`, `Actor employee ID`,
-`Time UTC`, and `Detail`; Detail is required for Decline and Complete. Dynamic
-text is escaped before it becomes Odoo HTML. Plant Manager parses only complete
-versioned blocks with allowed actions and valid typed values.
+`Time UTC`, and `Detail`; an Assign event also has `Target Odoo user ID`. Detail
+is required for Decline and Complete. Dynamic text is escaped before it becomes
+Odoo HTML. Plant Manager parses only complete versioned blocks with allowed
+actions and valid typed values.
 
 Existing task description text and prior events are preserved. The writer
 re-reads and checks the task's latest update time before writing so a concurrent
