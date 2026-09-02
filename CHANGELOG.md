@@ -18,7 +18,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Plan a smaller production meter alert
 
-- **A plan is ready to combine missing production meters into one alert with a count.** The alert will fit in the top row and open a list with details for each meter. Nothing in the app has changed yet.
+- **The step-by-step plan is ready to combine missing production meters into one alert with a count.** The alert will fit in the top row and open a list with details for each meter. Nothing in the app has changed yet.
 
 ### Credit forklift calls to the right people
 
