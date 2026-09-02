@@ -24,9 +24,9 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **A design and step-by-step plan are ready to keep feedback cards and their matching tasks finished together.** It covers checking old tasks again when the rules change. Nothing in the app has changed yet.
 
-### Plan a smaller production meter alert
+### See missing production meters in one alert
 
-- **The step-by-step plan is ready to combine missing production meters into one alert with a count.** The alert will fit in the top row and open a list with details for each meter. Nothing in the app has changed yet.
+- **The People page now combines missing production meters into one alert with a count.** The alert sits in the top row to save space. Open it to see what went wrong for each meter and what you can do next.
 
 ### Credit forklift calls to the right people
 
