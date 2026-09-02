@@ -46,12 +46,44 @@ def _install_console_capture(page: Page) -> list[str]:
           window.__peoplePreviewIntervals.push(milliseconds);
           return nativeSetInterval(callback, milliseconds);
         };
+        window.gpiFetch = async function (url) {
+          if (!url.includes('/people-performance/warnings/')) throw new Error('unexpected preview request');
+          return new Response(
+            '<section id="pp-warning-panel-content" data-warning-state="open" data-warning-key="111111111111111111111111" aria-labelledby="pp-warning-title">' +
+            '<header><h2 id="pp-warning-title">Trim Saw 1 production is unavailable</h2><button type="button" data-pp-warning-close aria-label="Close warning details">×</button></header>' +
+            '<p>Trim Saw 1 production could not be calculated.</p><p class="pp-warning-impact"><strong>People page impact:</strong> Production is hidden.</p>' +
+            '<footer><button type="button" data-pp-warning-action="check_again">Check again</button><a href="/wc/trim-saw-1?day=2026-09-02">Open work center dashboard</a></footer></section>',
+            {status: 200, headers: {'X-People-Performance-Response': 'warning-detail'}}
+          );
+        };
         """
     )
     return errors
 
 
 def test_preview_contains_busy_people_fixture():
+    from scripts.preview_people_performance import _context
+
+    assert _context()["source_warnings"] == (
+        {
+            "key": "111111111111111111111111",
+            "kind": "production_metric_unavailable",
+            "label": "Production metric unavailable: Trim Saw 1",
+            "summary": "Trim Saw 1 production could not be calculated.",
+        },
+        {
+            "key": "222222222222222222222222",
+            "kind": "production_metric_unavailable",
+            "label": "Production metric unavailable: Hand Build #1",
+            "summary": "Hand Build #1 production could not be calculated.",
+        },
+        {
+            "key": "333333333333333333333333",
+            "kind": "unmatched_forklift_calls",
+            "label": "Unmatched forklift calls: 107",
+            "summary": "Forklift calls could not be matched to active employees.",
+        },
+    )
     result = _render_preview()
 
     assert result.stdout.strip() == str(OUT)
@@ -82,6 +114,8 @@ def test_preview_contains_busy_people_fixture():
     assert html.index("Parker Stale") < html.index("Noah Shipping")
     assert "<strong>8</strong> working now" in html
     assert "<strong>2</strong> worked earlier" in html
+    assert 'data-status="working"' in html
+    assert '<span class="sr-only">Selected filter.</span>' in html
     assert html.count('style="left:68.75%;width:6.25%"') == 10
     for label in (
         "location missing",
@@ -131,9 +165,116 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
         browser = playwright.chromium.launch()
         try:
             for width, height in VIEWPORTS:
-                page = browser.new_page(viewport={"width": width, "height": height})
+                page = browser.new_page(
+                    viewport={"width": width, "height": height},
+                    has_touch=width <= 760,
+                )
                 errors = _install_console_capture(page)
                 page.goto(fixture_url, wait_until="load")
+                count_buttons = page.locator(".pp-counts > button")
+                warning_buttons = page.locator(".pp-source-warnings > .pp-warning-trigger")
+                assert count_buttons.count() == 3
+                assert warning_buttons.count() == 3
+                assert count_buttons.evaluate_all(
+                    "buttons => buttons.every(button => button.tagName === 'BUTTON' && button.type === 'button')"
+                )
+                assert warning_buttons.evaluate_all(
+                    "buttons => buttons.every(button => button.tagName === 'BUTTON' && button.type === 'button')"
+                )
+                count_states = count_buttons.evaluate_all(
+                    """
+                    buttons => buttons.map(button => ({
+                      filter: button.dataset.filterValue,
+                      pressed: button.getAttribute('aria-pressed'),
+                      disabled: button.disabled,
+                      count: Number(button.querySelector('strong').textContent),
+                      height: button.getBoundingClientRect().height,
+                    }))
+                    """
+                )
+                assert [state["pressed"] for state in count_states] == [
+                    "true",
+                    "false",
+                    "false",
+                ]
+                assert all(state["height"] >= 44 for state in count_states)
+                assert all(state["disabled"] is (state["count"] == 0) for state in count_states)
+                selected_count = page.locator('.pp-counts > button[aria-pressed="true"]')
+                assert selected_count.count() == 1
+                assert selected_count.locator(".pp-filter-selected").is_visible()
+                assert selected_count.locator(".pp-filter-selected").text_content() == "✓"
+                assert selected_count.locator(".sr-only").text_content() == "Selected filter."
+
+                warning_trigger = warning_buttons.first
+                if width > 760:
+                    warning_trigger.hover()
+                    assert page.locator("#pp-warning-popover").is_visible()
+                    assert (
+                        "Trim Saw 1 production could not be calculated."
+                        in page.locator("#pp-warning-popover").text_content()
+                    )
+                warning_trigger.focus()
+                assert warning_trigger.get_attribute("aria-expanded") == "true"
+                warning_trigger.click()
+                panel_content = page.locator('#pp-warning-panel-content[data-warning-state="open"]')
+                panel_content.wait_for(state="visible")
+                panel_content.evaluate(
+                    """
+                    content => {
+                      const footer = content.querySelector('footer');
+                      footer.insertAdjacentHTML(
+                        'beforebegin',
+                        '<dl data-preview-warning-facts>' +
+                          '<div><dt>Work center</dt><dd>Trim Saw 1</dd></div>' +
+                          '<div><dt>Last checked</dt><dd>2:00 PM</dd></div>' +
+                        '</dl>'
+                      );
+                      window.dispatchEvent(new Event('resize'));
+                    }
+                    """
+                )
+                panel = page.locator("#pp-warning-popover")
+                trigger_box = warning_trigger.bounding_box()
+                panel_box = panel.bounding_box()
+                assert trigger_box and panel_box
+                assert panel_box["x"] >= 0
+                assert panel_box["y"] >= 0
+                assert panel_box["x"] + panel_box["width"] <= width
+                assert panel_box["y"] + panel_box["height"] <= height
+                assert (
+                    panel_box["x"] + panel_box["width"] <= trigger_box["x"]
+                    or trigger_box["x"] + trigger_box["width"] <= panel_box["x"]
+                    or panel_box["y"] + panel_box["height"] <= trigger_box["y"]
+                    or trigger_box["y"] + trigger_box["height"] <= panel_box["y"]
+                )
+                action_heights = panel.locator("[data-pp-warning-action]").evaluate_all(
+                    "actions => actions.map(action => action.getBoundingClientRect().height)"
+                )
+                assert action_heights
+                assert min(action_heights) >= 44
+                if width <= 760:
+                    mobile_panel_geometry = panel.evaluate(
+                        """
+                        panel => ({
+                          factsStack: [...panel.querySelectorAll('dl div')].every(row => {
+                            const children = [...row.children].map(child => child.getBoundingClientRect());
+                            return children.length === 2
+                              && children[1].top >= children[0].bottom - 0.5
+                              && getComputedStyle(row).gridTemplateColumns.trim().split(/\\s+/).length === 1;
+                          }),
+                          actionsStack: (() => {
+                            const footer = panel.querySelector('footer');
+                            const boxes = [...footer.children].map(child => child.getBoundingClientRect());
+                            return boxes.every((box, index) => (
+                              box.width >= footer.clientWidth - 1
+                              && (index === 0 || box.top >= boxes[index - 1].bottom - 0.5)
+                            ));
+                          })(),
+                        })
+                        """
+                    )
+                    assert mobile_panel_geometry["factsStack"] is True
+                    assert mobile_panel_geometry["actionsStack"] is True
                 before = page.locator(".pp-manager-strip").bounding_box()
                 geometry = page.evaluate(
                     """
@@ -254,6 +395,10 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                     path=OUT / f"people-performance-{width}x{height}.png",
                     full_page=True,
                 )
+                page.keyboard.press("Escape")
+                assert not panel.is_visible()
+                assert warning_trigger.get_attribute("aria-expanded") == "false"
+                assert warning_trigger.evaluate("trigger => document.activeElement === trigger")
                 page.close()
         finally:
             browser.close()

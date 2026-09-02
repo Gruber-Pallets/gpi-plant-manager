@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
 import os
 from pathlib import Path
 import shutil
@@ -17,10 +16,6 @@ from zira_dashboard.deps import templates  # noqa: E402
 from zira_dashboard.people_performance_view import (  # noqa: E402
     _schedule_time_groups,
     _schedule_track_width_rem,
-)
-from zira_dashboard.people_performance_warnings import (  # noqa: E402
-    production_metric_warning,
-    unmatched_forklift_warning,
 )
 from zira_dashboard.routes import people_performance  # noqa: E402
 
@@ -492,11 +487,7 @@ def _context() -> dict:
             "left_pct": 100.0 * index / 32,
             "kind": "start" if index == 0 else "end" if index == 32 else "break",
             "visible_label": (
-                "6:00 AM"
-                if index == 0
-                else "2:00 PM"
-                if index == 32
-                else _schedule_time(index)
+                "6:00 AM" if index == 0 else "2:00 PM" if index == 32 else _schedule_time(index)
             ),
             "aria_label": (
                 "Shift starts at 6:00 AM"
@@ -532,31 +523,29 @@ def _context() -> dict:
         "schedule_time_groups": schedule_time_groups,
         "schedule_track_width_rem": _schedule_track_width_rem(schedule_time_groups),
         "source_warnings": (
-            production_metric_warning(
-                station_name="Trim Saw 1",
-                reason_code="missing_goal",
-                checked_at_utc=datetime(2026, 8, 28, 19, 0, tzinfo=UTC),
-                day=date(2026, 8, 28),
-            ),
-            production_metric_warning(
-                station_name="Hand Build #1",
-                reason_code="missing_goal",
-                checked_at_utc=datetime(2026, 8, 28, 19, 0, tzinfo=UTC),
-                day=date(2026, 8, 28),
-            ),
-            unmatched_forklift_warning(
-                call_count=107,
-                identities=(("driver-unknown", ("Unknown",), 107),),
-                first_call_utc=datetime(2026, 8, 28, 11, 0, tzinfo=UTC),
-                last_call_utc=datetime(2026, 8, 28, 19, 0, tzinfo=UTC),
-                checked_at_utc=datetime(2026, 8, 28, 19, 0, tzinfo=UTC),
-                last_success_at_utc=datetime(2026, 8, 28, 19, 0, tzinfo=UTC),
-                day=date(2026, 8, 28),
-            ),
+            {
+                "key": "111111111111111111111111",
+                "kind": "production_metric_unavailable",
+                "label": "Production metric unavailable: Trim Saw 1",
+                "summary": "Trim Saw 1 production could not be calculated.",
+            },
+            {
+                "key": "222222222222222222222222",
+                "kind": "production_metric_unavailable",
+                "label": "Production metric unavailable: Hand Build #1",
+                "summary": "Hand Build #1 production could not be calculated.",
+            },
+            {
+                "key": "333333333333333333333333",
+                "kind": "unmatched_forklift_calls",
+                "label": "Unmatched forklift calls: 107",
+                "summary": "Forklift calls could not be matched to active employees.",
+            },
         ),
         "working_now": 8,
         "worked_earlier": 2,
         "needs_attention": 4,
+        "status_filter": "working",
         "attention_only": False,
         "active": "people",
         "active_dashboard_key": "people",
