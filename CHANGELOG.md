@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Finish both parts of feedback work
+
+- **Finished feedback now checks its matching task again when the rules change.** Plant Manager does not call the work finished until both the feedback card and its task show as done.
+
 ### Plan anniversary PTO reminders for employees
 
 - **A design is ready to remind employees when a work anniversary is close and they still have PTO.** Employees will confirm the reminder before punching in. Managers will be able to see that history on each employee's Staffing page. Nothing in the app has changed yet.
