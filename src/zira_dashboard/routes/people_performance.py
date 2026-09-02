@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+import re
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -11,7 +12,7 @@ from .. import _http_cache
 from ..deps import client as zira_client
 from ..deps import templates
 from ..people_performance_data import load_dashboard
-from ..people_performance_view import dashboard_context
+from ..people_performance_view import dashboard_context, warning_detail_context
 from ..plant_day import today as plant_today
 
 
@@ -120,6 +121,34 @@ def people_performance_rows(
     # content. A followed sign-in redirect or another HTML response will not
     # carry the marker, so stale metrics are never mistaken for a fresh partial.
     response.headers["X-People-Performance-Response"] = "rows"
+    return response
+
+
+@router.get(
+    "/people-performance/warnings/{warning_key_value}",
+    response_class=HTMLResponse,
+)
+def people_performance_warning(
+    request: Request,
+    warning_key_value: str,
+    day: date | None = Query(default=None),
+):
+    if re.fullmatch(r"[0-9a-f]{24}", warning_key_value) is None:
+        raise HTTPException(status_code=400, detail="Invalid warning key")
+    now_utc, today = _request_clock()
+    selected = _selected_day(day, today=today)
+    model = load_dashboard(selected, zira_client, now_utc=now_utc)
+    warning = next(
+        (item for item in model.source_warnings if item.key == warning_key_value),
+        None,
+    )
+    response = templates.TemplateResponse(
+        request,
+        "_people_performance_warning_panel.html",
+        {"warning": warning_detail_context(warning)},
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-People-Performance-Response"] = "warning-detail"
     return response
 
 

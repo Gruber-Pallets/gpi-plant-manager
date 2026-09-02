@@ -36,7 +36,7 @@
       <span id="pp-earlier-empty" class="sr-only">There are no people who worked earlier to show.</span>
       <span id="pp-attention-empty" class="sr-only">There are no people who need attention to show.</span>
       <div class="pp-manager-actions">
-        <p class="pp-updated" id="pp-live-status" aria-live="polite">Updated {{ as_of }}</p>
+        <p class="pp-updated" id="pp-live-status">Updated {{ as_of }}</p>
         <div class="pp-controls">
           <label class="pp-date-control">
             <span class="sr-only">Date</span>
@@ -49,8 +49,17 @@
       </div>
     </div>
     {% if source_warnings %}
-    <aside class="pp-source-warnings" role="status" aria-label="Source warnings">
-      {% for warning in source_warnings %}<span>{{ warning.label }}</span>{% endfor %}
+    <aside class="pp-source-warnings" role="status" aria-live="off" aria-label="Source warnings">
+      {% for warning in source_warnings %}
+      <button type="button" class="pp-warning-trigger"
+              data-warning-key="{{ warning.key }}"
+              data-warning-kind="{{ warning.kind }}"
+              data-warning-summary="{{ warning.summary|e }}"
+              aria-expanded="false"
+              aria-controls="pp-warning-popover">
+        <span aria-hidden="true">!</span>{{ warning.label }}
+      </button>
+      {% endfor %}
     </aside>
     {% endif %}
   </form>

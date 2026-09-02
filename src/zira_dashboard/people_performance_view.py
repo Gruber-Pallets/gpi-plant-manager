@@ -13,6 +13,7 @@ from .people_performance import (
     TimelineInterval,
     cumulative_production_hover_points,
 )
+from .people_performance_warnings import DashboardWarning
 
 
 _SECTION_LABELS = {
@@ -400,6 +401,53 @@ def _filter_summary(
     return f"Showing {visible} of {denominator} {label}{attention}."
 
 
+def warning_summary_view(warning: DashboardWarning) -> dict:
+    return {
+        "key": warning.key,
+        "kind": warning.kind,
+        "label": warning.label,
+        "summary": warning.summary,
+    }
+
+
+def warning_detail_context(warning: DashboardWarning | None) -> dict:
+    if warning is None:
+        return {
+            "state": "cleared",
+            "title": "Issue cleared",
+            "summary": "Plant Manager checked again and this warning is no longer active.",
+            "impact": "The People page now shows the latest available information.",
+            "facts": (),
+            "checked_at": "",
+            "last_success_at": "",
+            "actions": (),
+        }
+    return {
+        "state": "open",
+        "key": warning.key,
+        "kind": warning.kind,
+        "title": warning.title,
+        "summary": warning.summary,
+        "impact": warning.impact,
+        "subject": warning.subject,
+        "facts": warning.facts,
+        "checked_at": _time(warning.checked_at_utc),
+        "last_success_at": (
+            _time(warning.last_success_at_utc)
+            if warning.last_success_at_utc is not None
+            else ""
+        ),
+        "actions": tuple(
+            {
+                "action_id": action.action_id,
+                "label": action.label,
+                "href": action.href,
+            }
+            for action in warning.actions
+        ),
+    }
+
+
 def dashboard_context(
     model: DashboardModel,
     *,
@@ -453,7 +501,9 @@ def dashboard_context(
         "schedule_markers": schedule_markers,
         "schedule_time_groups": schedule_time_groups,
         "schedule_track_width_rem": _schedule_track_width_rem(schedule_time_groups),
-        "source_warnings": model.source_warnings,
+        "source_warnings": tuple(
+            warning_summary_view(item) for item in model.source_warnings
+        ),
         "working_now": working_now,
         "worked_earlier": worked_earlier,
         "needs_attention": sum(bool(row.attention_reasons) for row in model.rows),
@@ -475,4 +525,4 @@ def dashboard_context(
     }
 
 
-__all__ = ["dashboard_context"]
+__all__ = ["dashboard_context", "warning_detail_context", "warning_summary_view"]

@@ -1,0 +1,28 @@
+<section id="pp-warning-panel-content"
+         data-warning-state="{{ warning.state }}"
+         {% if warning.key is defined %}data-warning-key="{{ warning.key }}"{% endif %}
+         aria-labelledby="pp-warning-title">
+  <header>
+    <h2 id="pp-warning-title">{{ warning.title }}</h2>
+    <button type="button" data-pp-warning-close aria-label="Close warning details">×</button>
+  </header>
+  <p>{{ warning.summary }}</p>
+  <p class="pp-warning-impact"><strong>People page impact:</strong> {{ warning.impact }}</p>
+  {% if warning.facts %}
+  <dl>
+    {% for label, value in warning.facts %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}
+  </dl>
+  {% endif %}
+  {% if warning.checked_at %}<p class="pp-warning-time">Checked {{ warning.checked_at }}{% if warning.last_success_at %} · Last successful update {{ warning.last_success_at }}{% endif %}</p>{% endif %}
+  {% if warning.actions %}
+  <footer>
+    {% for action in warning.actions %}
+      {% if action.action_id == 'check_again' %}
+      <button type="button" data-pp-warning-action="check_again">{{ action.label }}</button>
+      {% else %}
+      <a href="{{ action.href }}" data-pp-warning-action="{{ action.action_id }}">{{ action.label }}</a>
+      {% endif %}
+    {% endfor %}
+  </footer>
+  {% endif %}
+</section>

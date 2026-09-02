@@ -1,14 +1,25 @@
 import json
 import math
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from tests.people_performance_fixtures import DAY, END, START, busy_dashboard_model, span
+from tests.people_performance_fixtures import (
+    DAY,
+    END,
+    START,
+    busy_dashboard_model,
+    span,
+    unmatched_warning_fixture,
+)
 from zira_dashboard import people_performance_view
 from zira_dashboard.people_performance import BreakSpan, ProductionHoverPoint, assemble_dashboard
-from zira_dashboard.people_performance_view import dashboard_context
+from zira_dashboard.people_performance_view import (
+    dashboard_context,
+    warning_detail_context,
+    warning_summary_view,
+)
 
 
 def _row_named(context: dict, name: str) -> dict:
@@ -18,6 +29,36 @@ def _row_named(context: dict, name: str) -> dict:
         for row in section["rows"]
         if row["person_name"] == name
     )
+
+
+def test_warning_summary_does_not_eagerly_expose_diagnostic_facts():
+    warning = unmatched_warning_fixture(call_count=135)
+
+    summary = warning_summary_view(warning)
+
+    assert summary == {
+        "key": warning.key,
+        "kind": "unmatched_forklift_calls",
+        "label": "Unmatched forklift calls: 135",
+        "summary": "Forklift calls could not be matched to active employees.",
+    }
+    assert "facts" not in summary
+
+
+def test_warning_detail_formats_safe_facts_actions_and_times():
+    warning = replace(
+        unmatched_warning_fixture(call_count=135),
+        checked_at_utc=datetime(2026, 8, 28, 14, 30, tzinfo=UTC),
+        last_success_at_utc=datetime(2026, 8, 28, 14, 30, tzinfo=UTC),
+    )
+
+    detail = warning_detail_context(warning)
+
+    assert detail["state"] == "open"
+    assert detail["checked_at"] == "9:30 AM"
+    assert detail["last_success_at"] == "9:30 AM"
+    assert detail["facts"][0] == ("Unmatched calls", "135")
+    assert detail["actions"][0]["action_id"] == "check_again"
 
 
 def test_dashboard_model_carries_assembled_breaks():

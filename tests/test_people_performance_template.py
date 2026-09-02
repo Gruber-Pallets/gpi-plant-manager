@@ -145,6 +145,54 @@ def test_page_uses_one_compact_live_manager_strip(rendered_html):
     assert '>Today<' not in rendered_html
 
 
+def test_warning_strip_uses_safe_semantic_detail_triggers(rendered_html):
+    warning = busy_dashboard_model().source_warnings[0]
+    warning_strip = rendered_html.split(
+        '<aside class="pp-source-warnings"', 1
+    )[1].split("</aside>", 1)[0]
+
+    assert 'role="status"' in warning_strip
+    assert 'aria-live="off"' in warning_strip
+    assert 'type="button" class="pp-warning-trigger"' in warning_strip
+    assert f'data-warning-key="{warning.key}"' in warning_strip
+    assert f'data-warning-kind="{warning.kind}"' in warning_strip
+    assert f'data-warning-summary="{warning.summary}"' in warning_strip
+    assert 'aria-expanded="false"' in warning_strip
+    assert 'aria-controls="pp-warning-popover"' in warning_strip
+    assert '<span aria-hidden="true">!</span>' in warning_strip
+    assert "source_unavailable" not in warning_strip
+    assert "data-warning-facts" not in warning_strip
+
+
+def test_warning_panel_host_stays_outside_the_polled_rows_partial(
+    rendered_html, client, monkeypatch
+):
+    monkeypatch.setattr(
+        route,
+        "load_dashboard",
+        lambda day, client, now_utc=None: replace(
+            busy_dashboard_model(), day=day, is_today=day == DAY
+        ),
+    )
+
+    rows = client.get(f"/people-performance/rows?day={DAY.isoformat()}")
+    host_tag = rendered_html.split('<div id="pp-warning-popover"', 1)[1].split(
+        "></div>", 1
+    )[0]
+
+    assert rows.status_code == 200
+    assert 'id="pp-warning-popover"' in rendered_html
+    assert 'role="region"' in host_tag
+    assert 'aria-label="Warning details"' in host_tag
+    assert "hidden" in host_tag
+    assert 'id="pp-action-status"' in rendered_html
+    assert 'aria-live="polite" aria-atomic="true"' in rendered_html
+    assert 'id="pp-warning-popover"' not in rows.text
+    assert 'id="pp-action-status"' not in rows.text
+    assert '<p class="pp-updated" id="pp-live-status">' in rendered_html
+    assert 'id="pp-live-status" aria-live=' not in rendered_html
+
+
 def test_count_controls_expose_filter_state_and_empty_descriptions(rendered_html):
     counts = rendered_html.split('<div class="pp-counts"', 1)[1].split("</div>", 1)[0]
 

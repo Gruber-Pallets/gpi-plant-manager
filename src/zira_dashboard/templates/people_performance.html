@@ -12,6 +12,9 @@
          data-poll-disabled="{{ 1 if poll_disabled else 0 }}"
          data-rows-url="{{ rows_url }}">
   {% include "_people_performance_rows.html" %}
+  <div id="pp-warning-popover" class="pp-warning-popover" role="region"
+       aria-label="Warning details" hidden></div>
+  <span id="pp-action-status" class="sr-only" aria-live="polite" aria-atomic="true"></span>
 </section>
 {% endblock %}
 {% block scripts %}

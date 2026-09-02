@@ -74,6 +74,7 @@ def test_people_page_uses_authenticated_performance_navigation(client, dashboard
     assert 'class="subnav-item active"' in response.text
     assert _is_bypass_path("/people-performance") is False
     assert _is_bypass_path("/people-performance/rows") is False
+    assert _is_bypass_path("/people-performance/warnings/" + "0" * 24) is False
 
 
 def test_future_day_is_rejected(client, dashboard_loader):
@@ -134,3 +135,64 @@ def test_historical_page_revalidates_for_source_corrections(client, dashboard_lo
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "private, no-cache"
+
+
+def test_warning_detail_returns_marked_no_store_partial(client, dashboard_loader):
+    warning = busy_dashboard_model().source_warnings[0]
+
+    response = client.get(
+        f"/people-performance/warnings/{warning.key}?day={DAY.isoformat()}"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-people-performance-response"] == "warning-detail"
+    assert 'data-warning-state="open"' in response.text
+    assert f'data-warning-key="{warning.key}"' in response.text
+    assert warning.title in response.text
+    assert response.text.count("data-pp-warning-action=") == len(warning.actions)
+    assert 'data-pp-warning-action="check_again"' in response.text
+    assert 'data-pp-warning-action="open_diagnostics"' in response.text
+    assert 'data-pp-warning-action="review_identities"' not in response.text
+    assert "source_unavailable" not in response.text
+
+
+def test_missing_warning_key_returns_cleared_partial(client, dashboard_loader):
+    response = client.get(
+        f"/people-performance/warnings/{'0' * 24}?day={DAY.isoformat()}"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-people-performance-response"] == "warning-detail"
+    assert 'data-warning-state="cleared"' in response.text
+    assert "Issue cleared" in response.text
+    assert "data-warning-key=" not in response.text
+    assert "data-pp-warning-action=" not in response.text
+    assert len(dashboard_loader) == 1
+
+
+def test_malformed_warning_key_is_rejected_before_loading_dashboard(
+    client, dashboard_loader
+):
+    response = client.get(
+        f"/people-performance/warnings/not-a-warning-key?day={DAY.isoformat()}"
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid warning key"}
+    assert dashboard_loader == []
+
+
+def test_warning_detail_rejects_future_day_before_loading_dashboard(
+    client, dashboard_loader
+):
+    warning = busy_dashboard_model().source_warnings[0]
+
+    response = client.get(
+        f"/people-performance/warnings/{warning.key}?day=2026-08-29"
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Choose today or an earlier day"}
+    assert dashboard_loader == []
