@@ -14,7 +14,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ### Check the shared review setup safely
 
-- **A new check can find missing parts of the shared Odoo review setup without showing its secret link.** A test copy of Odoo must pass extra safety checks before the review steps can be tried.
+- **A new check can find missing or changed parts of the shared Odoo review setup without showing its secret link.** A test copy of Odoo must match the right company and pass extra safety checks before the review steps can be tried.
 
 ### Get ready for one shared review task
 

@@ -19,6 +19,7 @@ Official Odoo 19 evidence:
 
 - [Webhook controller](https://github.com/odoo/odoo/blob/19.0/addons/base_automation/controllers/main.py)
 - [Automation implementation](https://github.com/odoo/odoo/blob/19.0/addons/base_automation/models/base_automation.py)
+- [Safe evaluation implementation](https://github.com/odoo/odoo/blob/19.0/odoo/tools/safe_eval.py)
 - [Odoo 19 automation documentation](https://www.odoo.com/documentation/19.0/applications/studio/automated_actions.html)
 
 Accept only HTTP 200 with the exact JSON object `{"status":"ok"}` as an
@@ -92,12 +93,24 @@ version control.
 ODOO_REVIEW_ACTION_WEBHOOK_URL=
 ODOO_REVIEW_TEST_DB_UUID=
 ODOO_FEEDBACK_WORKFLOW_V2_ENABLED=false
+ODOO_IMPROVEMENTS_EXPECTED_COMPANY=
 ```
 
 The dedicated read credentials remain the existing
 `ODOO_IMPROVEMENTS_URL`, `ODOO_IMPROVEMENTS_DB`,
 `ODOO_IMPROVEMENTS_LOGIN`, and `ODOO_IMPROVEMENTS_API_KEY`. The production UUID
 fence remains `ODOO_IMPROVEMENTS_EXPECTED_DATABASE_UUID`.
+
+The RPC user must be able to read `database.uuid`, its own `company_id`, the
+exact company row, model/field metadata, projects, task stages, users,
+employees, automation rules, and their related `ir.actions.server` rows. The
+read-only audit requests only these exposed rule fields: `id`, `name`, `active`,
+`model_id`, `trigger`, `filter_domain`, `trigger_field_ids`, `record_getter`,
+`log_webhook_calls`, `action_server_ids`, and `webhook_uuid`; and only these
+related action fields: `id`, `state`, `code`, and `model_id`. The duplicate
+exercise additionally needs create/write access to disposable improvement/task
+rows and archive access to those same rows. Do not grant broader production
+write access for this checker.
 
 Use this gate order without skipping a step:
 
@@ -106,13 +119,22 @@ Use this gate order without skipping a step:
 3. Put only duplicate-database credentials in the operator shell.
 4. Read `database.uuid` from that duplicate and store the exact canonical value
    in `ODOO_REVIEW_TEST_DB_UUID`.
-5. Run the read-only checker. It must report V2, one project, both stages, one
-   active Dale login, both enabled rules, and unique source identities.
-6. Run the guarded duplicate exercise and retain the safe count-only output.
-7. Run each application's V2 preflight while its UI gate remains false.
-8. Deploy Odoo-authoritative inbound lifecycle synchronization and the native
+5. Store the authenticated user's exact current company name in
+   `ODOO_IMPROVEMENTS_EXPECTED_COMPANY` and confirm it is the approved duplicate
+   company.
+6. Generate the webhook URL from the one inspected review rule. Its origin must
+   equal `ODOO_IMPROVEMENTS_URL`, and its final UUID must equal that rule's
+   stored `webhook_uuid`. `ODOO_IMPROVEMENTS_URL` must be a database-specific
+   duplicate origin; a shared multi-database origin without deterministic host
+   routing is unsupported and must not be exercised.
+7. Run the read-only checker. It must report V2, one project, both stages, one
+   active Dale login, three enabled rules, audited related actions, matched
+   company, bound webhook, and unique source identities.
+8. Run the guarded duplicate exercise and retain the safe count-only output.
+9. Run each application's V2 preflight while its UI gate remains false.
+10. Deploy Odoo-authoritative inbound lifecycle synchronization and the native
    acknowledgement plus exact-readback action clients.
-9. Enable the UI gate one application at a time and verify one exact source
+11. Enable the UI gate one application at a time and verify one exact source
     identity end to end.
 
 ## Duplicate-database evidence record
@@ -236,6 +258,7 @@ else:
         'project_id': projects.id,
         'stage_id': stages.id,
         'user_ids': [(6, 0, [dale_users.id])],
+        'state': '01_in_progress',
     })
     link_values = {'x_studio_linked_task': task.id}
     if submission_type in DIGITAL_TYPES:
@@ -380,6 +403,8 @@ env.cr.execute(
     [reference.id],
 )
 reference.invalidate_recordset()
+if 'active' not in reference._fields or not reference.active:
+    raise UserError('The review item is archived or lacks the required active field.')
 
 tasks = env['project.task'].with_context(active_test=False).search([
     ('id', '=', task_id),
@@ -392,6 +417,8 @@ env.cr.execute(
     [task.id],
 )
 task.invalidate_recordset()
+if not task.active:
+    raise UserError('The linked review task became unavailable.')
 
 if reference.x_studio_source != source or reference.x_studio_source_id != source_id:
     raise UserError('The review Source identity does not match.')
@@ -402,6 +429,24 @@ if reference.x_studio_linked_wo:
 if not reference.x_studio_linked_task or reference.x_studio_linked_task.id != task.id:
     raise UserError('The linked task does not match taskId.')
 
+projects = env['project.project'].with_context(active_test=False).search([
+    ('name', '=', 'GPI OS Manager - TASKS'),
+    ('active', '=', True),
+], limit=2)
+if len(projects) != 1 or task.project_id.id != projects.id:
+    raise UserError('The review task project does not match.')
+general_stages = env['project.task.type'].with_context(active_test=False).search([
+    ('name', '=', 'General'),
+    ('project_ids', 'in', [projects.id]),
+    ('active', '=', True),
+], limit=2)
+l10_stages = env['project.task.type'].with_context(active_test=False).search([
+    ('name', '=', 'L10'),
+    ('project_ids', 'in', [projects.id]),
+    ('active', '=', True),
+], limit=2)
+if len(general_stages) != 1 or len(l10_stages) != 1:
+    raise UserError('The review stages must resolve exactly once in the review project.')
 actor_users = env['res.users'].with_context(active_test=False).search([
     ('id', '=', actor_user_id),
     ('active', '=', True),
@@ -418,14 +463,23 @@ if actor_user_id not in task.user_ids.ids:
 current_status = reference.x_studio_status
 if current_status in ('Completed', 'Declined'):
     raise UserError('The review item is already terminal.')
-if current_status == 'Requested' and action_name not in ('accept', 'decline'):
-    raise UserError('Requested allows only Accept or Decline.')
-if current_status == 'In-Progress' and action_name not in (
-    'assign', 'complete', 'move_l10'
-):
-    raise UserError('In-Progress does not allow that action.')
+if current_status == 'Requested':
+    if action_name not in ('accept', 'decline'):
+        raise UserError('Requested allows only Accept or Decline.')
+    if task.state != '01_in_progress' or task.stage_id.id != general_stages.id:
+        raise UserError('Requested requires the open task in General.')
+if current_status == 'In-Progress':
+    if action_name not in ('assign', 'complete', 'move_l10'):
+        raise UserError('In-Progress does not allow that action.')
+    if (
+        task.state != '03_approved'
+        or task.stage_id.id not in (general_stages.id, l10_stages.id)
+    ):
+        raise UserError('In-Progress requires an approved task in an allowed stage.')
 if current_status not in ('Requested', 'In-Progress'):
     raise UserError('The review item has an unknown state.')
+if reference.x_studio_date_stop or reference.x_studio_completed_by:
+    raise UserError('A nonterminal review item cannot contain terminal fields.')
 
 target_user = env['res.users']
 target_employee = env['hr.employee']
@@ -443,30 +497,18 @@ if action_name == 'assign':
     target_user = target_users
     target_employee = target_employees
 
-l10_stage = env['project.task.type']
-if action_name == 'move_l10':
-    projects = env['project.project'].with_context(active_test=False).search([
-        ('name', '=', 'GPI OS Manager - TASKS'),
-        ('active', '=', True),
-    ], limit=2)
-    if len(projects) != 1 or task.project_id.id != projects.id:
-        raise UserError('The review task project does not match.')
-    l10_stages = env['project.task.type'].with_context(active_test=False).search([
-        ('name', '=', 'L10'),
-        ('project_ids', 'in', [projects.id]),
-        ('active', '=', True),
-    ], limit=2)
-    if len(l10_stages) != 1:
-        raise UserError('The L10 stage must resolve exactly once in the review project.')
-    l10_stage = l10_stages
+stop_value = False
+if action_name in ('decline', 'complete'):
+    stop_field_type = reference._fields['x_studio_date_stop'].type
+    if stop_field_type == 'date':
+        stop_value = datetime.date.today().isoformat()
+    elif stop_field_type == 'datetime':
+        stop_value = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        raise UserError('The completion date field has an unsupported type.')
 
-stop_field_type = reference._fields['x_studio_date_stop'].type
-if stop_field_type == 'date':
-    stop_value = datetime.date.today().isoformat()
-elif stop_field_type == 'datetime':
-    stop_value = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-else:
-    raise UserError('The completion date field has an unsupported type.')
+original_stage_id = task.stage_id.id
+original_assignee_ids = sorted(task.user_ids.ids)
 
 # Odoo's native webhook controller catches action errors. Explicitly roll back
 # every request write before re-raising so its HTTP 500 cannot commit a partial
@@ -500,7 +542,7 @@ try:
         })
         chatter = 'Completed by employee %s. Result: %s' % (actor_employees.id, note)
     else:
-        task.write({'stage_id': l10_stage.id})
+        task.write({'stage_id': l10_stages.id})
         chatter = 'Moved to L10 by employee %s.' % actor_employees.id
 
     task.message_post(body=chatter, subtype_xmlid='mail.mt_note')
@@ -517,6 +559,45 @@ try:
         or reference_values['x_studio_linked_task'][0] != task.id
     ):
         raise UserError('The review relationship internal readback did not match.')
+    if action_name == 'accept':
+        expected_state = '03_approved'
+        expected_status = 'In-Progress'
+        expected_stage_id = original_stage_id
+        expected_assignee_ids = original_assignee_ids
+        expected_stop = False
+    elif action_name == 'decline':
+        expected_state = '1_canceled'
+        expected_status = 'Declined'
+        expected_stage_id = original_stage_id
+        expected_assignee_ids = original_assignee_ids
+        expected_stop = stop_value
+    elif action_name == 'assign':
+        expected_state = '03_approved'
+        expected_status = 'In-Progress'
+        expected_stage_id = original_stage_id
+        expected_assignee_ids = [target_user.id]
+        expected_stop = False
+    elif action_name == 'complete':
+        expected_state = '1_done'
+        expected_status = 'Completed'
+        expected_stage_id = original_stage_id
+        expected_assignee_ids = original_assignee_ids
+        expected_stop = stop_value
+    else:
+        expected_state = '03_approved'
+        expected_status = 'In-Progress'
+        expected_stage_id = l10_stages.id
+        expected_assignee_ids = original_assignee_ids
+        expected_stop = False
+    actual_stop = reference_values['x_studio_date_stop'] or False
+    if (
+        task_values['state'] != expected_state
+        or task_values['stage_id'][0] != expected_stage_id
+        or sorted(task_values['user_ids']) != expected_assignee_ids
+        or reference_values['x_studio_status'] != expected_status
+        or actual_stop != expected_stop
+    ):
+        raise UserError('The review transition internal readback did not match.')
 except Exception:
     env.cr.rollback()
     raise
@@ -524,9 +605,9 @@ except Exception:
 
 After Odoo returns HTTP 200 and exactly `{"status":"ok"}`, the application
 server reads by exact `x_studio_source` plus `x_studio_source_id`, requires one
-reference, requires its `x_studio_linked_task` to equal `taskId`, and reads that
-exact active task. It then constructs the documented `ReviewActionResult` from
-only `id`, `state`, `stage_id`, `user_ids`, `x_studio_status`,
+active reference, requires its `x_studio_linked_task` to equal `taskId`, and
+reads that exact active task. It then constructs the documented
+`ReviewActionResult` from only `id`, `state`, `stage_id`, `user_ids`, `x_studio_status`,
 `x_studio_linked_task`, and `x_studio_date_stop`. It returns success only if
 that result matches the requested transition. The webhook URL and actor/source
 fields never reach browser code.
@@ -623,6 +704,24 @@ for task in records:
             )
 ```
 
+## Versioned action audit
+
+The checker requires exactly one related Execute Code action on each rule. It
+normalizes CRLF to LF, removes trailing whitespace from each line, trims outer
+whitespace, and compares SHA-256. These hashes identify the complete blocks in
+this runbook; they are not secrets.
+
+| Rule | Model | Action type | Audited code SHA-256 |
+| --- | --- | --- | --- |
+| `GPI 2s: Create and Link Task` | `x_2s_improvements` | `code` | `c31f9d2c3cb8bb7147cf4f1babf828abd25edb7a23d12ed4ed8e04c1bd1d1208` |
+| `GPI 2s: Review Action Webhook` | `x_2s_improvements` | `code` | `1c5b32f2f2a8bc269ceca77621896a6ccb473fda5c63e40f7228d3406a60d37f` |
+| `GPI 2s: Sync Digital Lifecycle` | `project.task` | `code` | `6a27576c27d0aaa5a9675d8e92aade46918d2916e0f575856441a3d03b6a3bee` |
+
+The webhook Target Record block is compared as normalized text, not merely by
+hash. Log Calls must be off for that webhook. If an intentional Studio change
+is approved, update the runbook block, its hash constant, and the hash-lock test
+in one reviewed commit; never accept an unexplained live mismatch.
+
 ## Checker and duplicate exercise
 
 Read-only verification:
@@ -639,12 +738,20 @@ OK contract=V2
 OK project=one
 OK stages=General,L10
 OK dale=one-active
-OK automations=creation,review-enabled
+OK automations=creation,review,digital-enabled
+OK automation-actions=audited
+OK company=matched
+OK webhook=duplicate-bound
 OK source-identities=unique
 ```
 
-The checker never prints the webhook URL. It uses exact active project, stages,
-login, trigger, domain, watched-field, and automation cardinality checks.
+The checker never prints the webhook URL, UUID, company value, rule code, or
+credentials. It checks the exact active project, stages, login, three rule
+cardinalities, triggers, domains, watched fields, related action cardinality,
+action type/model/code hash, webhook Target Record text, Log Calls setting,
+current company, and webhook binding. It does not claim to inspect Studio UI
+settings that are not represented by the exposed fields listed in the setup
+prerequisites above.
 
 The disposable exercise is intentionally reachable only with both flags:
 
@@ -659,17 +766,49 @@ Before any create, it requires:
 - a canonical production `ODOO_IMPROVEMENTS_EXPECTED_DATABASE_UUID` fence;
 - fresh live `database.uuid` equality;
 - live UUID inequality with `ODOO_IMPROVEMENTS_EXPECTED_DATABASE_UUID`;
+- exact current-company equality with `ODOO_IMPROVEMENTS_EXPECTED_COMPANY`;
+- exact webhook origin and stored-rule UUID binding;
 - every read-only contract check passing;
 - archival fields on both disposable models;
-- one active employee for the authenticated test user.
+- the authenticated RPC user is the one exact active
+  `dale@gruberpallets.com` user, with one active employee.
+
+Immediately before every create, write, webhook POST, or cleanup archive, the
+exercise freshly re-reads database UUID and current company. Before every POST
+it also re-reads the one active webhook rule and proves the configured URL has
+the duplicate base origin and that rule's exact canonical UUID.
 
 The exercise creates four rows and expects one stable linked task per row even
-after a repeated save. It exercises Accept, Decline, Assign, Complete, and Move
-to L10, checks empty linked work orders and unchanged original notes, then
-archives only the recorded IDs it created. Each action requires the native
+after a repeated save. Before positive transitions it proves that unknown keys,
+an unassigned actor, Complete-before-Accept, a mismatched linked task, a
+temporarily wrong-project disposable task, and terminal replays are rejected
+with exact state unchanged. It then exercises Accept, Decline, Assign,
+Complete, and Move to L10, checks empty linked work orders and unchanged
+original notes, restores its wrong-project fixture, and archives only the
+name-verified IDs it created. Each positive action requires the native
 acknowledgement and then performs a separate exact XML-RPC readback. A timeout
 also performs that readback before the command can decide whether the action
 landed; it never blindly retries.
+
+Before the first create, the exercise proves that all four random source IDs
+and exact random task names are absent. Cleanup re-searches those identities
+with `active_test=False`, validates each exact row title and linked task name,
+and never relies only on IDs returned by RPC. If an XML-RPC mutation response
+is lost, or a webhook is still unlanded after timeout readback, it performs that
+ownership reconciliation but deliberately defers archival and exits with a
+fixed unknown-outcome error. This prevents cleanup from racing a request that
+may still commit. After the remote request has certainly stopped, an operator
+must locate the most recent duplicate-only rows by the documented disposable
+title prefix, validate their source identity/task name relationship, and archive
+only those disposable records. The checker never reports cleanup success for
+an unknown remote outcome.
+
+The negative checks prove reject-without-change behavior. They do not inject a
+failure after the first write because native Studio exposes no safe per-request
+fault-injection control. The Execute Code block's post-write invariant failures
+explicitly call `env.cr.rollback()` before re-raising; validate that path only
+in an approved disposable database using an approved temporary fault method,
+never by weakening the production action contract.
 
 ## Rollback
 

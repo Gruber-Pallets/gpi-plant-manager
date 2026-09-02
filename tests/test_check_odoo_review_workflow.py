@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
+import re
 
 import pytest
 
@@ -19,8 +21,18 @@ class FakeOdooClient:
     def inspect(self) -> checker.WorkflowFacts:
         return self.facts
 
-    def exercise(self, webhook_url: str) -> checker.ExerciseResult:
+    def exercise(
+        self,
+        webhook_url: str,
+        *,
+        expected_database_uuid: str,
+        production_database_uuid: str,
+        expected_company: str,
+    ) -> checker.ExerciseResult:
         assert webhook_url == "https://duplicate.invalid/secret-path"
+        assert expected_database_uuid == TEST_UUID
+        assert production_database_uuid == PRODUCTION_UUID
+        assert expected_company == "Expected Duplicate Company"
         self.exercise_calls += 1
         return checker.ExerciseResult(rows=4, tasks=4, actions=5)
 
@@ -34,6 +46,25 @@ def good_automation(name: str) -> checker.AutomationFacts:
             trigger=checker.CREATION_TRIGGER,
             domain=checker.CREATION_DOMAIN,
             watched_fields=checker.CREATION_WATCHED_FIELDS,
+            record_getter="",
+            log_webhook_calls=False,
+            actions=(
+                checker.ServerActionFacts(
+                    "code", checker.CREATION_CODE_HASH, checker.IMPROVEMENT_MODEL
+                ),
+            ),
+        )
+    if name == checker.DIGITAL_AUTOMATION_NAME:
+        return checker.AutomationFacts(
+            name=name,
+            active=True,
+            model="project.task",
+            trigger=checker.DIGITAL_TRIGGER,
+            domain=checker.DIGITAL_DOMAIN,
+            watched_fields=checker.DIGITAL_WATCHED_FIELDS,
+            record_getter="",
+            log_webhook_calls=False,
+            actions=(checker.ServerActionFacts("code", checker.DIGITAL_CODE_HASH, "project.task"),),
         )
     return checker.AutomationFacts(
         name=name,
@@ -42,12 +73,19 @@ def good_automation(name: str) -> checker.AutomationFacts:
         trigger=checker.REVIEW_TRIGGER,
         domain=checker.REVIEW_DOMAIN,
         watched_fields=checker.REVIEW_WATCHED_FIELDS,
+        record_getter=checker.REVIEW_RECORD_GETTER,
+        log_webhook_calls=False,
+        actions=(
+            checker.ServerActionFacts("code", checker.REVIEW_CODE_HASH, checker.IMPROVEMENT_MODEL),
+        ),
     )
 
 
 def good_facts() -> checker.WorkflowFacts:
     return checker.WorkflowFacts(
         database_uuid=TEST_UUID,
+        company_name="Expected Duplicate Company",
+        webhook_binding_matches=True,
         type_values=checker.EXPECTED_TYPE_VALUES,
         projects=(checker.NamedRecord(id=10, name=checker.REVIEW_PROJECT),),
         stages={
@@ -64,6 +102,7 @@ def good_facts() -> checker.WorkflowFacts:
         automations={
             checker.CREATION_AUTOMATION_NAME: (good_automation(checker.CREATION_AUTOMATION_NAME),),
             checker.REVIEW_AUTOMATION_NAME: (good_automation(checker.REVIEW_AUTOMATION_NAME),),
+            checker.DIGITAL_AUTOMATION_NAME: (good_automation(checker.DIGITAL_AUTOMATION_NAME),),
         },
         duplicate_source_identities=(),
     )
@@ -75,6 +114,7 @@ def config(**changes: object) -> checker.CheckConfig:
         webhook_url="https://duplicate.invalid/secret-path",
         test_database_uuid=TEST_UUID,
         production_database_uuid=PRODUCTION_UUID,
+        expected_company="Expected Duplicate Company",
         workflow_v2_enabled=False,
     )
     return replace(base, **changes)
@@ -84,6 +124,21 @@ def check(facts: checker.WorkflowFacts | None = None, **kwargs: object):
     client = FakeOdooClient(facts or good_facts())
     result = checker.check_workflow(client, config(), **kwargs)
     return client, result
+
+
+def test_audited_hashes_match_the_versioned_runbook_code() -> None:
+    runbook = Path("docs/odoo/2s-review-workflow-setup.md").read_text()
+    blocks = re.findall(r"```python\n(.*?)```", runbook, re.DOTALL)
+
+    assert checker._code_hash(blocks[1]) == checker.CREATION_CODE_HASH
+    assert checker._normalize_code(blocks[2]) == checker.REVIEW_RECORD_GETTER
+    assert checker._code_hash(blocks[3]) == checker.REVIEW_CODE_HASH
+    assert checker._code_hash(blocks[4]) == checker.DIGITAL_CODE_HASH
+
+
+@pytest.mark.parametrize("raw", [False, None, "", "[]"])
+def test_empty_odoo_domain_normalizes_to_the_empty_contract(raw: object) -> None:
+    assert checker._normalize_domain(raw) == ()
 
 
 def test_exact_success_reports_only_fixed_safe_facts() -> None:
@@ -96,7 +151,10 @@ def test_exact_success_reports_only_fixed_safe_facts() -> None:
         "OK project=one",
         "OK stages=General,L10",
         "OK dale=one-active",
-        "OK automations=creation,review-enabled",
+        "OK automations=creation,review,digital-enabled",
+        "OK automation-actions=audited",
+        "OK company=matched",
+        "OK webhook=duplicate-bound",
         "OK source-identities=unique",
     )
     assert client.exercise_calls == 0
@@ -240,6 +298,97 @@ def test_wrong_creation_domain_or_watched_fields_fails_safely(wrong_part: str) -
     _, result = check(replace(facts, automations=automations))
 
     assert result.issues == (checker.SafeIssue.CREATION_AUTOMATION_CONTRACT,)
+
+
+@pytest.mark.parametrize("condition", ["missing", "disabled"])
+def test_missing_or_disabled_digital_lifecycle_fails_safely(condition: str) -> None:
+    facts = good_facts()
+    automations = dict(facts.automations)
+    if condition == "missing":
+        automations[checker.DIGITAL_AUTOMATION_NAME] = ()
+    else:
+        automations[checker.DIGITAL_AUTOMATION_NAME] = (
+            replace(good_automation(checker.DIGITAL_AUTOMATION_NAME), active=False),
+        )
+
+    _, result = check(replace(facts, automations=automations))
+
+    assert result.issues == (checker.SafeIssue.DIGITAL_AUTOMATION,)
+
+
+@pytest.mark.parametrize(
+    ("name", "change", "issue"),
+    [
+        (
+            checker.CREATION_AUTOMATION_NAME,
+            {"actions": (checker.ServerActionFacts("code", "wrong", checker.IMPROVEMENT_MODEL),)},
+            checker.SafeIssue.CREATION_AUTOMATION_CONTRACT,
+        ),
+        (
+            checker.REVIEW_AUTOMATION_NAME,
+            {"record_getter": "model.browse()"},
+            checker.SafeIssue.REVIEW_AUTOMATION_CONTRACT,
+        ),
+        (
+            checker.REVIEW_AUTOMATION_NAME,
+            {"log_webhook_calls": True},
+            checker.SafeIssue.REVIEW_AUTOMATION_CONTRACT,
+        ),
+        (
+            checker.REVIEW_AUTOMATION_NAME,
+            {
+                "actions": (
+                    checker.ServerActionFacts(
+                        "code", checker.REVIEW_CODE_HASH, checker.IMPROVEMENT_MODEL
+                    ),
+                    checker.ServerActionFacts(
+                        "code", checker.REVIEW_CODE_HASH, checker.IMPROVEMENT_MODEL
+                    ),
+                )
+            },
+            checker.SafeIssue.REVIEW_AUTOMATION_CONTRACT,
+        ),
+        (
+            checker.DIGITAL_AUTOMATION_NAME,
+            {
+                "actions": (
+                    checker.ServerActionFacts("email", checker.DIGITAL_CODE_HASH, "project.task"),
+                )
+            },
+            checker.SafeIssue.DIGITAL_AUTOMATION_CONTRACT,
+        ),
+    ],
+)
+def test_server_action_getter_logging_type_cardinality_and_hash_are_audited(
+    name: str, change: dict, issue: checker.SafeIssue
+) -> None:
+    facts = good_facts()
+    automations = dict(facts.automations)
+    automations[name] = (replace(good_automation(name), **change),)
+
+    _, result = check(replace(facts, automations=automations))
+
+    assert result.issues == (issue,)
+
+
+def test_expected_company_is_required_and_must_match() -> None:
+    client = FakeOdooClient(good_facts())
+    missing = checker.check_workflow(client, config(expected_company=""))
+    mismatch = checker.check_workflow(
+        client,
+        config(expected_company="Other Company"),
+    )
+
+    assert missing.issues == (checker.SafeIssue.EXPECTED_COMPANY,)
+    assert mismatch.issues == (checker.SafeIssue.COMPANY_MISMATCH,)
+
+
+def test_webhook_must_bind_to_the_inspected_duplicate_rule() -> None:
+    facts = replace(good_facts(), webhook_binding_matches=False)
+
+    _, result = check(facts)
+
+    assert result.issues == (checker.SafeIssue.WEBHOOK_BINDING,)
 
 
 def test_secret_absent_locally_fails_without_echoing_a_value() -> None:
@@ -421,8 +570,177 @@ def test_cleanup_ownership_requires_exact_random_task_name() -> None:
         )
 
 
+def test_exercise_actor_must_be_the_exact_audited_dale_user() -> None:
+    dale = (checker.UserRecord(30, checker.DALE_LOGIN, True),)
+
+    assert checker._require_dale_exercise_actor(30, dale) == 30
+    with pytest.raises(checker.SafeRuntimeError, match="authenticated Dale user"):
+        checker._require_dale_exercise_actor(31, dale)
+
+
 def bare_rpc_client() -> checker.XmlRpcReviewClient:
     return object.__new__(checker.XmlRpcReviewClient)
+
+
+def test_action_readback_rejects_an_archived_task(monkeypatch) -> None:
+    client = bare_rpc_client()
+    responses = iter(
+        [
+            [
+                {
+                    "id": 50,
+                    "x_studio_status": "In-Progress",
+                    "x_studio_linked_task": [40, "Task"],
+                    "x_studio_date_stop": False,
+                    "active": True,
+                }
+            ],
+            [
+                {
+                    "id": 40,
+                    "state": "03_approved",
+                    "stage_id": [20, "General"],
+                    "user_ids": [30],
+                    "active": False,
+                }
+            ],
+        ]
+    )
+    monkeypatch.setattr(client, "_search_read", lambda *_args, **_kwargs: next(responses))
+
+    with pytest.raises(checker.SafeRuntimeError, match="task readback"):
+        client._read_action_result(
+            source="GPI Plant Manager",
+            source_id="GPI-PM-FB-1",
+            task_id=40,
+        )
+
+
+def test_action_readback_rejects_an_archived_reference(monkeypatch) -> None:
+    client = bare_rpc_client()
+    monkeypatch.setattr(
+        client,
+        "_search_read",
+        lambda *_args, **_kwargs: [
+            {
+                "id": 50,
+                "x_studio_status": "In-Progress",
+                "x_studio_linked_task": [40, "Task"],
+                "x_studio_date_stop": False,
+                "active": False,
+            }
+        ],
+    )
+
+    with pytest.raises(checker.SafeRuntimeError, match="identity readback"):
+        client._read_action_result(
+            source="GPI Plant Manager",
+            source_id="GPI-PM-FB-1",
+            task_id=40,
+        )
+
+
+@pytest.mark.parametrize(
+    "webhook_url",
+    [
+        "https://production.invalid/web/hook/33333333-3333-4333-8333-333333333333",
+        "https://duplicate.invalid/web/hook/44444444-4444-4444-8444-444444444444",
+        "https://duplicate.invalid/web/hook/33333333-3333-4333-8333-333333333333?leak=1",
+    ],
+)
+def test_webhook_binding_requires_exact_duplicate_base_and_rule_uuid(webhook_url: str) -> None:
+    assert (
+        checker._webhook_url_matches(
+            "https://duplicate.invalid",
+            webhook_url,
+            "33333333-3333-4333-8333-333333333333",
+        )
+        is False
+    )
+
+
+def test_mutation_fence_rejects_production_before_company_or_webhook_reads(monkeypatch) -> None:
+    client = bare_rpc_client()
+    client._config = checker._RpcConfig("https://duplicate.invalid", "db", "login", "key")
+    client._uid = 30
+    monkeypatch.setattr(client, "_execute", lambda *_args, **_kwargs: PRODUCTION_UUID)
+    monkeypatch.setattr(
+        client,
+        "_search_read",
+        lambda *_args, **_kwargs: pytest.fail("identity fence read past production UUID"),
+    )
+
+    with pytest.raises(checker.SafeRuntimeError, match="database identity"):
+        client._verify_mutation_target(
+            expected_database_uuid=PRODUCTION_UUID,
+            production_database_uuid=PRODUCTION_UUID,
+            expected_company="Expected Duplicate Company",
+        )
+
+
+def test_mutation_fence_requires_fresh_exact_company_and_webhook_binding(monkeypatch) -> None:
+    client = bare_rpc_client()
+    client._config = checker._RpcConfig("https://duplicate.invalid", "db", "login", "key")
+    client._uid = 30
+    monkeypatch.setattr(client, "_execute", lambda *_args, **_kwargs: TEST_UUID)
+    responses = iter(
+        [
+            [{"id": 30, "company_id": [60, "Expected Duplicate Company"]}],
+            [{"id": 60, "name": "Expected Duplicate Company"}],
+            [
+                {
+                    "id": 70,
+                    "active": True,
+                    "trigger": checker.REVIEW_TRIGGER,
+                    "webhook_uuid": "33333333-3333-4333-8333-333333333333",
+                }
+            ],
+        ]
+    )
+    monkeypatch.setattr(client, "_search_read", lambda *_args, **_kwargs: next(responses))
+
+    client._verify_mutation_target(
+        expected_database_uuid=TEST_UUID,
+        production_database_uuid=PRODUCTION_UUID,
+        expected_company="Expected Duplicate Company",
+        webhook_url=("https://duplicate.invalid/web/hook/33333333-3333-4333-8333-333333333333"),
+    )
+
+
+def test_mutation_fence_rejects_a_fresh_company_mismatch(monkeypatch) -> None:
+    client = bare_rpc_client()
+    client._config = checker._RpcConfig("https://duplicate.invalid", "db", "login", "key")
+    client._uid = 30
+    monkeypatch.setattr(client, "_execute", lambda *_args, **_kwargs: TEST_UUID)
+    responses = iter(
+        [
+            [{"id": 30, "company_id": [60, "Expected Duplicate Company"]}],
+            [{"id": 60, "name": "Different Company"}],
+        ]
+    )
+    monkeypatch.setattr(client, "_search_read", lambda *_args, **_kwargs: next(responses))
+
+    with pytest.raises(checker.SafeRuntimeError, match="company identity"):
+        client._verify_mutation_target(
+            expected_database_uuid=TEST_UUID,
+            production_database_uuid=PRODUCTION_UUID,
+            expected_company="Expected Duplicate Company",
+        )
+
+
+def test_xmlrpc_mutation_loss_is_an_explicit_unknown_outcome() -> None:
+    class Models:
+        def execute_kw(self, *_args, **_kwargs):
+            raise TimeoutError("must not be exposed")
+
+    client = bare_rpc_client()
+    client._config = checker._RpcConfig("https://duplicate.invalid", "db", "login", "key")
+    client._uid = 30
+    client._models = Models()
+
+    with pytest.raises(checker.UnknownMutationOutcome, match="unknown outcome") as error:
+        client._execute_mutation(checker.IMPROVEMENT_MODEL, "create", [{}])
+    assert "must not be exposed" not in str(error.value)
 
 
 def test_native_acknowledgement_is_followed_by_exact_authenticated_readback(
@@ -507,6 +825,29 @@ def test_timeout_with_unlanded_transition_fails_without_a_retry(monkeypatch) -> 
     assert events == ["unknown", "readback"]
 
 
+def test_timeout_with_failed_readback_remains_an_explicit_unknown(monkeypatch) -> None:
+    client = bare_rpc_client()
+
+    def timeout(*_args) -> None:
+        raise checker.UnknownWebhookOutcome
+
+    def failed_readback(**_kwargs):
+        raise checker.SafeRuntimeError("fixed readback failure")
+
+    monkeypatch.setattr(client, "_post_acknowledgement", timeout)
+    monkeypatch.setattr(client, "_read_action_result", failed_readback)
+
+    with pytest.raises(checker.UnresolvedWebhookOutcome, match="unknown outcome"):
+        client._call_action_and_readback(
+            "https://example.invalid/redacted",
+            {"action": "accept"},
+            source="GPI Plant Manager",
+            source_id="GPI-PM-CHECK-redacted",
+            task_id=40,
+            landed=lambda _value: False,
+        )
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -545,3 +886,16 @@ def test_native_webhook_rejects_non_200_success_status(monkeypatch) -> None:
 
     with pytest.raises(checker.SafeRuntimeError, match="acknowledgement"):
         bare_rpc_client()._post_acknowledgement("https://example.invalid/redacted", {})
+
+
+def test_negative_exercise_requires_exact_native_error_response(monkeypatch) -> None:
+    class Response:
+        status_code = 400
+
+        def json(self) -> dict:
+            return {"status": "error"}
+
+    monkeypatch.setattr(checker.requests, "post", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(checker.SafeRuntimeError, match="rejection"):
+        bare_rpc_client()._post_rejection("https://example.invalid/redacted", {})
