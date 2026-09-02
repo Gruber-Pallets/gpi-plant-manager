@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Finish older feedback tasks too
+
+- **Older feature tasks can now finish with their feedback cards.** Plant Manager safely recognizes the old task label, so those tasks do not stay open by mistake.
+
 ### Keep feedback cards and owner tasks together
 
 - **Starting feedback work now moves its owner task to In Progress too.** Finishing or declining feedback closes the same task with a clear note, so both lists stay in step.

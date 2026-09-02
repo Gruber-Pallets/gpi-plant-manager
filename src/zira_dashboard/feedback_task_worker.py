@@ -93,6 +93,15 @@ def task_name(snapshot: task_delivery.FeedbackTaskSnapshot) -> str:
     return f"[GPI-PM-FB-{snapshot.feedback_id}] [{label}] {first}"
 
 
+def task_identity_names(snapshot: task_delivery.FeedbackTaskSnapshot) -> frozenset[str]:
+    """Return exact current and known historical names for one feedback task."""
+    current = task_name(snapshot)
+    names = {current}
+    if snapshot.task_type == "feature":
+        names.add(current.replace("[New Feature]", "[Feature]", 1))
+    return frozenset(names)
+
+
 def before_attachment_name(feedback_id: int) -> str:
     return f"GPI-PM-FB-{feedback_id}-before.jpg"
 
@@ -294,13 +303,13 @@ def _task_identity_matches(
     *,
     task_id: int,
     project_id: int,
-    name: str,
+    names: frozenset[str],
 ) -> bool:
     return (
         isinstance(remote, dict)
         and remote.get("id") == task_id
         and remote.get("project_id") == project_id
-        and remote.get("name") == name
+        and remote.get("name") in names
         and remote.get("active") is True
     )
 
@@ -318,7 +327,7 @@ def _reconcile_task_lifecycle(
     ):
         return _retry(claim, clock)
     target_stage = task_stage_for(snapshot.status)
-    name = task_name(snapshot)
+    names = task_identity_names(snapshot)
     try:
         project_ids = odoo_client.find_active_feedback_project_ids()
         if len(project_ids) != 1:
@@ -333,7 +342,7 @@ def _reconcile_task_lifecycle(
     except (ValueError, odoo_client.OdooTaskPayloadError):
         return _block(claim, _TASK_IDENTITY_REASON, clock)
     if not _task_identity_matches(
-        remote, task_id=claim.task_id, project_id=project_id, name=name
+        remote, task_id=claim.task_id, project_id=project_id, names=names
     ):
         return _block(claim, _TASK_IDENTITY_REASON, clock)
 
@@ -381,7 +390,7 @@ def _reconcile_task_lifecycle(
         return _block(claim, _TASK_NOTE_REASON, clock)
     if (
         not _task_identity_matches(
-            verified, task_id=claim.task_id, project_id=project_id, name=name
+            verified, task_id=claim.task_id, project_id=project_id, names=names
         )
         or verified.get("stage_id") != stage_id
         or verified.get("stage_name") != target_stage
@@ -444,6 +453,6 @@ def run_batch(
 
 __all__ = [
     "BatchResult", "before_attachment_name", "process_claim", "run_batch",
-    "task_description", "task_name", "task_stage_for", "terminal_note_html",
+    "task_description", "task_identity_names", "task_name", "task_stage_for", "terminal_note_html",
     "terminal_note_marker",
 ]

@@ -139,6 +139,15 @@ def test_task_stage_mapping_and_terminal_note_are_deterministic():
     assert "Declined:" in declined and "GPI-PM-FB-42:v3" in declined
 
 
+def test_feature_task_identity_accepts_only_current_and_known_historical_labels():
+    item = snapshot(task_type="feature")
+
+    assert worker.task_identity_names(item) == {
+        "[GPI-PM-FB-42] [New Feature] Save fails",
+        "[GPI-PM-FB-42] [Feature] Save fails",
+    }
+
+
 def test_completed_feedback_moves_exact_task_to_done_and_posts_one_note(monkeypatch):
     item = snapshot(status="completed", projection_version=3, resolution_note="Fixed safely")
     terminal_claim = delivery.TaskDeliveryClaim(
