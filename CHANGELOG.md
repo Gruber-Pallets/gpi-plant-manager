@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Prepare shared schedules to list full-day absences
+
+- **Plant Manager can now gather one clean list of everyone who is off all day.** Printed schedules have not changed yet; the next step will place this list near the top.
+
 ### Plan time off on shared schedules
 
 - **A step-by-step plan is ready to show who is off on printed schedules and schedules sent to Slack.** Full-day names will show near the top, and part-day times will stay beside each person's name. Nothing in the app has changed yet.

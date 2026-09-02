@@ -199,7 +199,7 @@ def build_staffing_bays(
 
     Returns a dict of exactly the bands-A+B context keys the route merges
     into its TemplateResponse: bays, publish_block_reasons, defaults_by_loc,
-    unassigned, reserves, time_off_names, time_off_entries,
+    unassigned, reserves, time_off_names, published_off_names, time_off_entries,
     partial_hours_by_name, partial_range_by_name, partial_clear_by_name,
     people_meta, all_active_people.
     """
@@ -479,6 +479,11 @@ def build_staffing_bays(
         off = []
     reserves = [p.name for p in active_people if p.reserve and p.name not in time_off_set]
 
+    published_off_names = sorted(
+        time_off_set | set(off),
+        key=lambda name: (name.lower(), name),
+    )
+
     return {
         "bays": bays,
         "publish_block_reasons": publish_block_reasons,
@@ -487,6 +492,7 @@ def build_staffing_bays(
         # (with an off-window badge); listing them here would let the
         # left-rail "defensive sweep" pull them back out of Unscheduled.
         "time_off_names": sorted(e["name"] for e in full_day_entries),
+        "published_off_names": published_off_names,
         "time_off_entries": sorted(full_day_entries, key=lambda e: e["name"].lower()),
         "partial_hours_by_name": partial_hours_by_name,
         "partial_range_by_name": partial_range_by_name,

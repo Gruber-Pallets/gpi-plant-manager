@@ -101,6 +101,7 @@ def test_return_keys_are_exactly_the_bands_ab_context_keys(patch_wcs):
         "bays",
         "publish_block_reasons",
         "time_off_names",
+        "published_off_names",
         "time_off_entries",
         "partial_hours_by_name",
         "partial_range_by_name",
@@ -115,6 +116,38 @@ def test_return_keys_are_exactly_the_bands_ab_context_keys(patch_wcs):
         "defaults_by_loc",
         "all_active_people",
     }
+
+
+def test_published_off_names_include_full_days_and_exclude_partials(patch_wcs):
+    patch_wcs([])
+    model = staffing_view.build_staffing_bays(
+        roster=[_person("Zoe"), _person("Ana"), _person("Mia")],
+        sched=_sched(),
+        time_off_entries=[
+            {"name": "Zoe", "hours": None},
+            {"name": "Mia", "hours": 2.0},
+            {"name": "Ana", "hours": None},
+        ],
+        publish_blocked=0,
+    )
+
+    assert model["published_off_names"] == ["Ana", "Zoe"]
+
+
+def test_published_off_names_include_optional_day_off_and_deduplicate_entries(patch_wcs):
+    patch_wcs([])
+    model = staffing_view.build_staffing_bays(
+        roster=[_person("Ana"), _person("Ben")],
+        sched=_sched(),
+        time_off_entries=[
+            {"name": "Ana", "hours": None},
+            {"name": "Ana", "hours": None},
+        ],
+        publish_blocked=0,
+        optional_commitments={},
+    )
+
+    assert model["published_off_names"] == ["Ana", "Ben"]
 
 
 # --------------------------------------------------------------------------
