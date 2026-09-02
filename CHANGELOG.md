@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Keep feedback choices matched with Odoo
+
+- **Plant Manager now understands all four feedback choices used in Odoo.** Bug, New Feature, Floor Issue, and Floor Suggestion keep the same meaning in both places.
+
 ### Plan useful People page status buttons
 
 - **A design is ready to make the People page totals and warnings useful.** Totals will filter the list, and warnings will explain the problem and show the next safe step. Nothing in the app has changed yet.

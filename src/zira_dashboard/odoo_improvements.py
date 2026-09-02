@@ -17,6 +17,8 @@ from datetime import datetime
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from .feedback_types import FEEDBACK_TYPES
+
 
 TARGET_MODEL = "x_2s_improvements"
 SOURCE_VALUE = "GPI Plant Manager"
@@ -86,8 +88,8 @@ _EXPECTED_TYPES = {
     "x_studio_type": "selection",
 }
 _EXPECTED_STATUS_VALUES = frozenset({"Requested", "In-Progress", "Completed", "Declined"})
-_EXPECTED_TYPE_VALUES = frozenset({"Digital", "Digital - New Feature", "Physical"})
-_WRITABLE_TYPE_VALUES = frozenset({"Digital", "Digital - New Feature"})
+_EXPECTED_TYPE_VALUES = frozenset(item.odoo_value for item in FEEDBACK_TYPES)
+_WRITABLE_TYPE_VALUES = _EXPECTED_TYPE_VALUES
 _WRITABLE_STATUS_VALUES = _EXPECTED_STATUS_VALUES
 
 

@@ -101,7 +101,8 @@ def contract_fields(source_selection=None):
             "selection": [
                 ["Digital", "Digital - Bug"],
                 ["Digital - New Feature", "Digital - New Feature"],
-                ["Physical", "Physical"],
+                ["Physical - Issue", "Physical - Issue"],
+                ["Physical - Suggestion", "Physical - Suggestion"],
             ],
         },
     }
@@ -1203,6 +1204,19 @@ def test_contract_normalizes_tuple_and_reordered_selection_shapes(monkeypatch):
     client = client_with(monkeypatch, lambda *args, **kwargs: fields, uid=4)
 
     assert client.read_contract() == ImprovementContract("date", "date")
+
+
+@pytest.mark.parametrize("defect", ["missing", "extra"])
+def test_contract_rejects_missing_or_extra_type_selection_value(monkeypatch, defect):
+    fields = contract_fields()
+    if defect == "missing":
+        fields["x_studio_type"]["selection"].pop()
+    else:
+        fields["x_studio_type"]["selection"].append(["Other", "Other"])
+    client = client_with(monkeypatch, lambda *args, **kwargs: fields, uid=4)
+
+    with pytest.raises(ContractError, match="type selection values"):
+        client.read_contract()
 
 
 @pytest.mark.parametrize("defect", ["missing", "readonly", "wrong_type", "selection", "relation"])

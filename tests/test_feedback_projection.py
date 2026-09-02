@@ -150,6 +150,27 @@ def test_completed_feature_maps_terminal_fields_and_escapes_note():
     )
 
 
+@pytest.mark.parametrize(
+    ("local_value", "odoo_value"),
+    [
+        ("bug", "Digital"),
+        ("feature", "Digital - New Feature"),
+        ("floor_issue", "Physical - Issue"),
+        ("floor_suggestion", "Physical - Suggestion"),
+    ],
+)
+def test_projection_uses_authoritative_odoo_type(local_value, odoo_value):
+    projected = build_projection(
+        feedback(task_type=local_value),
+        images={},
+        employee_lookup=lambda _email: None,
+        start_type="date",
+        stop_type="date",
+    )
+
+    assert projected.fields["x_studio_type"] == odoo_value
+
+
 def test_missing_optional_values_and_remote_sync_tokens_are_never_emitted():
     projection = build_projection(
         feedback(task_type=None),

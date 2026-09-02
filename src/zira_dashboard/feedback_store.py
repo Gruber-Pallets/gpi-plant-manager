@@ -12,6 +12,7 @@ from typing import Mapping
 
 from . import db, feedback_task_delivery
 from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
+from .feedback_types import feedback_type
 
 
 _MAX_SIGNED_64 = 9_223_372_036_854_775_807
@@ -314,8 +315,7 @@ def create_submission(
     before_image: NormalizedImage | None = None,
 ) -> int:
     """Atomically save new feedback, its optional image, and Odoo sync intent."""
-    if task_type not in {"bug", "feature"}:
-        raise ValueError("unsupported feedback type")
+    feedback_type(task_type)
     if status != "requested":
         raise ValueError("new feedback must start requested")
     with db.cursor() as cur:

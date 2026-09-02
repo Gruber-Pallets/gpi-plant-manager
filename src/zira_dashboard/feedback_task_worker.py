@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from . import feedback_task_delivery as task_delivery
 from . import odoo_client
 from .feedback_content import safe_page_url
+from .feedback_types import feedback_type
 from .plant_day import today as _local_today
 
 
@@ -75,7 +76,7 @@ class BatchResult:
 
 
 def task_name(snapshot: task_delivery.FeedbackTaskSnapshot) -> str:
-    label = "Feature" if snapshot.task_type == "feature" else "Bug"
+    label = feedback_type(snapshot.task_type).label
     lines = snapshot.message.strip().splitlines()
     first = lines[0] if lines else "feedback"
     if len(first) > 70:

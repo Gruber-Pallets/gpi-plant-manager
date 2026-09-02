@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from . import feedback_store
 from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
+from .feedback_types import FEEDBACK_TYPES, feedback_type_or_legacy_bug
 from .odoo_improvements import ContractError, ImprovementContract
 
 
@@ -26,7 +27,7 @@ STATUS_VALUES = {
     "completed": "Completed",
     "declined": "Declined",
 }
-TYPE_VALUES = {"bug": "Digital", "feature": "Digital - New Feature", None: "Digital"}
+TYPE_VALUES = {item.value: item.odoo_value for item in FEEDBACK_TYPES}
 
 _BINARY_FIELDS = {
     "before": "x_studio_image",
@@ -402,15 +403,14 @@ def build_projection(
     if status not in STATUS_VALUES or type(status) is not str:
         raise ValueError("unsupported feedback status")
     task_type = feedback.get("task_type")
-    if task_type not in TYPE_VALUES or (task_type is not None and type(task_type) is not str):
-        raise ValueError("unsupported feedback type")
+    canonical_type = feedback_type_or_legacy_bug(task_type)
 
     source_id = source_id_for(feedback_id)
     fields: dict[str, object] = {
         "x_name": message,
         "x_studio_source_id": source_id,
         "x_studio_date_start": _odoo_time(feedback.get("created_at"), start_type),
-        "x_studio_type": TYPE_VALUES[task_type],
+        "x_studio_type": canonical_type.odoo_value,
         "x_studio_status": STATUS_VALUES[status],
         "x_studio_source": "GPI Plant Manager",
     }

@@ -122,13 +122,26 @@ def test_process_claim_creates_feature_task_for_the_same_authenticated_owner(mon
 
     worker.odoo_client.create_feedback_task.assert_called_once_with(
         project_id=3,
-        name="[GPI-PM-FB-42] [Feature] Save fails",
+        name="[GPI-PM-FB-42] [New Feature] Save fails",
         description_html=ANY,
         assignee_uid=9,
         tag_id=4,
         deadline="2026-08-26",
     )
     worker.odoo_client.ensure_feedback_tag.assert_called_once_with("Feature request")
+
+
+@pytest.mark.parametrize(
+    ("task_type", "label"),
+    [
+        ("floor_issue", "Floor Issue"),
+        ("floor_suggestion", "Floor Suggestion"),
+    ],
+)
+def test_task_name_uses_canonical_physical_label(task_type, label):
+    assert worker.task_name(snapshot(task_type=task_type)) == (
+        f"[GPI-PM-FB-42] [{label}] Save fails"
+    )
 
 
 def test_process_claim_adopts_one_matching_task_without_creating(monkeypatch):
@@ -318,7 +331,7 @@ def test_task_content_is_stable_and_html_escaped():
         before_image=None,
     )
 
-    assert worker.task_name(item) == "[GPI-PM-FB-42] [Feature] <b>Unsafe</b>"
+    assert worker.task_name(item) == "[GPI-PM-FB-42] [New Feature] <b>Unsafe</b>"
     assert worker.before_attachment_name(42) == "GPI-PM-FB-42-before.jpg"
     description = worker.task_description(item)
     assert "&lt;b&gt;Unsafe&lt;/b&gt;<br>next &amp; &quot;quoted&quot;" in description

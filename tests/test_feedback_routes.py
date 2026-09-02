@@ -2,6 +2,7 @@
 
 from io import BytesIO
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -76,6 +77,40 @@ def test_post_feedback_still_succeeds_when_odoo_is_unavailable(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "id": 44, "task_delivery": "queued"}
+
+
+@pytest.mark.parametrize("task_type", ["floor_issue", "floor_suggestion"])
+def test_post_feedback_saves_each_physical_type_without_coercion(monkeypatch, task_type):
+    captured = {}
+    monkeypatch.setattr(
+        feedback_store,
+        "create_submission",
+        lambda **values: captured.update(values) or 45,
+        raising=False,
+    )
+
+    response = client.post(
+        "/feedback", data={"type": task_type, "description": "Floor feedback"}
+    )
+
+    assert response.status_code == 200
+    assert captured["task_type"] == task_type
+
+
+def test_post_feedback_rejects_unknown_type_before_opening_storage(monkeypatch):
+    monkeypatch.setattr(
+        feedback_store,
+        "create_submission",
+        lambda **values: (_ for _ in ()).throw(AssertionError(values)),
+        raising=False,
+    )
+
+    response = client.post(
+        "/feedback", data={"type": "other", "description": "Unknown feedback"}
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"ok": False, "error": "Unsupported feedback type."}
 
 
 def test_post_feedback_normalizes_one_optional_image_from_decoded_content(monkeypatch):

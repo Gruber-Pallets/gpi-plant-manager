@@ -11,12 +11,11 @@ from fastapi.responses import JSONResponse
 from .. import feedback_store, odoo_client
 from ..feedback_content import safe_page_url
 from ..feedback_image import ImageRejected, MAX_INPUT_BYTES, normalize_image
+from ..feedback_types import feedback_type, feedback_type_or_legacy_bug
 
 router = APIRouter()
 log = logging.getLogger(__name__)
 
-_TYPE_TAG = {"bug": "Bug", "feature": "Feature request"}
-_TYPE_TITLE = {"bug": "Bug", "feature": "Feature"}
 _TITLE_MAX = 70
 _MAX_FILE_BYTES = 10 * 1024 * 1024
 _ALLOWED_PREFIXES = ("image/",)
@@ -33,7 +32,7 @@ def _title_from(kind: str, description: str) -> str:
     first = description.strip().splitlines()[0] if description.strip() else "feedback"
     if len(first) > _TITLE_MAX:
         first = first[: _TITLE_MAX - 1].rstrip() + "…"
-    return f"[{_TYPE_TITLE.get(kind, 'Bug')}] {first}"
+    return f"[{feedback_type(kind).label}] {first}"
 
 
 def _allowed_upload(upload: UploadFile) -> bool:
@@ -70,7 +69,12 @@ async def submit_feedback(
     page_url: str | None = Form(None),
     screenshot: UploadFile | None = File(default=None),
 ) -> JSONResponse:
-    kind = "feature" if type == "feature" else "bug"
+    try:
+        kind = feedback_type(type).value
+    except ValueError:
+        return JSONResponse(
+            {"ok": False, "error": "Unsupported feedback type."}, status_code=400
+        )
     text = (description or "").strip()
     if not text:
         return JSONResponse({"ok": False, "error": "Description is required."},
@@ -131,7 +135,7 @@ def my_feedback(request: Request) -> JSONResponse:
             )
             status = _LEGACY_STATUS[legacy_bucket]
         items.append({
-            "type": row.get("task_type") or "bug",
+            "type": feedback_type_or_legacy_bug(row.get("task_type")).value,
             "title": title,
             "created_at": str(row.get("created_at") or ""),
             "page_url": row.get("page_url"),

@@ -98,6 +98,22 @@ def test_create_submission_without_image_still_creates_sync_intent(monkeypatch):
     assert all("feedback_images" not in sql for sql, _params in cursor.calls)
 
 
+@pytest.mark.parametrize("task_type", ["floor_issue", "floor_suggestion"])
+def test_create_submission_accepts_each_physical_type(monkeypatch, task_type):
+    cursor, transactions = _record_transaction(monkeypatch)
+
+    feedback_id = feedback_store.create_submission(
+        message="Floor feedback",
+        submitter=None,
+        page_url=None,
+        task_type=task_type,
+    )
+
+    assert feedback_id == 42
+    assert transactions == [cursor]
+    assert cursor.calls[0][1][2] == task_type
+
+
 @pytest.mark.parametrize(
     ("task_type", "status", "message"),
     [
