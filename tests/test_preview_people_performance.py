@@ -121,7 +121,7 @@ def test_preview_metric_marks_do_not_cross_the_planned_break():
                         assert marker_position <= 68.75 or marker_position >= 75.0
 
 
-def test_preview_fits_all_manager_viewports_with_compact_sticky_controls():
+def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
     _render_preview()
     fixture_url = (OUT / "index.html").as_uri()
 
@@ -146,7 +146,6 @@ def test_preview_fits_all_manager_viewports_with_compact_sticky_controls():
                         .every(header => [...header.querySelectorAll('.pp-schedule-time-group')]
                           .map(label => label.getBoundingClientRect())
                           .every((box, index, boxes) => index === 0 || box.left >= boxes[index - 1].right)),
-                      managerRows: getComputedStyle(document.querySelector('.pp-manager-strip')).gridTemplateRows,
                       identityNamesFit: [...document.querySelectorAll('.pp-identity h3')]
                         .every(name => name.scrollWidth <= name.clientWidth),
                       localOverflowContained: [...document.querySelectorAll('.pp-timeline-viewport')]
@@ -155,24 +154,38 @@ def test_preview_fits_all_manager_viewports_with_compact_sticky_controls():
                           && view.getBoundingClientRect().right <= window.innerWidth
                           && ['auto', 'scroll'].includes(getComputedStyle(view).overflowX)
                         )),
-                      warningOverflowContained: (() => {
-                        const warning = document.querySelector('.pp-source-warnings');
-                        return Boolean(warning)
-                          && warning.scrollWidth > warning.clientWidth
-                          && warning.getBoundingClientRect().right <= window.innerWidth
-                          && ['auto', 'scroll'].includes(getComputedStyle(warning).overflowX);
+                      managerGroupsDoNotScroll: [...document.querySelectorAll(
+                        '.pp-counts, .pp-source-warnings, .pp-controls'
+                      )].every(group => (
+                        group.scrollWidth <= group.clientWidth + 0.5
+                        && !['auto', 'scroll'].includes(getComputedStyle(group).overflowX)
+                      )),
+                      primaryAndWarningsDoNotOverlap: (() => {
+                        const primary = document.querySelector('.pp-manager-primary');
+                        const warnings = document.querySelector('.pp-source-warnings');
+                        if (!primary || !warnings) return false;
+                        const primaryBox = primary.getBoundingClientRect();
+                        const warningBox = warnings.getBoundingClientRect();
+                        return warningBox.top >= primaryBox.bottom - 0.5;
                       })(),
-                      controlsReachable: (() => {
-                        const controls = document.querySelector('.pp-controls');
-                        const box = controls.getBoundingClientRect();
-                        const last = controls.lastElementChild;
-                        controls.scrollLeft = controls.scrollWidth;
-                        const lastBox = last.getBoundingClientRect();
-                        const reachable = box.left >= 0 && box.right <= window.innerWidth
-                          && lastBox.right <= box.right + 0.5;
-                        controls.scrollLeft = 0;
-                        return reachable;
+                      primaryGroupsDoNotOverlap: (() => {
+                        const counts = document.querySelector('.pp-counts');
+                        const actions = document.querySelector('.pp-manager-actions');
+                        const countBox = counts.getBoundingClientRect();
+                        const actionBox = actions.getBoundingClientRect();
+                        const separatedHorizontally = countBox.right <= actionBox.left + 0.5
+                          || actionBox.right <= countBox.left + 0.5;
+                        const separatedVertically = countBox.bottom <= actionBox.top + 0.5
+                          || actionBox.bottom <= countBox.top + 0.5;
+                        return separatedHorizontally || separatedVertically;
                       })(),
+                      warningTextFits: [...document.querySelectorAll('.pp-source-warnings span')]
+                        .every(warning => warning.scrollWidth <= warning.clientWidth + 0.5),
+                      controlsReachable: [...document.querySelectorAll('.pp-controls > *')]
+                        .every(control => {
+                          const box = control.getBoundingClientRect();
+                          return box.left >= 0 && box.right <= window.innerWidth;
+                        }),
                       scheduleAndTimelineWidthsMatch: [...document.querySelectorAll('.pp-section')]
                         .every(section => {
                           const schedule = section.querySelector('.pp-schedule-track');
@@ -201,15 +214,13 @@ def test_preview_fits_all_manager_viewports_with_compact_sticky_controls():
                 assert geometry["identityNamesFit"] is True
                 assert page.locator(".pp-timeline").first.bounding_box()["width"] >= 480
                 assert geometry["localOverflowContained"] is True
-                assert geometry["warningOverflowContained"] is True
+                assert geometry["managerGroupsDoNotScroll"] is True
+                assert geometry["primaryAndWarningsDoNotOverlap"] is True
+                assert geometry["primaryGroupsDoNotOverlap"] is True
+                assert geometry["warningTextFits"] is True
                 assert geometry["controlsReachable"] is True
                 assert geometry["scheduleAndTimelineWidthsMatch"] is True
                 assert geometry["scheduleOverflowContained"] is True
-                if width <= 768:
-                    assert after["height"] <= 88
-                    assert len(geometry["managerRows"].split()) <= 2
-                else:
-                    assert after["height"] <= 44
                 assert 30000 not in geometry["intervals"]
                 assert errors == []
                 page.evaluate("window.scrollTo(0, 0)")

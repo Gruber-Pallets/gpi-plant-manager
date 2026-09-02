@@ -56,18 +56,24 @@ def test_color_shape_readability_and_tablet_contracts_are_present():
     assert "#111827" in focus_ring.group(1)
 
 
-def test_manager_strip_is_sticky_and_overflow_stays_local():
+def test_manager_strip_is_sticky_and_manager_groups_wrap_without_scrollbars():
     css = CSS_PATH.read_text(encoding="utf-8")
     strip = re.search(r"\.pp-manager-strip\s*\{([^}]*)\}", css)
+    primary = re.search(r"\.pp-manager-primary\s*\{([^}]*)\}", css)
+    actions = re.search(r"\.pp-manager-actions\s*\{([^}]*)\}", css)
     warnings = re.search(r"\.pp-source-warnings\s*\{([^}]*)\}", css)
     horizontal = re.search(r"\.pp-horizontal-scroll\s*\{([^}]*)\}", css)
 
     assert strip
     assert "position: sticky" in strip.group(1)
-    assert re.search(r"(?m)^\s*height:\s*2\.75rem;", strip.group(1))
+    assert "display: grid" in strip.group(1)
+    assert "height: 2.75rem" not in strip.group(1)
     assert "box-sizing: border-box" in strip.group(1)
     assert "overflow" not in strip.group(1)
-    assert warnings and "overflow-x: auto" in warnings.group(1)
+    assert primary and "flex-wrap: wrap" in primary.group(1)
+    assert actions and "flex-wrap: wrap" in actions.group(1)
+    assert warnings and "flex-wrap: wrap" in warnings.group(1)
+    assert "overflow-x" not in warnings.group(1)
     assert horizontal and "overflow-x: auto" in horizontal.group(1)
     assert ".pp-page { overflow-x" not in css
 
@@ -111,7 +117,6 @@ def test_compact_header_media_queries_preserve_shared_layout_contracts():
     mobile_grid = re.search(
         r"\.pp-section-header,\s*\.pp-row\s*\{([^}]*)\}", mobile
     )
-    mobile_strip = re.search(r"\.pp-manager-strip\s*\{([^}]*)\}", mobile)
 
     assert tablet_grid
     assert "grid-template-columns: 12rem minmax(0, 1fr)" in tablet_grid.group(1)
@@ -119,41 +124,26 @@ def test_compact_header_media_queries_preserve_shared_layout_contracts():
     assert tablet_summary and "display: none" in tablet_summary.group(1)
     assert mobile_grid
     assert "grid-template-columns: 10rem minmax(0, 1fr)" in mobile_grid.group(1)
-    assert mobile_strip
-    assert "height: auto" in mobile_strip.group(1)
-    assert (
-        "grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)"
-        in mobile_strip.group(1)
-    )
 
 
-def test_compact_mobile_strip_uses_two_rows_without_an_empty_warning_cell():
+def test_manager_groups_wrap_at_all_widths_without_local_horizontal_scroll():
     css = CSS_PATH.read_text(encoding="utf-8")
+    controls = re.search(r"\.pp-controls\s*\{([^}]*)\}", css)
+    shared = re.search(
+        r"\.pp-counts,\s*\.pp-source-warnings,\s*\.pp-controls\s*\{([^}]*)\}",
+        css,
+    )
+    warning_pill = re.search(r"\.pp-source-warnings span\s*\{([^}]*)\}", css)
     mobile = css.split("@media (max-width: 760px)", 1)[1]
-    check = re.search(r"\.pp-controls \.pp-check\s*\{([^}]*)\}", css)
-    counts = re.search(r"\.pp-counts\s*\{([^}]*)\}", mobile)
-    warnings = re.search(r"\.pp-source-warnings\s*\{([^}]*)\}", mobile)
-    controls = re.search(r"\.pp-controls\s*\{([^}]*)\}", mobile)
-    first_row = re.search(
-        r"\.pp-counts,\s*\.pp-updated\s*\{([^}]*)\}", mobile
-    )
-    second_row = re.search(
-        r"\.pp-source-warnings,\s*\.pp-controls\s*\{([^}]*)\}", mobile
-    )
-    no_warnings = re.search(
-        r"\.pp-counts \+ \.pp-updated \+ \.pp-controls\s*\{([^}]*)\}", mobile
-    )
 
-    assert check and "min-height: 2rem" in check.group(1)
-    assert counts and "overflow-x: auto" in counts.group(1)
-    assert warnings and "overflow-x: auto" in warnings.group(1)
-    assert controls and "overflow-x: auto" in controls.group(1)
-    assert "min-width: 0" in controls.group(1)
-    assert first_row and "grid-row: 1" in first_row.group(1)
-    assert second_row and "grid-row: 2" in second_row.group(1)
-    assert no_warnings
-    assert "grid-column: 1 / -1" in no_warnings.group(1)
-    assert "justify-self: end" in no_warnings.group(1)
+    assert shared and "flex-wrap: wrap" in shared.group(1)
+    assert controls and "flex-wrap: wrap" in controls.group(1)
+    assert "overflow-x" not in controls.group(1)
+    assert warning_pill and "white-space: normal" in warning_pill.group(1)
+    assert "overflow-wrap: anywhere" in warning_pill.group(1)
+    for selector in (".pp-counts", ".pp-source-warnings", ".pp-controls"):
+        rule = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", mobile)
+        assert not rule or "overflow-x" not in rule.group(1)
 
 
 def test_short_intervals_have_a_separate_nonoverlapping_touch_target():

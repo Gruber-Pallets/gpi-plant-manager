@@ -12,11 +12,9 @@
   position: sticky;
   top: 0;
   z-index: 30;
-  display: flex;
+  display: grid;
   box-sizing: border-box;
-  height: 2.75rem;
-  align-items: center;
-  gap: .45rem;
+  gap: .35rem;
   padding: .3rem .5rem;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -24,9 +22,28 @@
   backdrop-filter: blur(8px);
 }
 
+.pp-manager-primary,
+.pp-manager-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .4rem;
+}
+
+.pp-manager-primary {
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.pp-manager-actions {
+  flex: 1 1 22rem;
+  justify-content: flex-end;
+}
+
 .pp-updated {
   flex: 0 0 auto;
-  margin: 0 0 0 auto;
+  margin: 0;
   color: var(--muted);
   font-size: .8rem;
   white-space: nowrap;
@@ -38,12 +55,17 @@
   display: flex;
   min-width: 0;
   align-items: center;
+  flex-wrap: wrap;
   gap: .4rem;
   margin: 0;
 }
 
+.pp-counts {
+  flex: 0 1 auto;
+}
+
 .pp-controls {
-  flex: 0 0 auto;
+  justify-content: flex-end;
 }
 
 .pp-controls label {
@@ -101,11 +123,8 @@
 }
 
 .pp-source-warnings {
-  height: 2rem;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
+  width: 100%;
+  flex-wrap: wrap;
 }
 
 .pp-source-warnings span,
@@ -118,9 +137,12 @@
 }
 
 .pp-source-warnings span {
+  max-width: 100%;
   background: #ffedd5;
   color: #7c2d12;
   font-size: .78rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .pp-section-header,
@@ -551,62 +573,6 @@
 @media (max-width: 760px) {
   main {
     padding: .7rem;
-  }
-
-  .pp-manager-strip {
-    display: grid;
-    height: auto;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .pp-counts {
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: thin;
-  }
-
-  .pp-source-warnings {
-    width: 100%;
-    max-width: 100%;
-    overflow-x: auto;
-  }
-
-  .pp-controls {
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: thin;
-  }
-
-  .pp-controls > * {
-    flex: 0 0 auto;
-  }
-
-  .pp-counts,
-  .pp-source-warnings {
-    grid-column: 1;
-  }
-
-  .pp-updated,
-  .pp-controls {
-    grid-column: 2;
-  }
-
-  .pp-counts,
-  .pp-updated {
-    grid-row: 1;
-  }
-
-  .pp-source-warnings,
-  .pp-controls {
-    grid-row: 2;
-  }
-
-  .pp-counts + .pp-updated + .pp-controls {
-    grid-column: 1 / -1;
-    justify-self: end;
   }
 
   .pp-section-header,
