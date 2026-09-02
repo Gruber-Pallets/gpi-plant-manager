@@ -11,7 +11,7 @@ from playwright.sync_api import Page, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "scripts/_preview_out/people_performance"
-VIEWPORTS = ((1440, 900), (1024, 768), (768, 1024), (390, 844))
+VIEWPORTS = ((1440, 900), (1195, 768), (1024, 768), (768, 1024), (390, 844))
 
 
 def _render_preview() -> subprocess.CompletedProcess[str]:
@@ -64,7 +64,9 @@ def test_preview_contains_busy_people_fixture():
     assert "6:00 AM" in html
     assert "11:30" in html
     assert "2:00 PM" in html
-    assert "Attendance updates may be delayed while the time clock reconnects" in html
+    assert "Production metric unavailable: Trim Saw 1" in html
+    assert "Production metric unavailable: Hand Build #1" in html
+    assert "Unmatched forklift calls: 107" in html
     assert html.count('class="pp-source-warnings"') == 1
     assert ">Production<" in html
     assert ">126/168<" in html
@@ -133,8 +135,6 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                 errors = _install_console_capture(page)
                 page.goto(fixture_url, wait_until="load")
                 before = page.locator(".pp-manager-strip").bounding_box()
-                page.evaluate("window.scrollTo(0, 900)")
-                after = page.locator(".pp-manager-strip").bounding_box()
                 geometry = page.evaluate(
                     """
                     () => ({
@@ -179,6 +179,28 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                           || actionBox.bottom <= countBox.top + 0.5;
                         return separatedHorizontally || separatedVertically;
                       })(),
+                      managerDescendantsContained: (() => {
+                        const strip = document.querySelector('.pp-manager-strip');
+                        const stripBox = strip.getBoundingClientRect();
+                        return [...strip.querySelectorAll('*:not(.sr-only)')]
+                          .filter(node => {
+                            const box = node.getBoundingClientRect();
+                            return box.width > 0 && box.height > 0;
+                          })
+                          .every(node => {
+                            const box = node.getBoundingClientRect();
+                            return box.left >= stripBox.left - 0.5
+                              && box.right <= stripBox.right + 0.5
+                              && box.top >= stripBox.top - 0.5
+                              && box.bottom <= stripBox.bottom + 0.5;
+                          });
+                      })(),
+                      managerClearsFirstSection: (() => {
+                        const strip = document.querySelector('.pp-manager-strip');
+                        const section = document.querySelector('.pp-section');
+                        return section.getBoundingClientRect().top
+                          >= strip.getBoundingClientRect().bottom - 0.5;
+                      })(),
                       warningTextFits: [...document.querySelectorAll('.pp-source-warnings span')]
                         .every(warning => warning.scrollWidth <= warning.clientWidth + 0.5),
                       controlsReachable: [...document.querySelectorAll('.pp-controls > *')]
@@ -203,6 +225,8 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                     })
                     """
                 )
+                page.evaluate("window.scrollTo(0, 900)")
+                after = page.locator(".pp-manager-strip").bounding_box()
                 assert before and after
                 assert 0 <= after["y"] < height
                 assert after["x"] >= 0
@@ -217,6 +241,8 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                 assert geometry["managerGroupsDoNotScroll"] is True
                 assert geometry["primaryAndWarningsDoNotOverlap"] is True
                 assert geometry["primaryGroupsDoNotOverlap"] is True
+                assert geometry["managerDescendantsContained"] is True
+                assert geometry["managerClearsFirstSection"] is True
                 assert geometry["warningTextFits"] is True
                 assert geometry["controlsReachable"] is True
                 assert geometry["scheduleAndTimelineWidthsMatch"] is True

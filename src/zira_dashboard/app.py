@@ -663,9 +663,9 @@ async def _security_and_cache_headers(request, call_next):
     signal (Google obeys the most restrictive directive across header +
     meta tag) and applies to every response, including non-HTML.
 
-    Also sets far-future cache headers on /static/ responses. The
-    mtime-versioned URL (?v=<mtime>) makes browsers re-fetch when the
-    file changes, so it's safe to cache aggressively when it doesn't.
+    Also requires /static/ responses to revalidate. Starlette's ETag and
+    Last-Modified handling makes unchanged responses inexpensive while
+    ensuring rolling deploys do not leave browsers stuck on stale assets.
     (Single middleware for all response headers — each BaseHTTPMiddleware
     layer adds per-request overhead.)
     """
@@ -683,7 +683,7 @@ async def _security_and_cache_headers(request, call_next):
     if request.url.path.startswith("/static/"):
         response.headers.setdefault(
             "Cache-Control",
-            "public, max-age=31536000, immutable",
+            "public, no-cache",
         )
     # Page-usage tracking rides this same middleware (no extra layer, per the
     # note above). Cost is a dict increment; it never raises into the response.

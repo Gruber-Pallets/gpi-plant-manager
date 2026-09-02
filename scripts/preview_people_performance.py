@@ -527,9 +527,9 @@ def _context() -> dict:
         "schedule_time_groups": schedule_time_groups,
         "schedule_track_width_rem": _schedule_track_width_rem(schedule_time_groups),
         "source_warnings": (
-            "Attendance updates may be delayed while the time clock reconnects at the north entrance.",
-            "Forklift call details are still loading from the tablet service for several busy work areas.",
-            "Production totals may be incomplete while the repair center sends its latest counts.",
+            "Production metric unavailable: Trim Saw 1",
+            "Production metric unavailable: Hand Build #1",
+            "Unmatched forklift calls: 107",
         ),
         "working_now": 8,
         "worked_earlier": 2,

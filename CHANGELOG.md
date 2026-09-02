@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Keep the People page bar in neat rows
+
+- **The People page now checks for fresh styles after Plant Manager is updated.** This keeps totals, controls, and warnings in their own rows instead of letting an old saved style mix them together.
+
 ### Finish the People page bar repair plan
 
 - **The step-by-step repair plan for the mixed-up People page bar is ready.** It covers fresh saved styles and checks that every row stays apart. Nothing in the app has changed yet.

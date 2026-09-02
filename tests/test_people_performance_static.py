@@ -67,6 +67,8 @@ def test_manager_strip_is_sticky_and_manager_groups_wrap_without_scrollbars():
     assert strip
     assert "position: sticky" in strip.group(1)
     assert "display: grid" in strip.group(1)
+    assert "grid-template-columns: minmax(0, 1fr)" in strip.group(1)
+    assert not re.search(r"(?m)^\s*(?:min-)?height:", strip.group(1))
     assert "height: 2.75rem" not in strip.group(1)
     assert "box-sizing: border-box" in strip.group(1)
     assert "overflow" not in strip.group(1)
