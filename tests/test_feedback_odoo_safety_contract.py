@@ -351,6 +351,7 @@ def test_rollout_cli_has_exact_commands_and_no_alias_or_config_overrides():
         "canary-report",
         "quarantine-list",
         "quarantine-disposition",
+        "quarantine-release-pre-attempt",
     }
     assert all(
         selected_parser.allow_abbrev is False for selected_parser in (parser, *command_parsers)
@@ -368,4 +369,5 @@ def test_rollout_cli_has_exact_commands_and_no_alias_or_config_overrides():
         "--disposition",
         "--reviewer",
         "--confirm-human-review",
+        "--confirm-local-release",
     }

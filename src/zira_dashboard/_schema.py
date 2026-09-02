@@ -1888,6 +1888,19 @@ CREATE TABLE IF NOT EXISTS feedback_odoo_sync (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS feedback_odoo_pre_attempt_releases (
+  id BIGSERIAL PRIMARY KEY,
+  feedback_id BIGINT NOT NULL REFERENCES feedback(id),
+  projection_version BIGINT NOT NULL CHECK (projection_version > 0),
+  quarantine_reason TEXT NOT NULL CHECK (
+    quarantine_reason = 'target_identity_or_contract_mismatch'
+  ),
+  quarantined_at TIMESTAMPTZ NOT NULL,
+  reviewer TEXT NOT NULL CHECK (btrim(reviewer) <> ''),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (feedback_id, projection_version, quarantined_at)
+);
+
 CREATE TABLE IF NOT EXISTS feedback_task_delivery (
   feedback_id BIGINT PRIMARY KEY REFERENCES feedback(id),
   state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'in_flight', 'attention', 'delivered', 'blocked')),

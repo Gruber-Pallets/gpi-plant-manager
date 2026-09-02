@@ -2054,6 +2054,7 @@ def test_rollout_cli_exposes_only_the_exact_planned_subcommands():
         "canary-report",
         "quarantine-list",
         "quarantine-disposition",
+        "quarantine-release-pre-attempt",
     }
 
     help_text = parser.format_help().casefold()
@@ -2092,6 +2093,22 @@ def test_rollout_cli_exposes_only_the_exact_planned_subcommands():
         ],
         ["enqueue-history", "--batch-size", "10"],
         ["canary-report", "--feedback-id", "17"],
+        [
+            "quarantine-release-pre-attempt",
+            "--feedback-id",
+            "17",
+            "--reviewer",
+            "Dale Gruber",
+            "--confirm-local-release",
+        ],
+        [
+            "quarantine-release-pre-attempt",
+            "--feedback-id",
+            "17",
+            "--reviewer",
+            "Dale Gruber",
+            "--confirm-read-only",
+        ],
     ],
 )
 def test_cli_acknowledgements_fail_before_time_client_database_or_helper(monkeypatch, argv):
@@ -2103,6 +2120,7 @@ def test_cli_acknowledgements_fail_before_time_client_database_or_helper(monkeyp
     monkeypatch.setattr(cli.rollout, "migrate_legacy_batch", bomb)
     monkeypatch.setattr(cli.rollout, "enqueue_history_batch", bomb)
     monkeypatch.setattr(cli.rollout, "canary_report", bomb)
+    monkeypatch.setattr(cli.sync_store, "release_pre_attempt_quarantine", bomb)
 
     with pytest.raises(SystemExit):
         cli.main(argv)
@@ -2209,6 +2227,7 @@ def _install_cli_fakes(monkeypatch):
     monkeypatch.setattr(cli.rollout, "canary_report", MagicMock())
     monkeypatch.setattr(cli.sync_store, "list_quarantined", MagicMock())
     monkeypatch.setattr(cli.sync_store, "apply_quarantine_disposition", MagicMock())
+    monkeypatch.setattr(cli.sync_store, "release_pre_attempt_quarantine", MagicMock())
     return client
 
 
@@ -2279,6 +2298,13 @@ def test_cli_dispatches_all_bounded_commands_through_fakes_and_emits_safe_json(m
             warning=None,
         )
     )
+    cli.sync_store.release_pre_attempt_quarantine.return_value = (
+        sync_store.PreAttemptReleaseResult(
+            feedback_id=17,
+            desired_version=3,
+            state="idle",
+        )
+    )
 
     commands = (
         ["preflight", "--confirm-read-only"],
@@ -2305,6 +2331,15 @@ def test_cli_dispatches_all_bounded_commands_through_fakes_and_emits_safe_json(m
             "--reviewer",
             "  Human Operator  ",
         ],
+        [
+            "quarantine-release-pre-attempt",
+            "--feedback-id",
+            "17",
+            "--reviewer",
+            "  Dale Gruber  ",
+            "--confirm-read-only",
+            "--confirm-local-release",
+        ],
     )
     payloads = []
     for argv in commands:
@@ -2324,9 +2359,15 @@ def test_cli_dispatches_all_bounded_commands_through_fakes_and_emits_safe_json(m
         human_review_confirmed=False,
         now=aware_now(),
     )
+    cli.sync_store.release_pre_attempt_quarantine.assert_called_once_with(
+        feedback_id=17,
+        reviewer="  Dale Gruber  ",
+        now=aware_now(),
+    )
     serialized = "\n".join(json.dumps(payload, sort_keys=True) for payload in payloads)
     for forbidden in (
         "Human Operator",
+        "Dale Gruber",
         "private feedback",
         "https://",
         "api_key",
@@ -2334,6 +2375,134 @@ def test_cli_dispatches_all_bounded_commands_through_fakes_and_emits_safe_json(m
         "manifest",
     ):
         assert forbidden not in serialized
+
+
+def test_pre_attempt_release_parser_requires_exact_bounded_payload():
+    args = cli.build_parser().parse_args(
+        [
+            "quarantine-release-pre-attempt",
+            "--feedback-id",
+            "44",
+            "--reviewer",
+            "Dale Gruber",
+            "--confirm-read-only",
+            "--confirm-local-release",
+        ]
+    )
+
+    assert vars(args) == {
+        "command": "quarantine-release-pre-attempt",
+        "feedback_id": 44,
+        "reviewer": "Dale Gruber",
+        "confirm_read_only": True,
+        "confirm_local_release": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        PreflightReport(False, True, True, (), (), (), True),
+        PreflightReport(True, False, True, (), (), (), True),
+        PreflightReport(True, True, False, ("x_studio_type",), (), (), True),
+        PreflightReport(True, True, False, (), (), (), False),
+    ],
+)
+def test_pre_attempt_release_requires_fully_green_fresh_preflight(
+    monkeypatch, report
+):
+    client = _install_cli_fakes(monkeypatch)
+    cli.rollout.preflight.return_value = report
+
+    with pytest.raises(SystemExit, match="feedback rollout command failed safely"):
+        cli.main(
+            [
+                "quarantine-release-pre-attempt",
+                "--feedback-id",
+                "44",
+                "--reviewer",
+                "Dale Gruber",
+                "--confirm-read-only",
+                "--confirm-local-release",
+            ]
+        )
+
+    cli.rollout.preflight.assert_called_once_with(client)
+    cli.sync_store.release_pre_attempt_quarantine.assert_not_called()
+
+
+def test_pre_attempt_release_calls_store_once_only_after_fresh_green_preflight(monkeypatch):
+    client = _install_cli_fakes(monkeypatch)
+    events = []
+    green = PreflightReport(True, True, True, (), (), (), True)
+    cli.rollout.preflight.side_effect = lambda supplied: events.append(
+        ("preflight", supplied)
+    ) or green
+    result = sync_store.PreAttemptReleaseResult(44, 3, "idle")
+    cli.sync_store.release_pre_attempt_quarantine.side_effect = lambda **values: events.append(
+        ("release", values)
+    ) or result
+
+    payload = cli._command_payload(
+        cli.build_parser().parse_args(
+            [
+                "quarantine-release-pre-attempt",
+                "--feedback-id",
+                "44",
+                "--reviewer",
+                "Dale Gruber",
+                "--confirm-read-only",
+                "--confirm-local-release",
+            ]
+        )
+    )
+
+    assert events == [
+        ("preflight", client),
+        (
+            "release",
+            {
+                "feedback_id": 44,
+                "reviewer": "Dale Gruber",
+                "now": aware_now(),
+            },
+        ),
+    ]
+    assert payload == {
+        "command": "quarantine-release-pre-attempt",
+        "report": {"feedback_id": 44, "desired_version": 3, "state": "idle"},
+    }
+
+
+def test_pre_attempt_release_failure_hides_reviewer_metadata_and_credentials(
+    monkeypatch, capsys
+):
+    _install_cli_fakes(monkeypatch)
+    cli.rollout.preflight.return_value = PreflightReport(
+        True, True, True, (), (), (), True
+    )
+    cli.sync_store.release_pre_attempt_quarantine.side_effect = RuntimeError(
+        "Dale Gruber metadata https://secret.invalid api-key-value"
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        cli.main(
+            [
+                "quarantine-release-pre-attempt",
+                "--feedback-id",
+                "44",
+                "--reviewer",
+                "Dale Gruber",
+                "--confirm-read-only",
+                "--confirm-local-release",
+            ]
+        )
+
+    assert str(caught.value) == "feedback rollout command failed safely"
+    captured = capsys.readouterr()
+    exposed = captured.out + captured.err + repr(caught.value)
+    for forbidden in ("Dale Gruber", "metadata", "secret.invalid", "api-key-value"):
+        assert forbidden not in exposed
 
 
 def test_canary_cli_rejects_absent_malformed_or_mismatched_fence_before_reads(monkeypatch):
@@ -2417,6 +2586,12 @@ def test_cli_serializer_rejects_unapproved_dataclasses_and_mapping_keys():
     for unsafe in (attempt, evidence, {"private_key": "private feedback"}):
         with pytest.raises(ValueError, match="unsafe"):
             cli._json_value(unsafe)
+
+    assert cli._json_value(sync_store.PreAttemptReleaseResult(17, 3, "idle")) == {
+        "feedback_id": 17,
+        "desired_version": 3,
+        "state": "idle",
+    }
 
 
 def test_canary_report_uses_only_exact_verified_saved_projection_evidence(monkeypatch):

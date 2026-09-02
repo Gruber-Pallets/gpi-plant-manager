@@ -499,6 +499,21 @@ class QuarantineDispositionResult:
             raise ValueError("quarantine disposition warning is malformed")
 
 
+@dataclass(frozen=True)
+class PreAttemptReleaseResult:
+    """Sanitized result of one audited pre-attempt quarantine release."""
+
+    feedback_id: int
+    desired_version: int
+    state: str
+
+    def __post_init__(self) -> None:
+        _positive_signed_64(self.feedback_id, "feedback id")
+        _positive_signed_64(self.desired_version, "desired version")
+        if self.state != "idle":
+            raise ValueError("pre-attempt release state is malformed")
+
+
 @dataclass(frozen=True, repr=False)
 class VerifiedCanaryEvidence:
     """Exact local synchronized authority and its immutable verified attempt."""
@@ -1997,6 +2012,227 @@ def _reviewer(value: object) -> str:
     ):
         raise ValueError("reviewer is malformed")
     return cleaned
+
+
+def _validate_pre_attempt_quarantine(row: Mapping[str, object]) -> dict[str, object]:
+    try:
+        feedback_id = _positive_signed_64(row.get("feedback_id"), "feedback id")
+        desired = _positive_signed_64(row.get("desired_version"), "desired version")
+        last_synced = _nonnegative_signed_64(
+            row.get("last_synced_version"),
+            "last synchronized version",
+        )
+        _aware_datetime(row.get("due_at"), "due time")
+        count = _attempt_count(row.get("attempt_count"))
+        quarantined_at = _aware_datetime(row.get("quarantined_at"), "quarantine time")
+        feedback_version = _positive_signed_64(
+            row.get("feedback_projection_version"),
+            "feedback projection version",
+        )
+        reason = row.get("quarantine_reason")
+        if (
+            last_synced >= desired
+            or row.get("odoo_improvement_id") is not None
+            or count != 0
+            or row.get("sync_state") != "quarantined"
+            or any(
+                row.get(name) is not None
+                for name in (
+                    "claim_owner",
+                    "claim_token",
+                    "claim_expires_at",
+                    "active_attempt_id",
+                )
+            )
+            or reason != "target_identity_or_contract_mismatch"
+            or row.get("last_error_class") != reason
+            or row.get("last_error_summary") != _QUARANTINE_SUMMARIES[reason]
+            or feedback_version != desired
+            or row.get("feedback_status")
+            not in {"requested", "in_progress", "completed", "declined"}
+            or row.get("feedback_lifecycle_origin")
+            not in {"local", "legacy_project_task"}
+        ):
+            raise ValueError("pre-attempt quarantine authority is not releasable")
+    except (KeyError, TypeError, ValueError):
+        raise StateTransitionError(
+            "database returned malformed pre-attempt quarantine authority"
+        ) from None
+    return {
+        "feedback_id": feedback_id,
+        "desired_version": desired,
+        "last_synced_version": last_synced,
+        "odoo_improvement_id": None,
+        "due_at": row["due_at"],
+        "attempt_count": count,
+        "quarantine_reason": reason,
+        "quarantined_at": quarantined_at,
+        "last_error_class": row["last_error_class"],
+        "last_error_summary": row["last_error_summary"],
+    }
+
+
+def _validate_pre_attempt_audit(
+    row: Mapping[str, object],
+    *,
+    locked: Mapping[str, object],
+) -> None:
+    try:
+        _positive_signed_64(row.get("id"), "pre-attempt release audit id")
+        feedback_id = _positive_signed_64(row.get("feedback_id"), "feedback id")
+        version = _positive_signed_64(row.get("projection_version"), "projection version")
+        quarantined_at = _aware_datetime(row.get("quarantined_at"), "quarantine time")
+    except (TypeError, ValueError):
+        raise StateTransitionError("pre-attempt release audit returned malformed state") from None
+    if (
+        feedback_id != locked["feedback_id"]
+        or version != locked["desired_version"]
+        or row.get("quarantine_reason") != locked["quarantine_reason"]
+        or quarantined_at != locked["quarantined_at"]
+    ):
+        raise StateTransitionError("pre-attempt release audit returned different authority")
+
+
+def _validate_pre_attempt_release(
+    row: Mapping[str, object],
+    *,
+    locked: Mapping[str, object],
+    now: datetime,
+) -> None:
+    try:
+        feedback_id = _positive_signed_64(row.get("feedback_id"), "feedback id")
+        desired = _positive_signed_64(row.get("desired_version"), "desired version")
+        last_synced = _nonnegative_signed_64(
+            row.get("last_synced_version"),
+            "last synchronized version",
+        )
+        count = _attempt_count(row.get("attempt_count"))
+        due_at = _aware_datetime(row.get("due_at"), "due time")
+    except (TypeError, ValueError):
+        raise StateTransitionError("pre-attempt release returned malformed state") from None
+    if (
+        feedback_id != locked["feedback_id"]
+        or desired != locked["desired_version"]
+        or last_synced != locked["last_synced_version"]
+        or row.get("odoo_improvement_id") is not None
+        or count != locked["attempt_count"]
+        or row.get("state") != "idle"
+        or due_at != now
+        or any(
+            row.get(name) is not None
+            for name in (
+                "claim_owner",
+                "claim_token",
+                "claim_expires_at",
+                "active_attempt_id",
+                "last_error_class",
+                "last_error_summary",
+                "quarantine_reason",
+                "quarantined_at",
+            )
+        )
+    ):
+        raise StateTransitionError("pre-attempt release returned different state")
+
+
+def release_pre_attempt_quarantine(
+    feedback_id: int,
+    reviewer: str,
+    now: datetime,
+) -> PreAttemptReleaseResult:
+    """Audit and locally release one exact quarantine that preceded any attempt."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    clean_reviewer = _reviewer(reviewer)
+    current = _aware_datetime(now, "pre-attempt release time")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT s.feedback_id, s.desired_version, s.last_synced_version,
+                   s.odoo_improvement_id, s.due_at, s.attempt_count,
+                   s.state AS sync_state, s.claim_owner, s.claim_token,
+                   s.claim_expires_at, s.active_attempt_id,
+                   s.last_error_class, s.last_error_summary,
+                   s.quarantine_reason, s.quarantined_at,
+                   f.projection_version AS feedback_projection_version,
+                   f.status AS feedback_status,
+                   f.lifecycle_origin AS feedback_lifecycle_origin
+            FROM feedback_odoo_sync s
+            JOIN feedback f ON f.id = s.feedback_id
+            WHERE s.feedback_id = %s
+            FOR UPDATE OF f, s
+            """,
+            (safe_feedback_id,),
+        )
+        locked = _validate_pre_attempt_quarantine(
+            _one_row(cursor, "pre-attempt quarantine lock")
+        )
+        cursor.execute(
+            """
+            INSERT INTO feedback_odoo_pre_attempt_releases
+                (feedback_id, projection_version, quarantine_reason,
+                 quarantined_at, reviewer)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, feedback_id, projection_version,
+                      quarantine_reason, quarantined_at
+            """,
+            (
+                locked["feedback_id"],
+                locked["desired_version"],
+                locked["quarantine_reason"],
+                locked["quarantined_at"],
+                clean_reviewer,
+            ),
+        )
+        _validate_pre_attempt_audit(
+            _one_row(cursor, "pre-attempt release audit insert"),
+            locked=locked,
+        )
+        cursor.execute(
+            """
+            UPDATE feedback_odoo_sync
+            SET state = 'idle', claim_owner = NULL, claim_token = NULL,
+                claim_expires_at = NULL,
+                last_error_class = NULL, last_error_summary = NULL,
+                quarantine_reason = NULL, quarantined_at = NULL,
+                due_at = %s, updated_at = %s
+            WHERE feedback_id = %s AND state = 'quarantined'
+              AND desired_version = %s AND last_synced_version = %s
+              AND odoo_improvement_id IS NOT DISTINCT FROM %s
+              AND due_at = %s AND attempt_count = %s
+              AND claim_owner IS NULL AND claim_token IS NULL
+              AND claim_expires_at IS NULL
+              AND active_attempt_id IS NOT DISTINCT FROM %s
+              AND last_error_class = %s AND last_error_summary = %s
+              AND quarantine_reason = %s AND quarantined_at = %s
+            RETURNING feedback_id, desired_version, last_synced_version,
+                      odoo_improvement_id, due_at, attempt_count, state,
+                      claim_owner, claim_token, claim_expires_at,
+                      active_attempt_id, last_error_class, last_error_summary,
+                      quarantine_reason, quarantined_at
+            """,
+            (
+                current,
+                current,
+                locked["feedback_id"],
+                locked["desired_version"],
+                locked["last_synced_version"],
+                locked["odoo_improvement_id"],
+                locked["due_at"],
+                locked["attempt_count"],
+                None,
+                locked["last_error_class"],
+                locked["last_error_summary"],
+                locked["quarantine_reason"],
+                locked["quarantined_at"],
+            ),
+        )
+        updated = _one_row(cursor, "pre-attempt quarantine release")
+        _validate_pre_attempt_release(updated, locked=locked, now=current)
+    return PreAttemptReleaseResult(
+        feedback_id=locked["feedback_id"],
+        desired_version=locked["desired_version"],
+        state="idle",
+    )
 
 
 def _lock_quarantined_operator_attempt(cursor, attempt_id: UUID) -> dict[str, object]:

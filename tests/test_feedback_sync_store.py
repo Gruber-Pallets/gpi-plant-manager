@@ -1409,6 +1409,200 @@ def quarantined_operator_row(**changes) -> dict[str, object]:
     return row
 
 
+def pre_attempt_quarantine_row(**changes) -> dict[str, object]:
+    row = {
+        "feedback_id": 17,
+        "desired_version": 3,
+        "last_synced_version": 0,
+        "odoo_improvement_id": None,
+        "due_at": aware_now() + timedelta(minutes=10),
+        "attempt_count": 0,
+        "sync_state": "quarantined",
+        "claim_owner": None,
+        "claim_token": None,
+        "claim_expires_at": None,
+        "active_attempt_id": None,
+        "last_error_class": "target_identity_or_contract_mismatch",
+        "last_error_summary": "The Odoo target or fields changed.",
+        "quarantine_reason": "target_identity_or_contract_mismatch",
+        "quarantined_at": aware_now(),
+        "feedback_projection_version": 3,
+        "feedback_status": "requested",
+        "feedback_lifecycle_origin": "local",
+    }
+    row.update(changes)
+    return row
+
+
+def test_pre_attempt_release_appends_audit_then_releases_only_exact_locked_authority(
+    monkeypatch,
+):
+    locked = pre_attempt_quarantine_row()
+    cursor = use_cursor(
+        monkeypatch,
+        [locked],
+        [
+            {
+                "id": 1,
+                "feedback_id": 17,
+                "projection_version": 3,
+                "quarantine_reason": "target_identity_or_contract_mismatch",
+                "quarantined_at": aware_now(),
+            }
+        ],
+        [
+            {
+                "feedback_id": 17,
+                "desired_version": 3,
+                "last_synced_version": 0,
+                "odoo_improvement_id": None,
+                "due_at": aware_now(),
+                "attempt_count": 0,
+                "state": "idle",
+                "claim_owner": None,
+                "claim_token": None,
+                "claim_expires_at": None,
+                "active_attempt_id": None,
+                "last_error_class": None,
+                "last_error_summary": None,
+                "quarantine_reason": None,
+                "quarantined_at": None,
+            }
+        ],
+    )
+
+    result = store.release_pre_attempt_quarantine(
+        feedback_id=17,
+        reviewer="  Dale Gruber  ",
+        now=aware_now(),
+    )
+
+    assert result == store.PreAttemptReleaseResult(
+        feedback_id=17,
+        desired_version=3,
+        state="idle",
+    )
+    with pytest.raises(FrozenInstanceError):
+        result.state = "quarantined"
+    assert len(cursor.executions) == 3
+    lock_sql = normalized_sql(cursor, 0)
+    assert "JOIN feedback f ON f.id = s.feedback_id" in lock_sql
+    assert "FOR UPDATE OF f, s" in lock_sql
+    audit_sql = normalized_sql(cursor, 1)
+    update_sql = normalized_sql(cursor, 2)
+    assert "INSERT INTO feedback_odoo_pre_attempt_releases" in audit_sql
+    assert cursor.executions[1][1] == (
+        17,
+        3,
+        "target_identity_or_contract_mismatch",
+        aware_now(),
+        "Dale Gruber",
+    )
+    set_clause = update_sql.split("SET", 1)[1].split("WHERE", 1)[0]
+    assert "state = 'idle'" in set_clause
+    assert "due_at = %s" in set_clause
+    for cleared in (
+        "claim_owner = NULL",
+        "claim_token = NULL",
+        "claim_expires_at = NULL",
+        "last_error_class = NULL",
+        "last_error_summary = NULL",
+        "quarantine_reason = NULL",
+        "quarantined_at = NULL",
+    ):
+        assert cleared in set_clause
+    for preserved in (
+        "desired_version",
+        "last_synced_version",
+        "odoo_improvement_id",
+        "active_attempt_id",
+        "attempt_count",
+    ):
+        assert preserved not in set_clause
+    update_fence = update_sql.split("WHERE", 1)[1].split("RETURNING", 1)[0]
+    for authority in (
+        "desired_version",
+        "last_synced_version",
+        "odoo_improvement_id",
+        "attempt_count",
+        "active_attempt_id",
+        "quarantine_reason",
+        "quarantined_at",
+    ):
+        assert authority in update_fence
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"quarantine_reason": "retry_exhausted"},
+        {"active_attempt_id": ATTEMPT_ID},
+        {"odoo_improvement_id": 77},
+        {"attempt_count": 1},
+        {"last_synced_version": 3},
+        {"feedback_projection_version": 4},
+        {"feedback_status": None},
+        {"sync_state": "idle"},
+    ],
+)
+def test_pre_attempt_release_refuses_nonexact_locked_authority(monkeypatch, changes):
+    cursor = use_cursor(monkeypatch, [pre_attempt_quarantine_row(**changes)])
+
+    with pytest.raises(store.StateTransitionError):
+        store.release_pre_attempt_quarantine(
+            feedback_id=17,
+            reviewer="Dale Gruber",
+            now=aware_now(),
+        )
+
+    assert len(cursor.executions) == 1
+    assert_rollback(cursor)
+
+
+@pytest.mark.parametrize("reviewer", ["", "   ", "Dale\nsecret", None])
+def test_pre_attempt_release_rejects_blank_or_malformed_reviewer_before_database(
+    monkeypatch, reviewer
+):
+    database = MagicMock(side_effect=AssertionError("database opened"))
+    monkeypatch.setattr(store.db, "cursor", database)
+
+    with pytest.raises(ValueError, match="reviewer"):
+        store.release_pre_attempt_quarantine(
+            feedback_id=17,
+            reviewer=reviewer,
+            now=aware_now(),
+        )
+
+    database.assert_not_called()
+
+
+def test_repeated_pre_attempt_release_fails_safely_without_more_audit(monkeypatch):
+    cursor = use_cursor(monkeypatch, [])
+
+    with pytest.raises(store.StateTransitionError):
+        store.release_pre_attempt_quarantine(
+            feedback_id=17,
+            reviewer="Dale Gruber",
+            now=aware_now(),
+        )
+
+    assert len(cursor.executions) == 1
+    assert_rollback(cursor)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"feedback_id": 0, "desired_version": 3, "state": "idle"},
+        {"feedback_id": 17, "desired_version": 0, "state": "idle"},
+        {"feedback_id": 17, "desired_version": 3, "state": "quarantined"},
+    ],
+)
+def test_pre_attempt_release_result_rejects_malformed_authority(values):
+    with pytest.raises(ValueError):
+        store.PreAttemptReleaseResult(**values)
+
+
 def test_quarantine_listing_is_frozen_bounded_ordered_and_privacy_safe(monkeypatch):
     rows = [
         {

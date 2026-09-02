@@ -135,6 +135,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     disposition.add_argument("--reviewer", required=True)
     disposition.add_argument("--confirm-human-review", action="store_true")
+
+    pre_attempt_release = commands.add_parser(
+        "quarantine-release-pre-attempt",
+        allow_abbrev=False,
+    )
+    pre_attempt_release.add_argument("--feedback-id", required=True, type=_positive_id)
+    pre_attempt_release.add_argument("--reviewer", required=True)
+    pre_attempt_release.add_argument("--confirm-read-only", action="store_true")
+    pre_attempt_release.add_argument("--confirm-local-release", action="store_true")
     return parser
 
 
@@ -147,6 +156,7 @@ def _approved_report_types() -> tuple[type, ...]:
         rollout.CanaryReport,
         sync_store.QuarantineItem,
         sync_store.QuarantineDispositionResult,
+        sync_store.PreAttemptReleaseResult,
     )
 
 
@@ -249,6 +259,30 @@ def _command_payload(args: argparse.Namespace) -> dict[str, object]:
             disposition=args.disposition,
             reviewer=args.reviewer,
             human_review_confirmed=args.confirm_human_review,
+            now=utc_now(),
+        )
+    elif command == "quarantine-release-pre-attempt":
+        require_flag(
+            args.confirm_read_only,
+            "quarantine-release-pre-attempt requires --confirm-read-only",
+        )
+        require_flag(
+            args.confirm_local_release,
+            "quarantine-release-pre-attempt requires --confirm-local-release",
+        )
+        client = ImprovementsClient.from_env()
+        preflight_report = rollout.preflight(client)
+        if not (
+            type(preflight_report) is rollout.PreflightReport
+            and preflight_report.database_uuid_matches is True
+            and preflight_report.company_matches is True
+            and preflight_report.fields_ok is True
+            and preflight_report.source_value_present is True
+        ):
+            raise ValueError("preflight did not approve pre-attempt release")
+        report = sync_store.release_pre_attempt_quarantine(
+            feedback_id=args.feedback_id,
+            reviewer=args.reviewer,
             now=utc_now(),
         )
     else:

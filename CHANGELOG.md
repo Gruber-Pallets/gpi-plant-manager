@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Safely retry feedback that stopped early
+
+- **Plant Manager can now safely retry feedback that stopped before it reached Odoo.** It checks the shared list first and keeps a note of who approved the retry.
+
 ### Finish the People status button plan
 
 - **The step-by-step plan for useful People page buttons is ready.** It covers list filters, clear warning details, safe checks, and recorded forklift matches. Nothing in the app has changed yet.
