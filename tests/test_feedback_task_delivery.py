@@ -383,3 +383,21 @@ def test_admin_status_for_reads_only_the_state_from_an_admin_row():
         "Needs attention",
         "Odoo task delivery needs attention and will retry.",
     )
+
+
+def test_admin_status_requires_current_verified_contract_for_synced_label():
+    stale = {
+        "task_delivery_state": "delivered",
+        "task_delivery_task_id": 3656,
+        "task_delivery_desired_version": 3,
+        "task_delivery_last_synced_version": 3,
+        "task_delivery_desired_contract_version": 2,
+        "task_delivery_last_synced_contract_version": 1,
+    }
+    current = {
+        **stale,
+        "task_delivery_last_synced_contract_version": 2,
+    }
+
+    assert delivery.admin_status_for(stale) == ("Task update pending", None)
+    assert delivery.admin_status_for(current) == ("Owner task synced", None)

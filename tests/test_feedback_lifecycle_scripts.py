@@ -29,6 +29,8 @@ def _install_runtime(monkeypatch, status: str = "requested"):
             "task_sync_state": "delivered",
             "task_desired_version": 3,
             "task_last_synced_version": 3,
+            "task_desired_contract_version": 2,
+            "task_last_synced_contract_version": 2,
         }
     )
     transition = MagicMock(return_value=4)
@@ -186,6 +188,16 @@ def test_start_preview_is_read_only_and_reports_only_safe_fields(monkeypatch, ca
     transition.assert_not_called()
     init_pool.assert_called_once_with()
     shutdown_pool.assert_called_once_with()
+
+
+def test_delivered_task_with_stale_contract_reports_pending(monkeypatch, capsys):
+    read, transition, _init_pool, _shutdown_pool = _install_runtime(monkeypatch)
+    read.return_value["task_last_synced_contract_version"] = 1
+
+    assert process_feedback.main(["--source-id", "GPI-PM-FB-17"]) == 0
+
+    assert json.loads(capsys.readouterr().out)["task_sync_state"] == "pending"
+    transition.assert_not_called()
 
 
 def test_start_yes_uses_the_authoritative_local_transition(monkeypatch, capsys):

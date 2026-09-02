@@ -773,15 +773,28 @@ def admin_status_for(row: object) -> tuple[str, str | None]:
     if isinstance(row, Mapping):
         desired = row.get("task_delivery_desired_version")
         synced = row.get("task_delivery_last_synced_version")
+        desired_contract = row.get("task_delivery_desired_contract_version")
+        synced_contract = row.get("task_delivery_last_synced_contract_version")
         task_id = row.get("task_delivery_task_id")
         if (
-            type(desired) is int
-            and type(synced) is int
-            and desired > synced
-            and type(task_id) is int
+            type(task_id) is int
+            and (
+                type(desired) is not int
+                or type(synced) is not int
+                or desired > synced
+                or desired_contract != TASK_SYNC_CONTRACT_VERSION
+                or synced_contract != desired_contract
+            )
         ):
             return "Task update pending", None
-        if state == "delivered" and type(desired) is int and desired == synced:
+        if (
+            state == "delivered"
+            and type(task_id) is int
+            and type(desired) is int
+            and desired == synced
+            and desired_contract == TASK_SYNC_CONTRACT_VERSION
+            and synced_contract == desired_contract
+        ):
             return "Owner task synced", None
     if state in {"pending", "in_flight"}:
         return "Queued for app owner", None

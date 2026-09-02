@@ -200,7 +200,9 @@ def lifecycle_state(feedback_id: int) -> Mapping[str, object]:
         cur.execute(
             "SELECT f.id, f.status, f.lifecycle_origin, f.projection_version, "
             "td.state AS task_sync_state, td.desired_version AS task_desired_version, "
-            "td.last_synced_version AS task_last_synced_version "
+            "td.last_synced_version AS task_last_synced_version, "
+            "td.desired_contract_version AS task_desired_contract_version, "
+            "td.last_synced_contract_version AS task_last_synced_contract_version "
             "FROM feedback f LEFT JOIN feedback_task_delivery td ON td.feedback_id = f.id "
             "WHERE f.id = %s",
             (safe_feedback_id,),
@@ -220,6 +222,8 @@ def lifecycle_state(feedback_id: int) -> Mapping[str, object]:
             "task_sync_state",
             "task_desired_version",
             "task_last_synced_version",
+            "task_desired_contract_version",
+            "task_last_synced_contract_version",
         }
         or type(state.get("id")) is not int
         or state.get("id") != safe_feedback_id
@@ -233,6 +237,14 @@ def lifecycle_state(feedback_id: int) -> Mapping[str, object]:
         or not 0 < state["task_desired_version"] <= _MAX_SIGNED_64
         or type(state.get("task_last_synced_version")) is not int
         or not 0 <= state["task_last_synced_version"] <= state["task_desired_version"]
+        or type(state.get("task_desired_contract_version")) is not int
+        or not 0
+        < state["task_desired_contract_version"]
+        <= _MAX_SIGNED_64
+        or type(state.get("task_last_synced_contract_version")) is not int
+        or not 0
+        <= state["task_last_synced_contract_version"]
+        <= state["task_desired_contract_version"]
     ):
         raise InvalidTransition("feedback lifecycle state is unavailable")
     return MappingProxyType(state)
@@ -419,6 +431,8 @@ def for_admin(limit: int = 200) -> list[dict]:
         "s.last_synced_version, td.state AS task_delivery_state, "
         "td.desired_version AS task_delivery_desired_version, "
         "td.last_synced_version AS task_delivery_last_synced_version, "
+        "td.desired_contract_version AS task_delivery_desired_contract_version, "
+        "td.last_synced_contract_version AS task_delivery_last_synced_contract_version, "
         "td.odoo_task_id AS task_delivery_task_id, "
         "td.before_attachment_id AS task_delivery_attachment_id, "
         "td.last_error_summary AS task_delivery_error, "
@@ -440,6 +454,8 @@ def for_admin(limit: int = 200) -> list[dict]:
         row.pop("task_delivery_state", None)
         row.pop("task_delivery_desired_version", None)
         row.pop("task_delivery_last_synced_version", None)
+        row.pop("task_delivery_desired_contract_version", None)
+        row.pop("task_delivery_last_synced_contract_version", None)
         row.pop("task_delivery_task_id", None)
         row.pop("task_delivery_attachment_id", None)
         row.pop("task_delivery_error", None)

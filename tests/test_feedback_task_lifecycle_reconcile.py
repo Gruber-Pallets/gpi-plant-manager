@@ -35,6 +35,9 @@ def test_preview_is_read_only_and_reports_safe_bounded_count(monkeypatch):
 
     assert len(cursor.calls) == 1
     assert "LIMIT 100" in cursor.calls[0][0]
+    assert "td.desired_contract_version < %s" in cursor.calls[0][0]
+    assert "td.last_synced_contract_version < %s" in cursor.calls[0][0]
+    assert cursor.calls[0][1] == (2, 2)
     assert not cursor.calls[0][0].startswith("UPDATE")
 
 
@@ -52,4 +55,8 @@ def test_apply_queues_existing_exact_task_relationships(monkeypatch):
     assert "td.state <> 'blocked'" in update
     assert "desired_version = candidates.projection_version" in update
     assert "desired_status = candidates.status" in update
+    assert "td.desired_contract_version < %s" in update
+    assert "td.last_synced_contract_version < %s" in update
+    assert "desired_contract_version = %s" in update
+    assert cursor.calls[1][1] == (2, 2, 2)
     assert "odoo_task_id" not in update.split(" SET ", 1)[1].split(" FROM ", 1)[0]

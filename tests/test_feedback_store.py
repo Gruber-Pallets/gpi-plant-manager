@@ -78,7 +78,7 @@ def test_create_submission_inserts_feedback_image_and_sync_intent_atomically(mon
     assert "VALUES (%s, 1, 0, now(), 'idle')" in sync_sql
     assert sync_params == (42,)
     assert "INSERT INTO feedback_task_delivery" in delivery_sql
-    assert delivery_params == (42, 1, "requested")
+    assert delivery_params == (42, 1, "requested", 2)
 
 
 def test_create_submission_without_image_still_creates_sync_intent(monkeypatch):
@@ -97,7 +97,7 @@ def test_create_submission_without_image_still_creates_sync_intent(monkeypatch):
     assert "INSERT INTO feedback" in cursor.calls[0][0]
     assert "INSERT INTO feedback_odoo_sync" in cursor.calls[1][0]
     assert "INSERT INTO feedback_task_delivery" in cursor.calls[2][0]
-    assert cursor.calls[2][1] == (42, 1, "requested")
+    assert cursor.calls[2][1] == (42, 1, "requested", 2)
     assert all("feedback_images" not in sql for sql, _params in cursor.calls)
 
 
@@ -190,6 +190,8 @@ def test_lifecycle_state_reads_one_exact_local_row_with_task_sync_state(monkeypa
         "task_sync_state": "delivered",
         "task_desired_version": 3,
         "task_last_synced_version": 3,
+        "task_desired_contract_version": 2,
+        "task_last_synced_contract_version": 2,
     }
     cursor = _lifecycle_cursor(monkeypatch, row)
 

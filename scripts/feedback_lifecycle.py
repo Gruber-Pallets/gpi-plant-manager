@@ -9,7 +9,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Literal
 
-from zira_dashboard import db, feedback_store
+from zira_dashboard import db, feedback_store, feedback_task_delivery
 
 
 MAX_SIGNED_64 = 9_223_372_036_854_775_807
@@ -135,6 +135,10 @@ def _run_command(args: argparse.Namespace, command: _LifecycleCommand) -> tuple[
         else "synced"
         if raw_task_state == "delivered"
         and state.get("task_last_synced_version") == state.get("task_desired_version")
+        and state.get("task_desired_contract_version")
+        == feedback_task_delivery.TASK_SYNC_CONTRACT_VERSION
+        and state.get("task_last_synced_contract_version")
+        == state.get("task_desired_contract_version")
         else "pending"
     )
 

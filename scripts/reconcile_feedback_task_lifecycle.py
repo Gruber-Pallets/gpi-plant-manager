@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 
-from zira_dashboard import db
+from zira_dashboard import db, feedback_task_delivery
 
 
 SAFE_FAILURE = "feedback task lifecycle reconciliation failed safely"
@@ -24,6 +24,8 @@ SELECT COUNT(*) AS eligible FROM (
       td.desired_version <> f.projection_version
       OR td.desired_status <> f.status
       OR td.last_synced_version < f.projection_version
+      OR td.desired_contract_version < %s
+      OR td.last_synced_contract_version < %s
     )
   ORDER BY f.id
   LIMIT 100
@@ -43,6 +45,8 @@ WITH candidates AS (
       td.desired_version <> f.projection_version
       OR td.desired_status <> f.status
       OR td.last_synced_version < f.projection_version
+      OR td.desired_contract_version < %s
+      OR td.last_synced_contract_version < %s
     )
   ORDER BY f.id
   FOR UPDATE OF td SKIP LOCKED
@@ -51,6 +55,7 @@ WITH candidates AS (
   UPDATE feedback_task_delivery td
   SET desired_version = candidates.projection_version,
       desired_status = candidates.status,
+      desired_contract_version = %s,
       state = 'pending', due_at = now(), attempt_count = 0,
       claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL,
       last_error_summary = NULL, blocked_reason = NULL, updated_at = now()
@@ -70,11 +75,12 @@ def _count(row: object, key: str) -> int:
 
 def run(*, apply: bool) -> dict[str, object]:
     with db.cursor() as cursor:
-        cursor.execute(_ELIGIBLE)
+        contract = feedback_task_delivery.TASK_SYNC_CONTRACT_VERSION
+        cursor.execute(_ELIGIBLE, (contract, contract))
         eligible = _count(cursor.fetchone(), "eligible")
         queued = 0
         if apply:
-            cursor.execute(_APPLY)
+            cursor.execute(_APPLY, (contract, contract, contract))
             queued = _count(cursor.fetchone(), "queued")
     return {"eligible": eligible, "queued": queued, "applied": apply}
 

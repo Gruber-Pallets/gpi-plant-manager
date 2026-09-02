@@ -222,6 +222,11 @@ def test_admin_list_queries_local_and_sync_state(monkeypatch):
     assert "td.state AS task_delivery_state" in captured["sql"]
     assert "td.desired_version AS task_delivery_desired_version" in captured["sql"]
     assert "td.last_synced_version AS task_delivery_last_synced_version" in captured["sql"]
+    assert "td.desired_contract_version AS task_delivery_desired_contract_version" in captured["sql"]
+    assert (
+        "td.last_synced_contract_version AS task_delivery_last_synced_contract_version"
+        in captured["sql"]
+    )
     assert "td.odoo_task_id AS task_delivery_task_id" in captured["sql"]
     assert "td.before_attachment_id AS task_delivery_attachment_id" in captured["sql"]
     assert "td.last_error_summary AS task_delivery_error" in captured["sql"]
@@ -239,8 +244,11 @@ def test_admin_list_maps_task_delivery_to_fixed_safe_template_fields(monkeypatch
         },
         {
             "task_delivery_state": "delivered",
+            "task_delivery_task_id": 3656,
             "task_delivery_desired_version": 3,
             "task_delivery_last_synced_version": 3,
+            "task_delivery_desired_contract_version": 2,
+            "task_delivery_last_synced_contract_version": 2,
             "task_delivery_error": None,
             "task_delivery_block_reason": None,
         },
@@ -282,6 +290,24 @@ def test_admin_list_calls_out_a_delivered_task_with_a_pending_stage_update(monke
             "task_delivery_task_id": 3755,
             "task_delivery_desired_version": 3,
             "task_delivery_last_synced_version": 1,
+            "task_delivery_error": None,
+            "task_delivery_block_reason": None,
+        }
+    ]
+    monkeypatch.setattr(feedback_store.db, "query", lambda _sql, _params: rows)
+
+    assert feedback_store.for_admin()[0]["task_delivery_label"] == "Task update pending"
+
+
+def test_admin_list_calls_out_a_delivered_task_with_a_stale_contract(monkeypatch):
+    rows = [
+        {
+            "task_delivery_state": "delivered",
+            "task_delivery_task_id": 3656,
+            "task_delivery_desired_version": 3,
+            "task_delivery_last_synced_version": 3,
+            "task_delivery_desired_contract_version": 2,
+            "task_delivery_last_synced_contract_version": 1,
             "task_delivery_error": None,
             "task_delivery_block_reason": None,
         }
@@ -648,7 +674,7 @@ def test_transition_marks_in_progress_and_new_projection_due_atomically(monkeypa
     assert "active_attempt" not in sync_sql
     assert sync_params == (5, now, now, 7)
     assert "UPDATE feedback_task_delivery" in task_sql
-    assert task_params == (5, "in_progress", now, now, 7, 5)
+    assert task_params == (5, "in_progress", 2, now, now, 7, 5, 2)
     assert all("feedback_images" not in sql for sql, _ in cursor.executions)
 
 
@@ -715,7 +741,7 @@ def test_terminal_transition_saves_authoritative_finish_image_and_due_version(
     assert "active_attempt" not in sync_sql
     assert sync_params == (3, now, now, 7)
     assert "UPDATE feedback_task_delivery" in task_sql
-    assert task_params == (3, target, now, now, 7, 3)
+    assert task_params == (3, target, 2, now, now, 7, 3, 2)
 
 
 def test_transition_missing_sync_state_raises_after_returning_check(monkeypatch):
