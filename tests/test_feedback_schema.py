@@ -75,6 +75,12 @@ def test_schema_has_owner_task_delivery_outbox():
     assert "claim_token UUID" in ddl
     assert "odoo_task_id BIGINT" in ddl
     assert "before_attachment_id BIGINT" in ddl
+    assert "desired_version BIGINT NOT NULL DEFAULT 1" in ddl
+    assert "last_synced_version BIGINT NOT NULL DEFAULT 0" in ddl
+    assert "desired_status TEXT NOT NULL DEFAULT 'requested'" in ddl
+    assert "last_synced_version <= desired_version" in ddl
+    assert "ADD COLUMN IF NOT EXISTS desired_version BIGINT NOT NULL DEFAULT 1" in ddl
+
 
 
 def test_feedback_remote_ids_use_signed_64_bit_columns_and_idempotent_migration():

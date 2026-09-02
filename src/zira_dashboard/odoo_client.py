@@ -169,6 +169,7 @@ FEEDBACK_PROJECT_NAME = _odoo_feedback.FEEDBACK_PROJECT_NAME
 FEEDBACK_STAGES = _odoo_feedback.FEEDBACK_STAGES
 FEEDBACK_DONE_STAGE = _odoo_feedback.FEEDBACK_DONE_STAGE
 FEEDBACK_REJECTED_STAGE = _odoo_feedback.FEEDBACK_REJECTED_STAGE
+OdooTaskPayloadError = _odoo_feedback.OdooTaskPayloadError
 
 _feedback_project_id: int | None = None
 
@@ -1416,6 +1417,14 @@ def find_active_feedback_task_ids(project_id: int, name: str) -> list[int]:
 
 def fetch_feedback_task_identity(task_id: int) -> dict[str, Any] | None:
     return _odoo_feedback.fetch_feedback_task_identity(execute, task_id)
+
+
+def find_feedback_stage_ids(project_id: int, name: str) -> list[int]:
+    return _odoo_feedback.find_feedback_stage_ids(execute, project_id, name)
+
+
+def read_feedback_task(task_id: int) -> dict[str, Any] | None:
+    return _odoo_feedback.read_feedback_task(execute, task_id)
 
 
 def find_feedback_attachment_ids(task_id: int, name: str) -> list[int]:

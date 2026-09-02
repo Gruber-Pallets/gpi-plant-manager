@@ -220,6 +220,8 @@ def test_admin_list_queries_local_and_sync_state(monkeypatch):
     assert "s.desired_version" in captured["sql"]
     assert "s.last_synced_version" in captured["sql"]
     assert "td.state AS task_delivery_state" in captured["sql"]
+    assert "td.desired_version AS task_delivery_desired_version" in captured["sql"]
+    assert "td.last_synced_version AS task_delivery_last_synced_version" in captured["sql"]
     assert "td.odoo_task_id AS task_delivery_task_id" in captured["sql"]
     assert "td.before_attachment_id AS task_delivery_attachment_id" in captured["sql"]
     assert "td.last_error_summary AS task_delivery_error" in captured["sql"]
@@ -237,6 +239,8 @@ def test_admin_list_maps_task_delivery_to_fixed_safe_template_fields(monkeypatch
         },
         {
             "task_delivery_state": "delivered",
+            "task_delivery_desired_version": 3,
+            "task_delivery_last_synced_version": 3,
             "task_delivery_error": None,
             "task_delivery_block_reason": None,
         },
@@ -257,7 +261,7 @@ def test_admin_list_maps_task_delivery_to_fixed_safe_template_fields(monkeypatch
 
     assert [item["task_delivery_label"] for item in items] == [
         "Queued for app owner",
-        "Assigned to app owner",
+        "Owner task synced",
         "Needs attention",
         "Needs attention",
     ]
@@ -269,6 +273,22 @@ def test_admin_list_maps_task_delivery_to_fixed_safe_template_fields(monkeypatch
     ]
     assert all("untrusted database error" not in str(item) for item in items)
     assert all("untrusted database reason" not in str(item) for item in items)
+
+
+def test_admin_list_calls_out_a_delivered_task_with_a_pending_stage_update(monkeypatch):
+    rows = [
+        {
+            "task_delivery_state": "pending",
+            "task_delivery_task_id": 3755,
+            "task_delivery_desired_version": 3,
+            "task_delivery_last_synced_version": 1,
+            "task_delivery_error": None,
+            "task_delivery_block_reason": None,
+        }
+    ]
+    monkeypatch.setattr(feedback_store.db, "query", lambda _sql, _params: rows)
+
+    assert feedback_store.for_admin()[0]["task_delivery_label"] == "Task update pending"
 
 
 def test_admin_list_adds_canonical_type_labels_including_legacy_bug(monkeypatch):
@@ -589,6 +609,7 @@ def test_transition_marks_in_progress_and_new_projection_due_atomically(monkeypa
     cursor = ReturningCursor(
         feedback_row("requested", projection_version=4),
         {"feedback_id": 7},
+        {"feedback_id": 7},
     )
     transactions = []
 
@@ -611,9 +632,10 @@ def test_transition_marks_in_progress_and_new_projection_due_atomically(monkeypa
 
     assert version == 5
     assert transactions == [cursor]
-    assert len(cursor.executions) == 3
+    assert len(cursor.executions) == 4
     update_sql, update_params = cursor.executions[1]
     sync_sql, sync_params = cursor.executions[2]
+    task_sql, task_params = cursor.executions[3]
     assert update_sql.startswith("UPDATE feedback SET")
     assert update_params == ("in_progress", None, None, None, 5, now, 7)
     assert "UPDATE feedback_odoo_sync" in sync_sql
@@ -625,6 +647,8 @@ def test_transition_marks_in_progress_and_new_projection_due_atomically(monkeypa
     assert "claim_" not in sync_sql
     assert "active_attempt" not in sync_sql
     assert sync_params == (5, now, now, 7)
+    assert "UPDATE feedback_task_delivery" in task_sql
+    assert task_params == (5, "in_progress", now, now, 7, 5)
     assert all("feedback_images" not in sql for sql, _ in cursor.executions)
 
 
@@ -640,7 +664,9 @@ def test_transition_marks_in_progress_and_new_projection_due_atomically(monkeypa
 def test_terminal_transition_saves_authoritative_finish_image_and_due_version(
     monkeypatch, current, target
 ):
-    cursor = ReturningCursor(feedback_row(current), {"feedback_id": 7})
+    cursor = ReturningCursor(
+        feedback_row(current), {"feedback_id": 7}, {"feedback_id": 7}
+    )
 
     @contextmanager
     def fake_cursor():
@@ -660,10 +686,11 @@ def test_terminal_transition_saves_authoritative_finish_image_and_due_version(
     )
 
     assert version == 3
-    assert len(cursor.executions) == 4
+    assert len(cursor.executions) == 5
     update_sql, update_params = cursor.executions[1]
     image_sql, image_params = cursor.executions[2]
     sync_sql, sync_params = cursor.executions[3]
+    task_sql, task_params = cursor.executions[4]
     assert "lifecycle_origin = 'local'" in update_sql
     assert update_params == (
         target,
@@ -687,6 +714,8 @@ def test_terminal_transition_saves_authoritative_finish_image_and_due_version(
     assert "claim_" not in sync_sql
     assert "active_attempt" not in sync_sql
     assert sync_params == (3, now, now, 7)
+    assert "UPDATE feedback_task_delivery" in task_sql
+    assert task_params == (3, target, now, now, 7, 3)
 
 
 def test_transition_missing_sync_state_raises_after_returning_check(monkeypatch):

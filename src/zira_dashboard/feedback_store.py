@@ -198,8 +198,11 @@ def lifecycle_state(feedback_id: int) -> Mapping[str, object]:
     safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
     with db.cursor() as cur:
         cur.execute(
-            "SELECT id, status, lifecycle_origin, projection_version FROM feedback "
-            "WHERE id = %s",
+            "SELECT f.id, f.status, f.lifecycle_origin, f.projection_version, "
+            "td.state AS task_sync_state, td.desired_version AS task_desired_version, "
+            "td.last_synced_version AS task_last_synced_version "
+            "FROM feedback f LEFT JOIN feedback_task_delivery td ON td.feedback_id = f.id "
+            "WHERE f.id = %s",
             (safe_feedback_id,),
         )
         row = cur.fetchone()
@@ -208,13 +211,28 @@ def lifecycle_state(feedback_id: int) -> Mapping[str, object]:
         raise InvalidTransition("feedback lifecycle state is unavailable")
     state = dict(row)
     if (
-        set(state) != {"id", "status", "lifecycle_origin", "projection_version"}
+        set(state)
+        != {
+            "id",
+            "status",
+            "lifecycle_origin",
+            "projection_version",
+            "task_sync_state",
+            "task_desired_version",
+            "task_last_synced_version",
+        }
         or type(state.get("id")) is not int
         or state.get("id") != safe_feedback_id
         or state.get("status") not in _TRANSITIONS
         or state.get("lifecycle_origin") != "local"
         or type(state.get("projection_version")) is not int
         or not 0 < state["projection_version"] <= _MAX_SIGNED_64
+        or state.get("task_sync_state")
+        not in {"pending", "in_flight", "attention", "delivered", "blocked"}
+        or type(state.get("task_desired_version")) is not int
+        or not 0 < state["task_desired_version"] <= _MAX_SIGNED_64
+        or type(state.get("task_last_synced_version")) is not int
+        or not 0 <= state["task_last_synced_version"] <= state["task_desired_version"]
     ):
         raise InvalidTransition("feedback lifecycle state is unavailable")
     return MappingProxyType(state)
@@ -374,7 +392,12 @@ def create_submission(
             "VALUES (%s, 1, 0, now(), 'idle')",
             (feedback_id,),
         )
-        feedback_task_delivery.enqueue_submission(cur, feedback_id)
+        feedback_task_delivery.enqueue_submission(
+            cur,
+            feedback_id,
+            desired_version=1,
+            desired_status="requested",
+        )
         return feedback_id
 
 
@@ -394,6 +417,8 @@ def for_admin(limit: int = 200) -> list[dict]:
         "f.message, f.status, f.finished_at, f.finished_by, f.resolution_note, "
         "f.projection_version, s.state AS sync_state, s.desired_version, "
         "s.last_synced_version, td.state AS task_delivery_state, "
+        "td.desired_version AS task_delivery_desired_version, "
+        "td.last_synced_version AS task_delivery_last_synced_version, "
         "td.odoo_task_id AS task_delivery_task_id, "
         "td.before_attachment_id AS task_delivery_attachment_id, "
         "td.last_error_summary AS task_delivery_error, "
@@ -413,6 +438,8 @@ def for_admin(limit: int = 200) -> list[dict]:
             feedback_task_delivery.admin_status_for(row)
         )
         row.pop("task_delivery_state", None)
+        row.pop("task_delivery_desired_version", None)
+        row.pop("task_delivery_last_synced_version", None)
         row.pop("task_delivery_task_id", None)
         row.pop("task_delivery_attachment_id", None)
         row.pop("task_delivery_error", None)
@@ -979,4 +1006,14 @@ def transition(
         )
         if cur.fetchone() is None:
             raise InvalidTransition("feedback sync state is missing")
+        try:
+            feedback_task_delivery.enqueue_lifecycle(
+                cur,
+                feedback_id,
+                desired_version=version,
+                desired_status=status,
+                now=now,
+            )
+        except feedback_task_delivery.StateTransitionError as exc:
+            raise InvalidTransition("feedback task sync state is missing") from exc
         return version

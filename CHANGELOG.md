@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Keep feedback cards and owner tasks together
+
+- **Starting feedback work now moves its owner task to In Progress too.** Finishing or declining feedback closes the same task with a clear note, so both lists stay in step.
+
 ### Finish the feedback task sync plan
 
 - **The step-by-step plan for keeping feedback cards and owner tasks together is ready.** It covers starting, finishing, safe retries, and clear notes. Nothing in the app has changed yet.

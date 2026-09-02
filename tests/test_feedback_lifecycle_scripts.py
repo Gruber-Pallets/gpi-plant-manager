@@ -26,6 +26,9 @@ def _install_runtime(monkeypatch, status: str = "requested"):
             "status": status,
             "lifecycle_origin": "local",
             "projection_version": 3,
+            "task_sync_state": "delivered",
+            "task_desired_version": 3,
+            "task_last_synced_version": 3,
         }
     )
     transition = MagicMock(return_value=4)
@@ -139,6 +142,9 @@ def test_commands_accept_the_largest_canonical_identifier(monkeypatch, capsys, a
         "current_status": "requested",
         "feedback_id": MAX_SIGNED_64,
         "proposed_status": "in_progress",
+        "proposed_task_stage": "In Progress",
+        "task_queued": False,
+        "task_sync_state": "pending",
     }
     read.assert_called_once_with(MAX_SIGNED_64)
     transition.assert_not_called()
@@ -172,6 +178,9 @@ def test_start_preview_is_read_only_and_reports_only_safe_fields(monkeypatch, ca
         "current_status": "requested",
         "feedback_id": 17,
         "proposed_status": "in_progress",
+        "proposed_task_stage": "In Progress",
+        "task_queued": False,
+        "task_sync_state": "synced",
     }
     read.assert_called_once_with(17)
     transition.assert_not_called()
@@ -184,7 +193,10 @@ def test_start_yes_uses_the_authoritative_local_transition(monkeypatch, capsys):
 
     assert process_feedback.main(["--feedback-id", "17", "--yes"]) == 0
 
-    assert json.loads(capsys.readouterr().out)["applied"] is True
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["applied"] is True
+    assert payload["task_queued"] is True
+    assert payload["proposed_task_stage"] == "In Progress"
     transition.assert_called_once_with(
         feedback_id=17,
         status="in_progress",
@@ -211,6 +223,9 @@ def test_start_is_a_successful_noop_when_already_in_progress(
         "current_status": "in_progress",
         "feedback_id": 17,
         "proposed_status": "in_progress",
+        "proposed_task_stage": "In Progress",
+        "task_queued": False,
+        "task_sync_state": "synced",
     }
     transition.assert_not_called()
 
@@ -228,6 +243,9 @@ def test_start_does_not_reopen_terminal_feedback(monkeypatch, capsys, status):
         "current_status": status,
         "feedback_id": 17,
         "proposed_status": status,
+        "proposed_task_stage": "Done",
+        "task_queued": False,
+        "task_sync_state": "synced",
     }
     transition.assert_not_called()
 
@@ -257,6 +275,9 @@ def test_finish_preview_is_read_only_and_defaults_the_closer(monkeypatch, capsys
         "current_status": "in_progress",
         "feedback_id": 17,
         "proposed_status": "completed",
+        "proposed_task_stage": "Done",
+        "task_queued": False,
+        "task_sync_state": "synced",
     }
     transition.assert_not_called()
 
@@ -278,7 +299,10 @@ def test_finish_yes_passes_the_real_closer_and_required_note(monkeypatch, capsys
         ]
     ) == 0
 
-    assert json.loads(capsys.readouterr().out)["applied"] is True
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["applied"] is True
+    assert payload["task_queued"] is True
+    assert payload["proposed_task_stage"] == "Done"
     transition.assert_called_once_with(
         feedback_id=17,
         status="completed",
@@ -318,6 +342,13 @@ def test_finish_cannot_skip_start_or_change_terminal_feedback(
         "current_status": status,
         "feedback_id": 17,
         "proposed_status": status,
+        "proposed_task_stage": {
+            "requested": "New",
+            "completed": "Done",
+            "declined": "Done",
+        }[status],
+        "task_queued": False,
+        "task_sync_state": "synced",
     }
     transition.assert_not_called()
 

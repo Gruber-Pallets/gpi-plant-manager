@@ -1904,6 +1904,9 @@ CREATE TABLE IF NOT EXISTS feedback_odoo_pre_attempt_releases (
 CREATE TABLE IF NOT EXISTS feedback_task_delivery (
   feedback_id BIGINT PRIMARY KEY REFERENCES feedback(id),
   state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'in_flight', 'attention', 'delivered', 'blocked')),
+  desired_version BIGINT NOT NULL DEFAULT 1 CHECK (desired_version > 0),
+  last_synced_version BIGINT NOT NULL DEFAULT 0 CHECK (last_synced_version >= 0),
+  desired_status TEXT NOT NULL DEFAULT 'requested' CHECK (desired_status IN ('requested', 'in_progress', 'completed', 'declined')),
   due_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   claim_owner TEXT,
@@ -1916,9 +1919,30 @@ CREATE TABLE IF NOT EXISTS feedback_task_delivery (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK ((state = 'in_flight') = (claim_token IS NOT NULL AND claim_expires_at IS NOT NULL)),
+  CHECK (last_synced_version <= desired_version),
   CHECK (state <> 'delivered' OR odoo_task_id IS NOT NULL),
   CHECK (state <> 'blocked' OR blocked_reason IS NOT NULL)
 );
+ALTER TABLE feedback_task_delivery
+  ADD COLUMN IF NOT EXISTS desired_version BIGINT NOT NULL DEFAULT 1 CHECK (desired_version > 0);
+ALTER TABLE feedback_task_delivery
+  ADD COLUMN IF NOT EXISTS last_synced_version BIGINT NOT NULL DEFAULT 0 CHECK (last_synced_version >= 0);
+ALTER TABLE feedback_task_delivery
+  ADD COLUMN IF NOT EXISTS desired_status TEXT NOT NULL DEFAULT 'requested'
+    CHECK (desired_status IN ('requested', 'in_progress', 'completed', 'declined'));
+DO $feedback_task_delivery_versions$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'feedback_task_delivery_versions_check'
+      AND conrelid = 'feedback_task_delivery'::regclass
+  ) THEN
+    ALTER TABLE feedback_task_delivery
+      ADD CONSTRAINT feedback_task_delivery_versions_check
+      CHECK (last_synced_version <= desired_version);
+  END IF;
+END
+$feedback_task_delivery_versions$;
 CREATE INDEX IF NOT EXISTS feedback_task_delivery_due_idx
   ON feedback_task_delivery (due_at, feedback_id)
   WHERE state IN ('pending', 'attention');

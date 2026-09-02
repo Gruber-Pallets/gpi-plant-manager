@@ -26,6 +26,9 @@ _BLOCK_REASONS = frozenset(
     {
         "More than one matching owner task exists.",
         "More than one matching owner screenshot exists.",
+        "The stored owner task does not match this feedback.",
+        "The owner task stage is missing or ambiguous.",
+        "More than one matching owner task result note exists.",
     }
 )
 _MISSING_SUMMARY = "Task delivery record is missing."
@@ -47,6 +50,9 @@ class TaskDeliveryClaim:
     task_id: int | None
     before_attachment_id: int | None
     expires_at: datetime
+    desired_version: int = 1
+    last_synced_version: int = 0
+    desired_status: str = "requested"
 
     def __post_init__(self) -> None:
         _positive_signed_64(self.feedback_id, "feedback id")
@@ -56,6 +62,11 @@ class TaskDeliveryClaim:
         if self.before_attachment_id is not None:
             _positive_signed_64(self.before_attachment_id, "before attachment id")
         _aware_datetime(self.expires_at, "claim expiration")
+        _positive_signed_64(self.desired_version, "desired version")
+        _nonnegative_signed_64(self.last_synced_version, "last synchronized version")
+        if self.last_synced_version > self.desired_version:
+            raise ValueError("task lifecycle versions are inverted")
+        _lifecycle_status(self.desired_status)
 
 
 @dataclass(frozen=True)
@@ -66,6 +77,9 @@ class FeedbackTaskSnapshot:
     submitter: str | None
     page_url: str | None
     before_image: NormalizedImage | None
+    status: str = "requested"
+    projection_version: int = 1
+    resolution_note: str | None = None
 
 
 def _positive_signed_64(value: object, label: str) -> int:
@@ -125,6 +139,9 @@ def _claim_from_row(row: Mapping[str, object]) -> TaskDeliveryClaim:
             task_id=row.get("odoo_task_id"),
             before_attachment_id=row.get("before_attachment_id"),
             expires_at=row.get("claim_expires_at"),
+            desired_version=row.get("desired_version", 1),
+            last_synced_version=row.get("last_synced_version", 0),
+            desired_status=row.get("desired_status", "requested"),
         )
     except ValueError:
         raise StateTransitionError("database returned a malformed task delivery claim") from None
@@ -194,13 +211,98 @@ def _snapshot_image(row: Mapping[str, object], feedback_id: int) -> NormalizedIm
     )
 
 
-def enqueue_submission(cur, feedback_id: int) -> None:
+def _lifecycle_status(value: object) -> str:
+    if value not in {"requested", "in_progress", "completed", "declined"}:
+        raise ValueError("feedback lifecycle status is unsupported")
+    return str(value)
+
+
+def enqueue_submission(
+    cur,
+    feedback_id: int,
+    *,
+    desired_version: int = 1,
+    desired_status: str = "requested",
+) -> None:
     """Add a newly saved local feedback record to the owner-task outbox."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    safe_version = _positive_signed_64(desired_version, "desired version")
+    safe_status = _lifecycle_status(desired_status)
     cur.execute(
-        "INSERT INTO feedback_task_delivery (feedback_id, state, due_at) "
-        "VALUES (%s, 'pending', now())",
-        (feedback_id,),
+        "INSERT INTO feedback_task_delivery "
+        "(feedback_id, state, due_at, desired_version, last_synced_version, desired_status) "
+        "VALUES (%s, 'pending', now(), %s, 0, %s)",
+        (safe_feedback_id, safe_version, safe_status),
     )
+
+
+def enqueue_lifecycle(
+    cur,
+    feedback_id: int,
+    *,
+    desired_version: int,
+    desired_status: str,
+    now: datetime,
+) -> None:
+    """Atomically make an existing owner task due for one lifecycle version."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    safe_version = _positive_signed_64(desired_version, "desired version")
+    safe_status = _lifecycle_status(desired_status)
+    current = _aware_datetime(now, "lifecycle intent time")
+    cur.execute(
+        "UPDATE feedback_task_delivery SET desired_version = %s, desired_status = %s, "
+        "state = CASE WHEN state = 'in_flight' THEN state ELSE 'pending' END, "
+        "due_at = %s, last_error_summary = NULL, blocked_reason = NULL, updated_at = %s "
+        "WHERE feedback_id = %s AND desired_version < %s RETURNING feedback_id",
+        (safe_version, safe_status, current, current, safe_feedback_id, safe_version),
+    )
+    row = cur.fetchone()
+    if not isinstance(row, Mapping) or row.get("feedback_id") != safe_feedback_id:
+        raise StateTransitionError("task lifecycle intent is missing or did not advance")
+
+
+def queue_existing_lifecycle_mismatches(*, limit: int = 100) -> int:
+    """Boundedly queue delivered legacy tasks that lag local lifecycle authority."""
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("reconciliation limit must be from 1 through 100")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH candidates AS (
+              SELECT f.id, f.projection_version, f.status
+              FROM feedback f
+              JOIN feedback_task_delivery td ON td.feedback_id = f.id
+              WHERE f.lifecycle_origin = 'local'
+                AND f.status IN ('requested', 'in_progress', 'completed', 'declined')
+                AND td.odoo_task_id IS NOT NULL
+                AND td.state <> 'blocked'
+                AND (
+                  td.desired_version <> f.projection_version
+                  OR td.desired_status <> f.status
+                  OR td.last_synced_version < f.projection_version
+                )
+              ORDER BY f.id
+              FOR UPDATE OF td SKIP LOCKED
+              LIMIT %s
+            ), updated AS (
+              UPDATE feedback_task_delivery td
+              SET desired_version = candidates.projection_version,
+                  desired_status = candidates.status,
+                  state = 'pending', due_at = now(), attempt_count = 0,
+                  claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL,
+                  last_error_summary = NULL, blocked_reason = NULL, updated_at = now()
+              FROM candidates
+              WHERE td.feedback_id = candidates.id
+              RETURNING td.feedback_id
+            )
+            SELECT COUNT(*) AS queued FROM updated
+            """,
+            (limit,),
+        )
+        row = cursor.fetchone()
+    if not isinstance(row, Mapping) or type(row.get("queued")) is not int:
+        raise StateTransitionError("task lifecycle reconciliation result is malformed")
+    return row["queued"]
 
 
 def claim_due(
@@ -219,7 +321,8 @@ def claim_due(
     with db.cursor() as cursor:
         cursor.execute(
             """
-            SELECT feedback_id, odoo_task_id, before_attachment_id
+            SELECT feedback_id, odoo_task_id, before_attachment_id,
+                   desired_version, last_synced_version, desired_status
             FROM feedback_task_delivery
             WHERE (
                 state IN ('pending', 'attention') AND due_at <= %s
@@ -242,10 +345,16 @@ def claim_due(
                 feedback_id = _positive_signed_64(row.get("feedback_id"), "feedback id")
                 task_id = row.get("odoo_task_id")
                 attachment_id = row.get("before_attachment_id")
+                desired_version = row.get("desired_version", 1)
+                last_synced_version = row.get("last_synced_version", 0)
+                desired_status = row.get("desired_status", "requested")
                 if task_id is not None:
                     _positive_signed_64(task_id, "task id")
                 if attachment_id is not None:
                     _positive_signed_64(attachment_id, "before attachment id")
+                _positive_signed_64(desired_version, "desired version")
+                _nonnegative_signed_64(last_synced_version, "last synchronized version")
+                _lifecycle_status(desired_status)
             except ValueError:
                 raise StateTransitionError("database returned a malformed due-claim row") from None
             token = uuid4()
@@ -264,7 +373,8 @@ def claim_due(
                   AND odoo_task_id IS NOT DISTINCT FROM %s
                   AND before_attachment_id IS NOT DISTINCT FROM %s
                 RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
-                          claim_expires_at
+                          claim_expires_at, desired_version, last_synced_version,
+                          desired_status
                 """,
                 (
                     owner,
@@ -281,7 +391,10 @@ def claim_due(
             result = _updated_claim(
                 cursor,
                 "due claim update",
-                TaskDeliveryClaim(feedback_id, token, task_id, attachment_id, expires),
+                TaskDeliveryClaim(
+                    feedback_id, token, task_id, attachment_id, expires,
+                    desired_version, last_synced_version, desired_status,
+                ),
             )
             claims.append(result)
     return claims
@@ -308,7 +421,8 @@ def renew_claim(
               AND claim_expires_at = %s
               AND claim_expires_at > %s
             RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
-                      claim_expires_at
+                      claim_expires_at, desired_version, last_synced_version,
+                      desired_status
             """,
             (
                 expires,
@@ -332,7 +446,8 @@ def load_snapshot(feedback_id: int) -> FeedbackTaskSnapshot:
         cursor.execute(
             """
             SELECT f.id AS feedback_id, f.task_type, f.message, f.submitter,
-                   f.page_url, f.lifecycle_origin,
+                   f.page_url, f.lifecycle_origin, f.status,
+                   f.projection_version, f.resolution_note,
                    bi.feedback_id AS before_feedback_id, bi.jpeg_bytes,
                    bi.sha256, bi.byte_length, bi.width, bi.height
             FROM feedback f
@@ -353,6 +468,9 @@ def load_snapshot(feedback_id: int) -> FeedbackTaskSnapshot:
         if (
             row.get("feedback_id") != safe_feedback_id
             or row.get("lifecycle_origin") != "local"
+            or row.get("status") not in {"requested", "in_progress", "completed", "declined"}
+            or type(row.get("projection_version")) is not int
+            or row.get("projection_version") <= 0
             or type(row.get("message")) is not str
             or row.get("submitter") is not None and type(row.get("submitter")) is not str
             or row.get("page_url") is not None and type(row.get("page_url")) is not str
@@ -370,6 +488,9 @@ def load_snapshot(feedback_id: int) -> FeedbackTaskSnapshot:
         submitter=row["submitter"],
         page_url=row["page_url"],
         before_image=before_image,
+        status=row["status"],
+        projection_version=row["projection_version"],
+        resolution_note=row.get("resolution_note"),
     )
 
 
@@ -395,7 +516,8 @@ def record_task_id(
               AND odoo_task_id IS NOT DISTINCT FROM %s
               AND before_attachment_id IS NOT DISTINCT FROM %s
             RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
-                      claim_expires_at
+                      claim_expires_at, desired_version, last_synced_version,
+                      desired_status
             """,
             (
                 saved_task_id,
@@ -434,7 +556,8 @@ def record_before_attachment(
               AND odoo_task_id = %s
               AND before_attachment_id IS NOT DISTINCT FROM %s
             RETURNING feedback_id, claim_token, odoo_task_id, before_attachment_id,
-                      claim_expires_at
+                      claim_expires_at, desired_version, last_synced_version,
+                      desired_status
             """,
             (
                 saved_attachment_id,
@@ -460,13 +583,20 @@ def mark_delivered(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> 
         cursor.execute(
             """
             UPDATE feedback_task_delivery
-            SET state = 'delivered', claim_owner = NULL, claim_token = NULL,
-                claim_expires_at = NULL, last_error_summary = NULL, updated_at = %s
+            SET last_synced_version = %s,
+                state = CASE WHEN desired_version = %s THEN 'delivered' ELSE 'pending' END,
+                claim_owner = NULL, claim_token = NULL,
+                claim_expires_at = NULL, last_error_summary = NULL,
+                blocked_reason = NULL,
+                due_at = CASE WHEN desired_version > %s THEN %s ELSE due_at END,
+                updated_at = %s
             WHERE feedback_id = %s
               AND claim_token = %s
               AND state = 'in_flight'
               AND odoo_task_id = %s
               AND before_attachment_id IS NOT DISTINCT FROM %s
+              AND desired_version >= %s
+              AND last_synced_version = %s
               AND (
                 NOT EXISTS (
                     SELECT 1 FROM feedback_images
@@ -478,11 +608,17 @@ def mark_delivered(claim: TaskDeliveryClaim, *, now: datetime | None = None) -> 
             RETURNING feedback_id
             """,
             (
+                claim.desired_version,
+                claim.desired_version,
+                claim.desired_version,
+                current,
                 current,
                 claim.feedback_id,
                 claim.claim_token,
                 claim.task_id,
                 claim.before_attachment_id,
+                claim.desired_version,
+                claim.last_synced_version,
             ),
         )
         row = _one_row(cursor, "delivery completion")
@@ -570,6 +706,19 @@ def admin_status_for(row: object) -> tuple[str, str | None]:
     state = row.get("task_delivery_state") if isinstance(row, Mapping) else row
     if type(state) is not str:
         return "Needs attention", _MISSING_SUMMARY
+    if isinstance(row, Mapping):
+        desired = row.get("task_delivery_desired_version")
+        synced = row.get("task_delivery_last_synced_version")
+        task_id = row.get("task_delivery_task_id")
+        if (
+            type(desired) is int
+            and type(synced) is int
+            and desired > synced
+            and type(task_id) is int
+        ):
+            return "Task update pending", None
+        if state == "delivered" and type(desired) is int and desired == synced:
+            return "Owner task synced", None
     if state in {"pending", "in_flight"}:
         return "Queued for app owner", None
     if state == "attention":

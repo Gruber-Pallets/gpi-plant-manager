@@ -37,6 +37,15 @@ _OUTCOMES = frozenset({"delivered", "retried", "blocked", "isolated_error"})
 _SOURCE_APP = "GPI Plant Manager (plant)"
 _DUPLICATE_TASK_REASON = "More than one matching owner task exists."
 _DUPLICATE_SCREENSHOT_REASON = "More than one matching owner screenshot exists."
+_TASK_IDENTITY_REASON = "The stored owner task does not match this feedback."
+_TASK_STAGE_REASON = "The owner task stage is missing or ambiguous."
+_TASK_NOTE_REASON = "More than one matching owner task result note exists."
+_TASK_STAGE_BY_STATUS = {
+    "requested": "New",
+    "in_progress": "In Progress",
+    "completed": "Done",
+    "declined": "Done",
+}
 
 
 def _utc_now() -> datetime:
@@ -102,6 +111,35 @@ def task_description(snapshot: task_delivery.FeedbackTaskSnapshot) -> str:
         escaped_url = html.escape(page_url, quote=True)
         meta.append(f'Page: <a href="{escaped_url}">{escaped_url}</a>')
     return f"<p>{body}</p><p><small>{' · '.join(meta)}</small></p>"
+
+
+def task_stage_for(status: str) -> str:
+    try:
+        return _TASK_STAGE_BY_STATUS[status]
+    except (KeyError, TypeError):
+        raise ValueError("unsupported feedback lifecycle status") from None
+
+
+def terminal_note_marker(feedback_id: int, version: int) -> str:
+    if type(feedback_id) is not int or feedback_id <= 0:
+        raise ValueError("feedback id must be positive")
+    if type(version) is not int or version <= 0:
+        raise ValueError("feedback version must be positive")
+    return f"GPI-PM-FB-{feedback_id}:v{version}"
+
+
+def terminal_note_html(snapshot: task_delivery.FeedbackTaskSnapshot) -> str:
+    if snapshot.status not in {"completed", "declined"}:
+        raise ValueError("terminal task note requires terminal feedback")
+    note = (snapshot.resolution_note or "").strip()
+    if not note:
+        raise ValueError("terminal task note is missing")
+    label = "Completed" if snapshot.status == "completed" else "Declined"
+    marker = terminal_note_marker(snapshot.feedback_id, snapshot.projection_version)
+    return (
+        f"<p><strong>{label}:</strong> {html.escape(note)}</p>"
+        f"<p><small>{marker}</small></p>"
+    )
 
 
 def _retry(claim: task_delivery.TaskDeliveryClaim, clock: Callable[[], datetime]) -> str:
@@ -251,6 +289,109 @@ def _deliver_before_attachment(
     return task_delivery.record_before_attachment(claim, attachment_id=attachment_id, now=clock())
 
 
+def _task_identity_matches(
+    remote: object,
+    *,
+    task_id: int,
+    project_id: int,
+    name: str,
+) -> bool:
+    return (
+        isinstance(remote, dict)
+        and remote.get("id") == task_id
+        and remote.get("project_id") == project_id
+        and remote.get("name") == name
+        and remote.get("active") is True
+    )
+
+
+def _reconcile_task_lifecycle(
+    claim: task_delivery.TaskDeliveryClaim,
+    snapshot: task_delivery.FeedbackTaskSnapshot,
+    clock: Callable[[], datetime],
+) -> str:
+    if claim.task_id is None:
+        raise RuntimeError("task lifecycle has no durable owner task")
+    if (
+        claim.desired_version != snapshot.projection_version
+        or claim.desired_status != snapshot.status
+    ):
+        return _retry(claim, clock)
+    target_stage = task_stage_for(snapshot.status)
+    name = task_name(snapshot)
+    try:
+        project_ids = odoo_client.find_active_feedback_project_ids()
+        if len(project_ids) != 1:
+            return _block(claim, _TASK_IDENTITY_REASON, clock)
+        project_id = project_ids[0]
+        stage_ids = odoo_client.find_feedback_stage_ids(project_id, target_stage)
+        if len(stage_ids) != 1:
+            return _block(claim, _TASK_STAGE_REASON, clock)
+        remote = odoo_client.read_feedback_task(claim.task_id)
+    except _RECOVERABLE_ODOO_ERRORS:
+        return _retry(claim, clock)
+    except (ValueError, odoo_client.OdooTaskPayloadError):
+        return _block(claim, _TASK_IDENTITY_REASON, clock)
+    if not _task_identity_matches(
+        remote, task_id=claim.task_id, project_id=project_id, name=name
+    ):
+        return _block(claim, _TASK_IDENTITY_REASON, clock)
+
+    stage_id = stage_ids[0]
+    if remote.get("stage_id") != stage_id or remote.get("stage_name") != target_stage:
+        claim = task_delivery.renew_claim(claim, now=clock())
+        try:
+            odoo_client.update_task(claim.task_id, stage_id=stage_id)
+        except _RECOVERABLE_ODOO_ERRORS:
+            return _retry(claim, clock)
+
+    marker: str | None = None
+    if snapshot.status in {"completed", "declined"}:
+        marker = terminal_note_marker(snapshot.feedback_id, snapshot.projection_version)
+        try:
+            message_ids = odoo_client.find_task_message_ids(claim.task_id, marker)
+        except _RECOVERABLE_ODOO_ERRORS:
+            return _retry(claim, clock)
+        if len(message_ids) > 1:
+            return _block(claim, _TASK_NOTE_REASON, clock)
+        if not message_ids:
+            claim = task_delivery.renew_claim(claim, now=clock())
+            try:
+                odoo_client.post_task_message(claim.task_id, terminal_note_html(snapshot))
+            except _RECOVERABLE_ODOO_ERRORS:
+                try:
+                    recovered = odoo_client.find_task_message_ids(claim.task_id, marker)
+                except _RECOVERABLE_ODOO_ERRORS:
+                    return _retry(claim, clock)
+                if len(recovered) > 1:
+                    return _block(claim, _TASK_NOTE_REASON, clock)
+                if not recovered:
+                    return _retry(claim, clock)
+
+    try:
+        verified = odoo_client.read_feedback_task(claim.task_id)
+        message_ids = (
+            odoo_client.find_task_message_ids(claim.task_id, marker)
+            if marker is not None
+            else []
+        )
+    except _RECOVERABLE_ODOO_ERRORS:
+        return _retry(claim, clock)
+    if marker is not None and len(message_ids) > 1:
+        return _block(claim, _TASK_NOTE_REASON, clock)
+    if (
+        not _task_identity_matches(
+            verified, task_id=claim.task_id, project_id=project_id, name=name
+        )
+        or verified.get("stage_id") != stage_id
+        or verified.get("stage_name") != target_stage
+        or marker is not None and not message_ids
+    ):
+        return _retry(claim, clock)
+    task_delivery.mark_delivered(claim, now=clock())
+    return "delivered"
+
+
 def process_claim(
     claim: task_delivery.TaskDeliveryClaim,
     *,
@@ -271,8 +412,7 @@ def process_claim(
     attachment_or_outcome = _deliver_before_attachment(task_or_outcome, snapshot, time_source)
     if type(attachment_or_outcome) is str:
         return attachment_or_outcome
-    task_delivery.mark_delivered(attachment_or_outcome, now=time_source())
-    return "delivered"
+    return _reconcile_task_lifecycle(attachment_or_outcome, snapshot, time_source)
 
 
 def run_batch(
@@ -288,6 +428,7 @@ def run_batch(
     identity = worker_id or f"{socket.gethostname()}:{os.getpid()}"
     capped = max(1, min(limit, 10))
     outcomes: list[str] = []
+    task_delivery.queue_existing_lifecycle_mismatches()
     for _ in range(capped):
         claims = task_delivery.claim_due(now=time_source(), worker_id=identity, limit=1)
         if not claims:
@@ -301,4 +442,8 @@ def run_batch(
     return BatchResult.from_outcomes(outcomes)
 
 
-__all__ = ["BatchResult", "before_attachment_name", "process_claim", "run_batch", "task_description", "task_name"]
+__all__ = [
+    "BatchResult", "before_attachment_name", "process_claim", "run_batch",
+    "task_description", "task_name", "task_stage_for", "terminal_note_html",
+    "terminal_note_marker",
+]

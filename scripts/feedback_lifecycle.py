@@ -95,6 +95,8 @@ def _result(
     current_status: str,
     proposed_status: str,
     applied: bool,
+    task_sync_state: str,
+    task_queued: bool,
 ) -> dict[str, object]:
     if (
         type(feedback_id) is not int
@@ -102,12 +104,22 @@ def _result(
         or current_status not in {"requested", "in_progress", "completed", "declined"}
         or proposed_status not in {"requested", "in_progress", "completed", "declined"}
         or type(applied) is not bool
+        or task_sync_state not in {"pending", "synced", "attention"}
+        or type(task_queued) is not bool
     ):
         raise ValueError("feedback lifecycle result is unsafe")
     return {
         "feedback_id": feedback_id,
         "current_status": current_status,
         "proposed_status": proposed_status,
+        "proposed_task_stage": {
+            "requested": "New",
+            "in_progress": "In Progress",
+            "completed": "Done",
+            "declined": "Done",
+        }[proposed_status],
+        "task_sync_state": task_sync_state,
+        "task_queued": task_queued,
         "applied": applied,
     }
 
@@ -116,44 +128,43 @@ def _run_command(args: argparse.Namespace, command: _LifecycleCommand) -> tuple[
     feedback_id = _feedback_id(args)
     state = feedback_store.lifecycle_state(feedback_id)
     current_status = state["status"]
+    raw_task_state = state.get("task_sync_state")
+    task_sync_state = (
+        "attention"
+        if raw_task_state in {"attention", "blocked"}
+        else "synced"
+        if raw_task_state == "delivered"
+        and state.get("task_last_synced_version") == state.get("task_desired_version")
+        else "pending"
+    )
+
+    def result(proposed_status: str, *, applied: bool, queued: bool = False):
+        return _result(
+            feedback_id=feedback_id,
+            current_status=current_status,
+            proposed_status=proposed_status,
+            applied=applied,
+            task_sync_state=task_sync_state,
+            task_queued=queued,
+        )
 
     if command == "start":
         if current_status == "in_progress":
-            return 0, _result(
-                feedback_id=feedback_id,
-                current_status=current_status,
-                proposed_status=current_status,
-                applied=False,
-            )
+            return 0, result(current_status, applied=False)
         if current_status != "requested":
-            return 1, _result(
-                feedback_id=feedback_id,
-                current_status=current_status,
-                proposed_status=current_status,
-                applied=False,
-            )
+            return 1, result(current_status, applied=False)
         proposed_status = "in_progress"
         actor = DEFAULT_ACTOR
         note = None
     else:
         if current_status != "in_progress":
-            return 1, _result(
-                feedback_id=feedback_id,
-                current_status=current_status,
-                proposed_status=current_status,
-                applied=False,
-            )
+            return 1, result(current_status, applied=False)
         proposed_status = "completed"
         actor = args.by
         note = args.note
 
     if not args.yes:
-        return 0, _result(
-            feedback_id=feedback_id,
-            current_status=current_status,
-            proposed_status=proposed_status,
-            applied=False,
-        )
+        return 0, result(proposed_status, applied=False)
 
     feedback_store.transition(
         feedback_id=feedback_id,
@@ -163,12 +174,7 @@ def _run_command(args: argparse.Namespace, command: _LifecycleCommand) -> tuple[
         after_image=None,
         now=utc_now(),
     )
-    return 0, _result(
-        feedback_id=feedback_id,
-        current_status=current_status,
-        proposed_status=proposed_status,
-        applied=True,
-    )
+    return 0, result(proposed_status, applied=True, queued=True)
 
 
 def main(

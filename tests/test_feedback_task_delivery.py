@@ -74,6 +74,9 @@ def valid_snapshot_row(**changes):
         "submitter": "operator@example.com",
         "page_url": "/line/1",
         "lifecycle_origin": "local",
+        "status": "requested",
+        "projection_version": 1,
+        "resolution_note": None,
         "before_feedback_id": 42,
         "jpeg_bytes": raw,
         "sha256": hashlib.sha256(raw).hexdigest(),
@@ -123,6 +126,49 @@ def test_claim_due_caps_the_database_claim_batch_at_ten(monkeypatch):
     assert delivery.claim_due(now=NOW, worker_id="task-worker", limit=99) == []
 
     assert cursor.calls[0][1][-1] == 10
+
+
+def test_enqueue_submission_records_requested_lifecycle_intent():
+    cursor = RecordingCursor()
+
+    delivery.enqueue_submission(
+        cursor, 42, desired_version=1, desired_status="requested"
+    )
+
+    sql, params = cursor.calls[0]
+    assert "desired_version, last_synced_version, desired_status" in sql
+    assert params == (42, 1, "requested")
+
+
+def test_lifecycle_enqueue_advances_existing_intent():
+    cursor = RecordingCursor([{"feedback_id": 42}])
+
+    delivery.enqueue_lifecycle(
+        cursor, 42, desired_version=3, desired_status="completed", now=NOW
+    )
+
+    sql, params = cursor.calls[0]
+    assert "desired_version = %s" in sql
+    assert "desired_status = %s" in sql
+    assert "state = CASE WHEN state = 'in_flight' THEN state ELSE 'pending' END" in " ".join(sql.split())
+    assert params == (3, "completed", NOW, NOW, 42, 3)
+
+
+def test_existing_lifecycle_reconciliation_is_bounded_and_retains_task_identity(
+    monkeypatch,
+):
+    cursor = use_cursor(monkeypatch, [{"queued": 1}])
+
+    assert delivery.queue_existing_lifecycle_mismatches() == 1
+
+    sql = normalized_sql(cursor, 0)
+    assert "FOR UPDATE OF td SKIP LOCKED" in sql
+    assert "td.odoo_task_id IS NOT NULL" in sql
+    assert "td.state <> 'blocked'" in sql
+    assert "desired_version = candidates.projection_version" in sql
+    assert "desired_status = candidates.status" in sql
+    assert "odoo_task_id" not in sql.split(" SET ", 1)[1].split(" FROM ", 1)[0]
+    assert cursor.calls[0][1] == (100,)
 
 
 def test_renew_claim_refuses_an_expired_or_reclaimed_lease(monkeypatch):

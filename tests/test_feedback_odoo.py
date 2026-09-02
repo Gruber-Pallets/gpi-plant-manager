@@ -408,6 +408,62 @@ def test_fetch_task_stage_names_empty_input_skips_call(monkeypatch):
     assert calls == []
 
 
+def test_find_feedback_stage_ids_is_exact_project_scoped_and_bounded(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append([{"id": 8, "name": "Done"}])
+
+    assert odoo_client.find_feedback_stage_ids(3, "Done") == [8]
+    assert calls == [
+        (
+            "project.task.type",
+            "search_read",
+            ([('project_ids', 'in', [3]), ('name', '=', 'Done')],),
+            {"fields": ["id", "name"], "order": "id asc", "limit": 2},
+        )
+    ]
+
+
+def test_read_feedback_task_returns_verified_identity_and_stage(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append([
+        {
+            "id": 55,
+            "name": "[GPI-PM-FB-42] [Bug] Save fails",
+            "project_id": [3, "Plant Manager"],
+            "active": True,
+            "stage_id": [8, "Done"],
+        }
+    ])
+
+    assert odoo_client.read_feedback_task(55) == {
+        "id": 55,
+        "name": "[GPI-PM-FB-42] [Bug] Save fails",
+        "project_id": 3,
+        "active": True,
+        "stage_id": 8,
+        "stage_name": "Done",
+    }
+    assert calls[0][0:2] == ("project.task", "search_read")
+    assert calls[0][3]["fields"] == ["id", "name", "project_id", "active", "stage_id"]
+    assert calls[0][3]["limit"] == 2
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"id": 55, "name": "x", "project_id": [3, "Plant Manager"], "active": True, "stage_id": False},
+        {"id": 55, "name": "x", "project_id": [3, "Plant Manager"], "active": True, "stage_id": [True, "Done"]},
+        {"id": 56, "name": "x", "project_id": [3, "Plant Manager"], "active": True, "stage_id": [8, "Done"]},
+    ],
+)
+def test_read_feedback_task_rejects_malformed_identity_or_stage(monkeypatch, row):
+    _calls, responses = _stub(monkeypatch)
+    responses.append([row])
+
+    with pytest.raises(odoo_client.OdooTaskPayloadError):
+        odoo_client.read_feedback_task(55)
+
+
 def test_feedback_status_bucket():
     assert odoo_client.feedback_status_bucket("Done") == "done"
     assert odoo_client.feedback_status_bucket("Rejected") == "rejected"

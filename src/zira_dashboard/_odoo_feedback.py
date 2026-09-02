@@ -240,6 +240,75 @@ def fetch_feedback_task_identity(
     }
 
 
+def find_feedback_stage_ids(
+    execute_fn: Callable[..., Any], project_id: int, name: str
+) -> list[int]:
+    """Return at most two exact task stages belonging to one project."""
+    safe_project_id = _positive_id(project_id, label="project")
+    if name not in FEEDBACK_STAGES:
+        raise ValueError("feedback task stage name is unsupported")
+    rows = execute_fn(
+        "project.task.type",
+        "search_read",
+        [("project_ids", "in", [safe_project_id]), ("name", "=", name)],
+        fields=["id", "name"],
+        order="id asc",
+        limit=2,
+    )
+    if not isinstance(rows, list) or len(rows) > 2:
+        raise OdooTaskPayloadError("Odoo task stage payload was malformed")
+    ids: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("name") != name:
+            raise OdooTaskPayloadError("Odoo task stage payload was malformed")
+        ids.append(_positive_id(row.get("id"), label="task stage"))
+    return ids
+
+
+def read_feedback_task(
+    execute_fn: Callable[..., Any], task_id: int
+) -> dict[str, Any] | None:
+    """Read one exact task identity plus its current stage."""
+    safe_task_id = _positive_id(task_id, label="task")
+    rows = execute_fn(
+        "project.task",
+        "search_read",
+        [("id", "=", safe_task_id)],
+        fields=["id", "name", "project_id", "active", "stage_id"],
+        limit=2,
+        context={"active_test": False},
+    )
+    if not isinstance(rows, list) or len(rows) > 1:
+        raise OdooTaskPayloadError("Odoo task readback payload was malformed")
+    if not rows:
+        return None
+    row = rows[0]
+    if not isinstance(row, dict):
+        raise OdooTaskPayloadError("Odoo task readback payload was malformed")
+    project = row.get("project_id")
+    stage = row.get("stage_id")
+    if (
+        row.get("id") != safe_task_id
+        or not isinstance(row.get("name"), str)
+        or not isinstance(row.get("active"), bool)
+        or not isinstance(project, (list, tuple))
+        or len(project) < 2
+        or not isinstance(project[1], str)
+        or not isinstance(stage, (list, tuple))
+        or len(stage) < 2
+        or not isinstance(stage[1], str)
+    ):
+        raise OdooTaskPayloadError("Odoo task readback payload was malformed")
+    return {
+        "id": safe_task_id,
+        "name": row["name"],
+        "project_id": _positive_id(project[0], label="task project"),
+        "active": row["active"],
+        "stage_id": _positive_id(stage[0], label="task stage"),
+        "stage_name": stage[1],
+    }
+
+
 def find_feedback_attachment_ids(
     execute_fn: Callable[..., Any], task_id: int, name: str
 ) -> list[int]:

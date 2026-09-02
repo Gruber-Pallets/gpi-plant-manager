@@ -41,7 +41,14 @@ def _image() -> NormalizedImage:
     )
 
 
-def snapshot(*, task_type: str = "bug", before_image: NormalizedImage | None = None):
+def snapshot(
+    *,
+    task_type: str = "bug",
+    before_image: NormalizedImage | None = None,
+    status: str = "requested",
+    projection_version: int = 1,
+    resolution_note: str | None = None,
+):
     return delivery.FeedbackTaskSnapshot(
         feedback_id=42,
         task_type=task_type,
@@ -49,6 +56,9 @@ def snapshot(*, task_type: str = "bug", before_image: NormalizedImage | None = N
         submitter="operator@example.com",
         page_url="/feedback",
         before_image=before_image,
+        status=status,
+        projection_version=projection_version,
+        resolution_note=resolution_note,
     )
 
 
@@ -92,7 +102,140 @@ def stub_odoo(monkeypatch, *, task_ids=None, attachment_ids=None):
     monkeypatch.setattr(worker.odoo_client, "ensure_feedback_tag", MagicMock(return_value=4))
     monkeypatch.setattr(worker.odoo_client, "create_feedback_task", MagicMock(return_value=55))
     monkeypatch.setattr(worker.odoo_client, "add_task_attachment", MagicMock(return_value=66))
+    monkeypatch.setattr(worker.odoo_client, "find_active_feedback_project_ids", MagicMock(return_value=[3]))
+    monkeypatch.setattr(worker.odoo_client, "find_feedback_stage_ids", MagicMock(return_value=[7]))
+    monkeypatch.setattr(
+        worker.odoo_client,
+        "read_feedback_task",
+        MagicMock(
+            side_effect=lambda _task_id: {
+                "id": 55,
+                "name": worker.task_name(worker.task_delivery.load_snapshot.return_value),
+                "project_id": 3,
+                "active": True,
+                "stage_id": 7,
+                "stage_name": "New",
+            }
+        ),
+    )
+    monkeypatch.setattr(worker.odoo_client, "update_task", MagicMock())
+    monkeypatch.setattr(worker.odoo_client, "find_task_message_ids", MagicMock(return_value=[]))
+    monkeypatch.setattr(worker.odoo_client, "post_task_message", MagicMock())
     return find_tasks, find_attachments
+
+
+def test_task_stage_mapping_and_terminal_note_are_deterministic():
+    assert worker.task_stage_for("requested") == "New"
+    assert worker.task_stage_for("in_progress") == "In Progress"
+    assert worker.task_stage_for("completed") == "Done"
+    assert worker.task_stage_for("declined") == "Done"
+    completed = worker.terminal_note_html(
+        snapshot(status="completed", projection_version=3, resolution_note="Fixed safely")
+    )
+    declined = worker.terminal_note_html(
+        snapshot(status="declined", projection_version=3, resolution_note="Not needed")
+    )
+    assert "Completed:" in completed and "GPI-PM-FB-42:v3" in completed
+    assert "Declined:" in declined and "GPI-PM-FB-42:v3" in declined
+
+
+def test_completed_feedback_moves_exact_task_to_done_and_posts_one_note(monkeypatch):
+    item = snapshot(status="completed", projection_version=3, resolution_note="Fixed safely")
+    terminal_claim = delivery.TaskDeliveryClaim(
+        feedback_id=42,
+        claim_token=CLAIM.claim_token,
+        task_id=55,
+        before_attachment_id=None,
+        expires_at=EXPIRES,
+        desired_version=3,
+        last_synced_version=2,
+        desired_status="completed",
+    )
+    stub_delivery(monkeypatch, item)
+    stub_odoo(monkeypatch)
+    worker.task_delivery.renew_claim.return_value = terminal_claim
+    worker.odoo_client.find_feedback_stage_ids.return_value = [8]
+    worker.odoo_client.find_task_message_ids.side_effect = [[], [901]]
+    worker.odoo_client.read_feedback_task.side_effect = [
+        {
+            "id": 55, "name": worker.task_name(item), "project_id": 3,
+            "active": True, "stage_id": 7, "stage_name": "In Progress",
+        },
+        {
+            "id": 55, "name": worker.task_name(item), "project_id": 3,
+            "active": True, "stage_id": 8, "stage_name": "Done",
+        },
+    ]
+
+    assert worker.process_claim(terminal_claim, now=NOW) == "delivered"
+
+    worker.odoo_client.update_task.assert_called_once_with(55, stage_id=8)
+    worker.odoo_client.post_task_message.assert_called_once()
+    worker.task_delivery.mark_delivered.assert_called_once_with(terminal_claim, now=NOW)
+
+
+def test_terminal_feedback_blocks_a_mismatched_stored_task_without_writing(monkeypatch):
+    item = snapshot(status="declined", projection_version=3, resolution_note="Not needed")
+    terminal_claim = delivery.TaskDeliveryClaim(
+        feedback_id=42,
+        claim_token=CLAIM.claim_token,
+        task_id=55,
+        before_attachment_id=None,
+        expires_at=EXPIRES,
+        desired_version=3,
+        last_synced_version=2,
+        desired_status="declined",
+    )
+    stub_delivery(monkeypatch, item)
+    stub_odoo(monkeypatch)
+    worker.odoo_client.read_feedback_task.side_effect = None
+    worker.odoo_client.read_feedback_task.return_value = {
+        "id": 55,
+        "name": "[GPI-PM-FB-999] [Bug] Wrong task",
+        "project_id": 3,
+        "active": True,
+        "stage_id": 7,
+        "stage_name": "In Progress",
+    }
+
+    assert worker.process_claim(terminal_claim, now=NOW) == "blocked"
+
+    worker.odoo_client.update_task.assert_not_called()
+    worker.odoo_client.post_task_message.assert_not_called()
+    worker.task_delivery.mark_delivered.assert_not_called()
+
+
+def test_terminal_note_timeout_recovers_marker_without_posting_twice(monkeypatch):
+    item = snapshot(status="completed", projection_version=3, resolution_note="Fixed")
+    terminal_claim = delivery.TaskDeliveryClaim(
+        feedback_id=42,
+        claim_token=CLAIM.claim_token,
+        task_id=55,
+        before_attachment_id=None,
+        expires_at=EXPIRES,
+        desired_version=3,
+        last_synced_version=2,
+        desired_status="completed",
+    )
+    stub_delivery(monkeypatch, item)
+    stub_odoo(monkeypatch)
+    worker.odoo_client.find_feedback_stage_ids.return_value = [8]
+    worker.odoo_client.read_feedback_task.side_effect = None
+    worker.odoo_client.read_feedback_task.return_value = {
+        "id": 55,
+        "name": worker.task_name(item),
+        "project_id": 3,
+        "active": True,
+        "stage_id": 8,
+        "stage_name": "Done",
+    }
+    worker.odoo_client.find_task_message_ids.side_effect = [[], [901], [901]]
+    worker.odoo_client.post_task_message.side_effect = TimeoutError("unknown result")
+
+    assert worker.process_claim(terminal_claim, now=NOW) == "delivered"
+
+    worker.odoo_client.post_task_message.assert_called_once()
+    worker.task_delivery.mark_delivered.assert_called_once_with(terminal_claim, now=NOW)
 
 
 def test_process_claim_creates_one_bug_task_for_the_authenticated_owner(monkeypatch):
@@ -383,6 +526,9 @@ def test_task_name_uses_feedback_when_a_saved_message_is_blank():
 
 
 def test_run_batch_isolates_claim_errors_and_counts_outcomes(monkeypatch):
+    monkeypatch.setattr(
+        worker.task_delivery, "queue_existing_lifecycle_mismatches", MagicMock()
+    )
     other = delivery.TaskDeliveryClaim(
         feedback_id=43,
         claim_token=CLAIM.claim_token,
@@ -409,6 +555,10 @@ def test_run_batch_isolates_claim_errors_and_counts_outcomes(monkeypatch):
 
 
 def test_run_batch_claims_one_item_at_a_time_with_a_live_clock(monkeypatch):
+    reconcile = MagicMock(return_value=1)
+    monkeypatch.setattr(
+        worker.task_delivery, "queue_existing_lifecycle_mismatches", reconcile
+    )
     other = delivery.TaskDeliveryClaim(
         feedback_id=43,
         claim_token=CLAIM.claim_token,
@@ -451,6 +601,7 @@ def test_run_batch_claims_one_item_at_a_time_with_a_live_clock(monkeypatch):
         ((CLAIM, NOW + timedelta(minutes=3)), {}),
         ((other, NOW + timedelta(minutes=7)), {}),
     ]
+    reconcile.assert_called_once_with()
 
 
 def test_owner_task_delivery_warmer_is_lazy_and_runs_off_the_event_loop(monkeypatch):
