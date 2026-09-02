@@ -2159,6 +2159,31 @@ CREATE TABLE IF NOT EXISTS forklift_name_map (
   plant_name     TEXT NOT NULL,
   PRIMARY KEY (kind, forklift_name)
 );
+CREATE TABLE IF NOT EXISTS forklift_driver_identity_map (
+  external_driver_id TEXT PRIMARY KEY CHECK (btrim(external_driver_id) <> ''),
+  source_name TEXT NOT NULL DEFAULT '',
+  employee_odoo_id INTEGER NOT NULL REFERENCES people(odoo_id),
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by_upn TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by_upn TEXT NOT NULL,
+  UNIQUE (employee_odoo_id)
+);
+CREATE TABLE IF NOT EXISTS forklift_driver_identity_audit (
+  id BIGSERIAL PRIMARY KEY,
+  external_driver_id TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('create', 'change', 'remove')),
+  before_employee_odoo_id INTEGER,
+  after_employee_odoo_id INTEGER,
+  before_source_name TEXT,
+  after_source_name TEXT,
+  actor_upn TEXT NOT NULL,
+  actor_name TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS forklift_driver_identity_audit_driver_idx
+  ON forklift_driver_identity_audit (external_driver_id, created_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS forklift_completion_events (
   external_id       TEXT PRIMARY KEY,
   driver_id         TEXT NOT NULL,

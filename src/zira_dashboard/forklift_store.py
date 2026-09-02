@@ -278,7 +278,7 @@ def resolve_forklift_driver_ids(
     names, ambiguous roster matches, missing Odoo IDs, and two external IDs
     claiming one employee all fail closed.
     """
-    from . import staffing
+    from . import forklift_identity_store, staffing
 
     allowed = set(allowed_employee_ids) if allowed_employee_ids is not None else None
     people = tuple(
@@ -297,10 +297,19 @@ def resolve_forklift_driver_ids(
         by_full_name.setdefault(full.casefold(), []).append(person)
         by_first_name.setdefault(full.split()[0].casefold(), []).append(person)
     overrides = name_map("driver")
+    active_people_by_id = {int(person.employee_id): person for person in people}
+    explicit = {
+        driver_id: employee_id
+        for driver_id, employee_id in forklift_identity_store.mapping_ids().items()
+        if driver_id in names_by_driver_id
+        and employee_id in active_people_by_id
+        and (allowed is None or employee_id in allowed)
+    }
+    reserved_employee_ids = set(explicit.values())
     proposed: dict[str, int] = {}
     for raw_driver_id, raw_names in names_by_driver_id.items():
         driver_id = str(raw_driver_id).strip()
-        if not driver_id:
+        if not driver_id or driver_id in explicit:
             continue
         names = {
             str(value).strip()
@@ -313,15 +322,21 @@ def resolve_forklift_driver_ids(
         target_name = str(overrides.get(source_name, source_name)).strip()
         exact = by_full_name.get(target_name.casefold(), [])
         candidates = exact if exact else by_first_name.get(target_name.casefold(), [])
+        candidates = [
+            person
+            for person in candidates
+            if int(person.employee_id) not in reserved_employee_ids
+        ]
         if len(candidates) != 1:
             continue
         proposed[driver_id] = int(candidates[0].employee_id)
     claimed = Counter(proposed.values())
-    return {
+    inferred = {
         driver_id: employee_id
         for driver_id, employee_id in proposed.items()
         if claimed[employee_id] == 1
     }
+    return {**explicit, **inferred}
 
 
 def resolve_plant_to_forklift(plant_name: str) -> str | None:
