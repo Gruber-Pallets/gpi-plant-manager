@@ -25,8 +25,8 @@ def test_feedback_types_match_odoo_reference_order_and_values():
     ]
 
 
-def test_dark_v2_contract_constants_match_the_shared_contract():
-    assert feedback_types.IMPROVEMENT_CONTRACT_VERSION == 2
+def test_dark_v3_contract_constants_match_the_shared_contract():
+    assert feedback_types.IMPROVEMENT_CONTRACT_VERSION == 3
     assert feedback_types.IMPROVEMENT_TYPE_VALUES == (
         "Digital",
         "Digital - New Feature",

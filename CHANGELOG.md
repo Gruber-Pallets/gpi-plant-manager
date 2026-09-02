@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Keep the new review buttons in sync
+
+- **The three task apps now agree on the safe labels and history used by the new review buttons. The buttons are still hidden.**
+
 ### Finish the no-code Odoo light-bulb build plan
 
 - **The step-by-step build plan for all six light-bulb buttons is ready.** It uses the normal shared task system, keeps one matching reference row, and adds no special code inside Odoo. Nothing in the app has changed yet.

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-IMPROVEMENT_CONTRACT_VERSION = 2
+IMPROVEMENT_CONTRACT_VERSION = 3
 IMPROVEMENT_TYPE_VALUES = (
     "Digital",
     "Digital - New Feature",
@@ -14,6 +14,25 @@ REVIEW_IMPROVEMENT_TYPES = frozenset(
 )
 IMPROVEMENT_STATUS_VALUES = ("Requested", "In-Progress", "Completed", "Declined")
 REPAIR_URL = "https://www.gpimaintenance.com/request"
+REVIEW_WORKFLOW_ENABLED = False
+REVIEW_EVENT_MARKER = "GPI-REVIEW-EVENT-V1"
+REVIEW_ACTIONS = ("accept", "decline", "assign", "complete", "move_l10")
+REVIEW_TASK_STATES = {
+    "accepted": "03_approved",
+    "declined": "1_canceled",
+    "completed": "1_done",
+}
+REVIEW_TASK_PROJECT = "GPI OS Manager - TASKS"
+REVIEW_TASK_STAGES = {"initial": "General", "meeting": "L10"}
+REFERENCE_SYNC_SECONDS = 60
+TASK_OWNER = "plant-manager"
+PLANT_WRITABLE_REFERENCE_FIELDS = (
+    "x_studio_linked_task",
+    "x_studio_status",
+    "x_studio_date_stop",
+    "x_studio_completed_by",
+    "x_studio_notes",
+)
 
 
 @dataclass(frozen=True)
