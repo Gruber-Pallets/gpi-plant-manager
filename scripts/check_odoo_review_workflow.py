@@ -786,36 +786,28 @@ class XmlRpcReviewClient:
     def _post_acknowledgement(self, webhook_url: str, payload: dict) -> None:
         try:
             response = requests.post(webhook_url, json=payload, timeout=_RPC_TIMEOUT_SECONDS)
-        except (requests.Timeout, requests.ConnectionError):
+        except requests.RequestException:
             raise UnknownWebhookOutcome from None
-        except requests.RequestException:
-            raise SafeRuntimeError("duplicate review webhook failed safely") from None
-        try:
-            response.raise_for_status()
-        except requests.RequestException:
-            raise SafeRuntimeError("duplicate review webhook failed safely") from None
         if response.status_code != 200:
-            raise SafeRuntimeError("native webhook acknowledgement is invalid")
+            raise UnknownWebhookOutcome
         try:
             acknowledgement = response.json()
         except ValueError:
-            raise SafeRuntimeError("native webhook acknowledgement is invalid") from None
+            raise UnknownWebhookOutcome from None
         if type(acknowledgement) is not dict or acknowledgement != {"status": "ok"}:
-            raise SafeRuntimeError("native webhook acknowledgement is invalid")
+            raise UnknownWebhookOutcome
 
     def _post_rejection(self, webhook_url: str, payload: dict) -> None:
         try:
             response = requests.post(webhook_url, json=payload, timeout=_RPC_TIMEOUT_SECONDS)
-        except (requests.Timeout, requests.ConnectionError):
-            raise UnknownWebhookOutcome from None
         except requests.RequestException:
-            raise SafeRuntimeError("duplicate negative webhook failed safely") from None
+            raise UnknownWebhookOutcome from None
         try:
             rejection = response.json()
         except ValueError:
-            raise SafeRuntimeError("native webhook rejection is invalid") from None
+            raise UnknownWebhookOutcome from None
         if response.status_code != 500 or rejection != {"status": "error"}:
-            raise SafeRuntimeError("native webhook rejection is invalid")
+            raise UnknownWebhookOutcome
 
     def _read_action_result(
         self,
@@ -916,6 +908,40 @@ class XmlRpcReviewClient:
                 )
             raise SafeRuntimeError("review action readback did not match the requested transition")
         return result
+
+    def _call_rejection_and_readback(
+        self,
+        webhook_url: str,
+        payload: dict,
+        *,
+        source: str,
+        source_id: str,
+        task_id: int,
+        before: dict,
+    ) -> None:
+        unknown_outcome = False
+        try:
+            self._post_rejection(webhook_url, payload)
+        except UnknownWebhookOutcome:
+            unknown_outcome = True
+        try:
+            after = self._read_action_result(
+                source=source,
+                source_id=source_id,
+                task_id=task_id,
+            )
+        except SafeRuntimeError:
+            if unknown_outcome:
+                raise UnresolvedWebhookOutcome(
+                    "negative review webhook has an unknown outcome after readback"
+                ) from None
+            raise
+        if unknown_outcome:
+            raise UnresolvedWebhookOutcome(
+                "negative review webhook has an unknown outcome after readback"
+            )
+        if after != before:
+            raise SafeRuntimeError("duplicate rejected action changed state")
 
     def exercise(
         self,
@@ -1153,19 +1179,17 @@ class XmlRpcReviewClient:
                 }
                 verify_mutation(webhook=True)
                 try:
-                    self._post_rejection(webhook_url, payload)
-                except UnknownWebhookOutcome:
+                    self._call_rejection_and_readback(
+                        webhook_url,
+                        payload,
+                        source="GPI Plant Manager",
+                        source_id=source_ids[index],
+                        task_id=created_tasks[index],
+                        before=before,
+                    )
+                except UnresolvedWebhookOutcome:
                     webhook_outcome_unknown = True
-                    raise UnresolvedWebhookOutcome(
-                        "negative review webhook has an unknown outcome"
-                    ) from None
-                after = self._read_action_result(
-                    source="GPI Plant Manager",
-                    source_id=source_ids[index],
-                    task_id=created_tasks[index],
-                )
-                if after != before:
-                    raise SafeRuntimeError("duplicate rejected action changed state")
+                    raise
 
             rejected(0, unexpected=True)
             rejected(0, actorUserId=alternate_user_id)

@@ -856,7 +856,7 @@ def test_timeout_with_failed_readback_remains_an_explicit_unknown(monkeypatch) -
         {"ok": True},
     ],
 )
-def test_native_webhook_requires_exact_acknowledgement(monkeypatch, body: dict) -> None:
+def test_non_native_200_body_is_an_unknown_outcome(monkeypatch, body: dict) -> None:
     class Response:
         status_code = 200
 
@@ -868,11 +868,23 @@ def test_native_webhook_requires_exact_acknowledgement(monkeypatch, body: dict) 
 
     monkeypatch.setattr(checker.requests, "post", lambda *_args, **_kwargs: Response())
 
-    with pytest.raises(checker.SafeRuntimeError, match="acknowledgement"):
+    with pytest.raises(checker.UnknownWebhookOutcome):
         bare_rpc_client()._post_acknowledgement("https://example.invalid/redacted", {})
 
 
-def test_native_webhook_rejects_non_200_success_status(monkeypatch) -> None:
+def test_exact_native_200_is_a_known_acknowledgement(monkeypatch) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"status": "ok"}
+
+    monkeypatch.setattr(checker.requests, "post", lambda *_args, **_kwargs: Response())
+
+    bare_rpc_client()._post_acknowledgement("https://example.invalid/redacted", {})
+
+
+def test_non_native_success_status_is_an_unknown_outcome(monkeypatch) -> None:
     class Response:
         status_code = 201
 
@@ -884,8 +896,85 @@ def test_native_webhook_rejects_non_200_success_status(monkeypatch) -> None:
 
     monkeypatch.setattr(checker.requests, "post", lambda *_args, **_kwargs: Response())
 
-    with pytest.raises(checker.SafeRuntimeError, match="acknowledgement"):
+    with pytest.raises(checker.UnknownWebhookOutcome):
         bare_rpc_client()._post_acknowledgement("https://example.invalid/redacted", {})
+
+
+@pytest.mark.parametrize("status_code", [502, 504])
+def test_gateway_response_triggers_positive_identity_readback(
+    monkeypatch, status_code: int
+) -> None:
+    client = bare_rpc_client()
+    events: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            raise checker.requests.HTTPError
+
+        def json(self) -> dict:
+            pytest.fail("a gateway body is not a native Odoo response")
+
+    response = Response()
+    response.status_code = status_code
+    monkeypatch.setattr(
+        checker.requests,
+        "post",
+        lambda *_args, **_kwargs: events.append("post") or response,
+    )
+    monkeypatch.setattr(
+        client,
+        "_read_action_result",
+        lambda **_kwargs: events.append("readback") or action_result(status="Requested"),
+    )
+
+    with pytest.raises(checker.UnresolvedWebhookOutcome, match="unknown outcome"):
+        client._call_action_and_readback(
+            "https://example.invalid/redacted",
+            {"action": "accept"},
+            source="GPI Plant Manager",
+            source_id="GPI-PM-CHECK-redacted",
+            task_id=40,
+            landed=lambda value: value["improvement"]["status"] == "In-Progress",
+        )
+
+    assert events == ["post", "readback"]
+
+
+def test_malformed_positive_body_triggers_identity_readback(monkeypatch) -> None:
+    client = bare_rpc_client()
+    events: list[str] = []
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            raise ValueError
+
+    monkeypatch.setattr(
+        checker.requests,
+        "post",
+        lambda *_args, **_kwargs: events.append("post") or Response(),
+    )
+    monkeypatch.setattr(
+        client,
+        "_read_action_result",
+        lambda **_kwargs: events.append("readback") or action_result(status="Requested"),
+    )
+
+    with pytest.raises(checker.UnresolvedWebhookOutcome, match="unknown outcome"):
+        client._call_action_and_readback(
+            "https://example.invalid/redacted",
+            {"action": "accept"},
+            source="GPI Plant Manager",
+            source_id="GPI-PM-CHECK-redacted",
+            task_id=40,
+            landed=lambda value: value["improvement"]["status"] == "In-Progress",
+        )
+
+    assert events == ["post", "readback"]
 
 
 def test_negative_exercise_requires_exact_native_error_response(monkeypatch) -> None:
@@ -897,5 +986,55 @@ def test_negative_exercise_requires_exact_native_error_response(monkeypatch) -> 
 
     monkeypatch.setattr(checker.requests, "post", lambda *_args, **_kwargs: Response())
 
-    with pytest.raises(checker.SafeRuntimeError, match="rejection"):
+    with pytest.raises(checker.UnknownWebhookOutcome):
         bare_rpc_client()._post_rejection("https://example.invalid/redacted", {})
+
+
+def test_exact_native_500_is_a_known_rejection(monkeypatch) -> None:
+    class Response:
+        status_code = 500
+
+        def json(self) -> dict:
+            return {"status": "error"}
+
+    monkeypatch.setattr(checker.requests, "post", lambda *_args, **_kwargs: Response())
+
+    bare_rpc_client()._post_rejection("https://example.invalid/redacted", {})
+
+
+@pytest.mark.parametrize("status_code", [500, 502, 504])
+def test_non_native_negative_response_reads_back_then_defers_cleanup(
+    monkeypatch, status_code: int
+) -> None:
+    client = bare_rpc_client()
+    events: list[str] = []
+
+    class Response:
+        def json(self) -> dict:
+            raise ValueError
+
+    response = Response()
+    response.status_code = status_code
+    monkeypatch.setattr(
+        checker.requests,
+        "post",
+        lambda *_args, **_kwargs: events.append("post") or response,
+    )
+    monkeypatch.setattr(
+        client,
+        "_read_action_result",
+        lambda **_kwargs: events.append("readback") or action_result(status="Requested"),
+    )
+    before = action_result(status="Requested")
+
+    with pytest.raises(checker.UnresolvedWebhookOutcome, match="unknown outcome"):
+        client._call_rejection_and_readback(
+            "https://example.invalid/redacted",
+            {"unexpected": True},
+            source="GPI Plant Manager",
+            source_id="GPI-PM-CHECK-redacted",
+            task_id=40,
+            before=before,
+        )
+
+    assert events == ["post", "readback"]

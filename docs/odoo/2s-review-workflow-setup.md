@@ -23,10 +23,14 @@ Official Odoo 19 evidence:
 - [Odoo 19 automation documentation](https://www.odoo.com/documentation/19.0/applications/studio/automated_actions.html)
 
 Accept only HTTP 200 with the exact JSON object `{"status":"ok"}` as an
-acknowledgement. A mismatched, missing, duplicate, or stale readback is failure
-or conflict; neither application invents success. After a timeout or unknown
-outcome, read the exact identity first. If readback proves the transition
-landed, return that authoritative state. Otherwise do not retry until the
+acknowledgement. For a deliberately invalid negative exercise, accept only the
+native HTTP 500 with exact JSON `{"status":"error"}` as a known Odoo rejection.
+Every other HTTP status or body—including 502/503/504 gateway responses and
+malformed JSON—is an unknown outcome, not a known rejection. A mismatched,
+missing, duplicate, or stale readback is failure or conflict; neither
+application invents success. After a timeout or unknown response, read the
+exact identity first. If positive-action readback proves the transition landed,
+return that authoritative state. Otherwise do not retry or clean up until the
 caller has handled the unresolved outcome.
 
 ## Permanent contract
@@ -787,17 +791,21 @@ Complete, and Move to L10, checks empty linked work orders and unchanged
 original notes, restores its wrong-project fixture, and archives only the
 name-verified IDs it created. Each positive action requires the native
 acknowledgement and then performs a separate exact XML-RPC readback. A timeout
-also performs that readback before the command can decide whether the action
-landed; it never blindly retries.
+or any non-native response also performs that readback before the command can
+decide whether the action landed; it never blindly retries. Negative exercises
+also read back exact identity after an unknown response, then treat the result
+as unresolved because unchanged immediate state cannot prove a proxied request
+will not land later.
 
 Before the first create, the exercise proves that all four random source IDs
 and exact random task names are absent. Cleanup re-searches those identities
 with `active_test=False`, validates each exact row title and linked task name,
 and never relies only on IDs returned by RPC. If an XML-RPC mutation response
-is lost, or a webhook is still unlanded after timeout readback, it performs that
-ownership reconciliation but deliberately defers archival and exits with a
-fixed unknown-outcome error. This prevents cleanup from racing a request that
-may still commit. After the remote request has certainly stopped, an operator
+is lost, or a webhook remains unresolved after timeout, gateway, or malformed
+response readback, it performs that ownership reconciliation but deliberately
+defers archival and exits with a fixed unknown-outcome error. This prevents
+cleanup from racing a request that may still commit. After the remote request
+has certainly stopped, an operator
 must locate the most recent duplicate-only rows by the documented disposable
 title prefix, validate their source identity/task name relationship, and archive
 only those disposable records. The checker never reports cleanup success for
