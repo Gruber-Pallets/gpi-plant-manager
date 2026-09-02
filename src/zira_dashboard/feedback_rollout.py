@@ -57,7 +57,11 @@ _SELECTION_DIAGNOSTICS = frozenset(
         "x_studio_status:In-Progress",
         "x_studio_status:Completed",
         "x_studio_status:Declined",
-        *(f"x_studio_type:{item.odoo_value}" for item in FEEDBACK_TYPES),
+        *(
+            f"x_studio_type:{item.odoo_value}"
+            for item in FEEDBACK_TYPES
+            if item.odoo_value is not None
+        ),
     }
 )
 

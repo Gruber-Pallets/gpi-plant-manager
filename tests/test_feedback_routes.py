@@ -3,15 +3,41 @@
 from io import BytesIO
 
 import pytest
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from zira_dashboard import feedback_store, odoo_client
+from zira_dashboard import feedback_store, feedback_submitters, odoo_client
 from zira_dashboard.app import app
 from zira_dashboard.feedback_image import ImageRejected, MAX_INPUT_BYTES
 from zira_dashboard.routes import feedback as feedback_route
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def resolved_timeclock_submitter(monkeypatch):
+    monkeypatch.setattr(
+        feedback_submitters,
+        "resolve_timeclock",
+        lambda employee_id: feedback_submitters.ResolvedSubmitter(
+            employee_id=employee_id,
+            name="Ana",
+            email="ana@gruberpallets.com",
+        ),
+    )
+
+
+def private_client(upn: str) -> TestClient:
+    test_app = FastAPI()
+
+    @test_app.middleware("http")
+    async def set_identity(request: Request, call_next):
+        request.state.user_upn = upn
+        return await call_next(request)
+
+    test_app.include_router(feedback_route.router)
+    return TestClient(test_app)
 
 
 def valid_png_bytes() -> bytes:
@@ -46,14 +72,20 @@ def test_post_feedback_saves_locally_without_calling_odoo(monkeypatch):
 
     response = client.post(
         "/feedback",
-        data={"type": "bug", "description": "  It broke  ", "page_url": "/recycling"},
+        data={
+            "type": "bug",
+            "description": "  It broke  ",
+            "page_url": "/recycling",
+            "submitter_employee_id": "41",
+        },
     )
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "id": 12, "task_delivery": "queued"}
     assert captured == {
         "message": "It broke",
-        "submitter": None,
+        "submitter": "ana@gruberpallets.com",
+        "submitter_employee_odoo_id": 41,
         "page_url": "/recycling",
         "task_type": "bug",
         "status": "requested",
@@ -72,7 +104,12 @@ def test_post_feedback_still_succeeds_when_odoo_is_unavailable(monkeypatch):
     )
 
     response = client.post(
-        "/feedback", data={"type": "feature", "description": "New view"}
+        "/feedback",
+        data={
+            "type": "feature",
+            "description": "New view",
+            "submitter_employee_id": "41",
+        },
     )
 
     assert response.status_code == 200
@@ -90,7 +127,12 @@ def test_post_feedback_saves_each_physical_type_without_coercion(monkeypatch, ta
     )
 
     response = client.post(
-        "/feedback", data={"type": task_type, "description": "Floor feedback"}
+        "/feedback",
+        data={
+            "type": task_type,
+            "description": "Floor feedback",
+            "submitter_employee_id": "41",
+        },
     )
 
     assert response.status_code == 200
@@ -125,7 +167,7 @@ def test_post_feedback_normalizes_one_optional_image_from_decoded_content(monkey
 
     response = client.post(
         "/feedback",
-        data={"type": "bug", "description": "See shot"},
+        data={"type": "bug", "description": "See shot", "submitter_employee_id": "41"},
         files={"screenshot": ("not-an-image.pdf", valid_png_bytes(), "application/pdf")},
     )
 
@@ -151,7 +193,11 @@ def test_post_feedback_reads_at_most_the_image_limit_plus_one_byte(monkeypatch):
 
     response = client.post(
         "/feedback",
-        data={"type": "bug", "description": "Large shot"},
+        data={
+            "type": "bug",
+            "description": "Large shot",
+            "submitter_employee_id": "41",
+        },
         files={
             "screenshot": (
                 "large.png",
@@ -180,7 +226,7 @@ def test_post_feedback_maps_rejected_image_to_safe_client_error(monkeypatch):
 
     response = client.post(
         "/feedback",
-        data={"type": "bug", "description": "See shot"},
+        data={"type": "bug", "description": "See shot", "submitter_employee_id": "41"},
         files={"screenshot": ("shot.png", b"not an image", "image/png")},
     )
 
@@ -218,11 +264,163 @@ def test_post_feedback_drops_unsafe_page_url(monkeypatch):
 
     response = client.post(
         "/feedback",
-        data={"type": "bug", "description": "x", "page_url": "javascript:alert(1)"},
+        data={
+            "type": "bug",
+            "description": "x",
+            "page_url": "javascript:alert(1)",
+            "submitter_employee_id": "41",
+        },
     )
 
     assert response.status_code == 200
     assert captured["page_url"] is None
+
+
+def test_post_feedback_requires_timeclock_employee_without_private_identity(monkeypatch):
+    monkeypatch.setattr(
+        feedback_store,
+        "create_submission",
+        lambda **values: (_ for _ in ()).throw(AssertionError(values)),
+        raising=False,
+    )
+
+    response = client.post(
+        "/feedback",
+        data={
+            "type": "bug",
+            "description": "Missing employee",
+            "page_url": "/private-looking-page",
+            "is_private": "true",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"ok": False, "error": "Choose your name and try again."}
+
+
+def test_post_feedback_uses_authenticated_upn_and_ignores_posted_employee_id(
+    monkeypatch,
+):
+    captured = {}
+    monkeypatch.setattr(
+        feedback_store,
+        "create_submission",
+        lambda **values: captured.update(values) or 47,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        feedback_submitters,
+        "resolve_timeclock",
+        lambda employee_id: (_ for _ in ()).throw(AssertionError(employee_id)),
+    )
+    monkeypatch.setattr(
+        feedback_submitters,
+        "resolve_private",
+        lambda upn: feedback_submitters.ResolvedSubmitter(
+            employee_id=52,
+            name="Private User",
+            email=upn.strip().lower(),
+        ),
+    )
+
+    response = private_client(" Private@Example.com ").post(
+        "/feedback",
+        data={
+            "type": "bug",
+            "description": "Private report",
+            "submitter_employee_id": "not-an-id",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["submitter"] == "private@example.com"
+    assert captured["submitter_employee_odoo_id"] == 52
+
+
+def test_post_feedback_rejects_unresolved_submitter(monkeypatch):
+    monkeypatch.setattr(
+        feedback_submitters,
+        "resolve_timeclock",
+        lambda _employee_id: (_ for _ in ()).throw(
+            feedback_submitters.SubmitterError("not exact")
+        ),
+    )
+
+    response = client.post(
+        "/feedback",
+        data={
+            "type": "bug",
+            "description": "Unknown employee",
+            "submitter_employee_id": "99",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"ok": False, "error": "Choose your name and try again."}
+
+
+def test_post_feedback_rejects_unbounded_employee_id_text(monkeypatch):
+    monkeypatch.setattr(
+        feedback_store,
+        "create_submission",
+        lambda **values: (_ for _ in ()).throw(AssertionError(values)),
+        raising=False,
+    )
+
+    response = client.post(
+        "/feedback",
+        data={
+            "type": "bug",
+            "description": "Bad employee id",
+            "submitter_employee_id": "9" * 5000,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"ok": False, "error": "Choose your name and try again."}
+
+
+def test_post_feedback_rejects_repair_without_inserting(monkeypatch):
+    monkeypatch.setattr(
+        feedback_store,
+        "create_submission",
+        lambda **values: (_ for _ in ()).throw(AssertionError(values)),
+        raising=False,
+    )
+
+    response = client.post(
+        "/feedback",
+        data={
+            "type": "repair",
+            "description": "Fix the lift",
+            "submitter_employee_id": "41",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"ok": False, "error": "Unsupported feedback type."}
+
+
+def test_post_feedback_accepts_two_s_improvement(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        feedback_store,
+        "create_submission",
+        lambda **values: captured.update(values) or 48,
+        raising=False,
+    )
+
+    response = client.post(
+        "/feedback",
+        data={
+            "type": "two_s_improvement",
+            "description": "Move the rack",
+            "submitter_employee_id": "41",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["task_type"] == "two_s_improvement"
 
 
 def test_my_feedback_returns_canonical_type_labels_including_legacy_bug(monkeypatch):

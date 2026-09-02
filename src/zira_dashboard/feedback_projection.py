@@ -27,7 +27,11 @@ STATUS_VALUES = {
     "completed": "Completed",
     "declined": "Declined",
 }
-TYPE_VALUES = {item.value: item.odoo_value for item in FEEDBACK_TYPES}
+TYPE_VALUES = {
+    item.value: item.odoo_value
+    for item in FEEDBACK_TYPES
+    if item.odoo_value is not None
+}
 
 _BINARY_FIELDS = {
     "before": "x_studio_image",
@@ -404,6 +408,8 @@ def build_projection(
         raise ValueError("unsupported feedback status")
     task_type = feedback.get("task_type")
     canonical_type = feedback_type_or_legacy_bug(task_type)
+    if canonical_type.odoo_value is None:
+        raise ValueError("unsupported feedback type")
 
     source_id = source_id_for(feedback_id)
     fields: dict[str, object] = {

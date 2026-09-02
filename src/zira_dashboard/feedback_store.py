@@ -76,6 +76,19 @@ def _nonnegative_signed_64(value: object, label: str) -> int:
     return value
 
 
+def _normalized_submitter_email(value: object) -> str:
+    if type(value) is not str:
+        raise ValueError("submitter email must be valid")
+    normalized = value.strip().casefold()
+    if (
+        not normalized
+        or normalized.count("@") != 1
+        or any(character.isspace() for character in normalized)
+    ):
+        raise ValueError("submitter email must be valid")
+    return normalized
+
+
 def _nonnegative_numeric_aggregate(value: object, label: str) -> int:
     """Convert only PostgreSQL's finite integral numeric aggregate shape."""
     if type(value) is Decimal:
@@ -365,23 +378,32 @@ def insert(
 def create_submission(
     *,
     message: str,
-    submitter: str | None,
+    submitter: str,
+    submitter_employee_odoo_id: int,
     page_url: str | None,
     task_type: str,
     status: str = "requested",
     before_image: NormalizedImage | None = None,
 ) -> int:
     """Atomically save new feedback, its optional image, and Odoo sync intent."""
-    feedback_type(task_type)
+    canonical_type = feedback_type(task_type)
+    if canonical_type.odoo_value is None:
+        raise ValueError("unsupported feedback type")
     if status != "requested":
         raise ValueError("new feedback must start requested")
+    safe_employee_id = _positive_signed_64(
+        submitter_employee_odoo_id, "submitter employee id"
+    )
+    safe_submitter = _normalized_submitter_email(submitter)
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO feedback "
-            "(submitter, page_url, task_type, message, status, lifecycle_origin, "
+            "(submitter, submitter_employee_odoo_id, page_url, task_type, message, "
+            "status, lifecycle_origin, "
             "projection_version, updated_at) "
-            "VALUES (%s, %s, %s, %s, 'requested', 'local', 1, now()) RETURNING id",
-            (submitter, page_url, task_type, message),
+            "VALUES (%s, %s, %s, %s, %s, 'requested', 'local', 1, now()) "
+            "RETURNING id",
+            (safe_submitter, safe_employee_id, page_url, task_type, message),
         )
         feedback_id = int(cur.fetchone()["id"])
         if before_image is not None:

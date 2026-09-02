@@ -48,7 +48,8 @@ def test_create_submission_inserts_feedback_image_and_sync_intent_atomically(mon
 
     feedback_id = feedback_store.create_submission(
         message="A safe report",
-        submitter="tester@gruberpallets.com",
+        submitter=" Tester@GruberPallets.com ",
+        submitter_employee_odoo_id=41,
         page_url="/recycling",
         task_type="bug",
         status="requested",
@@ -67,6 +68,7 @@ def test_create_submission_inserts_feedback_image_and_sync_intent_atomically(mon
     assert "'requested', 'local', 1, now()" in feedback_sql
     assert feedback_params == (
         "tester@gruberpallets.com",
+        41,
         "/recycling",
         "bug",
         "A safe report",
@@ -86,7 +88,8 @@ def test_create_submission_without_image_still_creates_sync_intent(monkeypatch):
 
     feedback_id = feedback_store.create_submission(
         message="No picture",
-        submitter=None,
+        submitter="ana@example.com",
+        submitter_employee_odoo_id=41,
         page_url=None,
         task_type="feature",
     )
@@ -107,14 +110,15 @@ def test_create_submission_accepts_each_physical_type(monkeypatch, task_type):
 
     feedback_id = feedback_store.create_submission(
         message="Floor feedback",
-        submitter=None,
+        submitter="ana@example.com",
+        submitter_employee_odoo_id=41,
         page_url=None,
         task_type=task_type,
     )
 
     assert feedback_id == 42
     assert transactions == [cursor]
-    assert cursor.calls[0][1][2] == task_type
+    assert cursor.calls[0][1][3] == task_type
 
 
 @pytest.mark.parametrize(
@@ -136,10 +140,68 @@ def test_create_submission_rejects_invalid_initial_state_before_opening_transact
     with pytest.raises(ValueError, match=message):
         feedback_store.create_submission(
             message="No",
-            submitter=None,
+            submitter="ana@example.com",
+            submitter_employee_odoo_id=41,
             page_url=None,
             task_type=task_type,
             status=status,
+        )
+
+
+@pytest.mark.parametrize("employee_id", [None, True, 0, -1, MAX_SIGNED_64 + 1])
+def test_create_submission_rejects_invalid_submitter_employee_id_before_transaction(
+    monkeypatch, employee_id
+):
+    monkeypatch.setattr(
+        feedback_store.db,
+        "cursor",
+        lambda: (_ for _ in ()).throw(AssertionError("transaction opened")),
+    )
+
+    with pytest.raises(ValueError, match="submitter employee id"):
+        feedback_store.create_submission(
+            message="No",
+            submitter="ana@example.com",
+            submitter_employee_odoo_id=employee_id,
+            page_url=None,
+            task_type="bug",
+        )
+
+
+def test_create_submission_rejects_external_repair_before_transaction(monkeypatch):
+    monkeypatch.setattr(
+        feedback_store.db,
+        "cursor",
+        lambda: (_ for _ in ()).throw(AssertionError("transaction opened")),
+    )
+
+    with pytest.raises(ValueError, match="unsupported feedback type"):
+        feedback_store.create_submission(
+            message="No",
+            submitter="ana@example.com",
+            submitter_employee_odoo_id=41,
+            page_url=None,
+            task_type="repair",
+        )
+
+
+@pytest.mark.parametrize("submitter", [None, "", "not-an-email", "two @example.com"])
+def test_create_submission_rejects_invalid_submitter_email_before_transaction(
+    monkeypatch, submitter
+):
+    monkeypatch.setattr(
+        feedback_store.db,
+        "cursor",
+        lambda: (_ for _ in ()).throw(AssertionError("transaction opened")),
+    )
+
+    with pytest.raises(ValueError, match="submitter email"):
+        feedback_store.create_submission(
+            message="No",
+            submitter=submitter,
+            submitter_employee_odoo_id=41,
+            page_url=None,
+            task_type="bug",
         )
 
 

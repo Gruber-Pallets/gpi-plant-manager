@@ -97,6 +97,11 @@ def assert_current_claim_predicate(statement: str) -> None:
     assert "claim_token = %s" in statement
 
 
+def test_owner_task_contract_excludes_external_repair_type():
+    assert "repair" not in delivery._FEEDBACK_TYPE_VALUES
+    assert "two_s_improvement" in delivery._FEEDBACK_TYPE_VALUES
+
+
 def test_claim_due_uses_skip_locked_and_returns_two_minute_lease(monkeypatch):
     monkeypatch.setattr(delivery, "uuid4", lambda: TOKEN)
     cursor = use_cursor(
@@ -306,7 +311,9 @@ def test_load_snapshot_locks_only_feedback_not_the_optional_image_join(monkeypat
     assert "FOR SHARE OF f" in normalized_sql(cursor, 0)
 
 
-@pytest.mark.parametrize("task_type", ["floor_issue", "floor_suggestion"])
+@pytest.mark.parametrize(
+    "task_type", ["floor_issue", "floor_suggestion", "two_s_improvement"]
+)
 def test_load_snapshot_accepts_each_canonical_physical_type(monkeypatch, task_type):
     cursor = use_cursor(monkeypatch, [valid_snapshot_row(task_type=task_type)])
 
@@ -315,7 +322,7 @@ def test_load_snapshot_accepts_each_canonical_physical_type(monkeypatch, task_ty
     assert item.task_type == task_type
     assert cursor.calls[0][1] == (
         42,
-        ["bug", "feature", "floor_issue", "floor_suggestion"],
+        ["bug", "feature", "floor_issue", "floor_suggestion", "two_s_improvement"],
     )
 
 

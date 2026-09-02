@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from .. import feedback_store, odoo_client
+from .. import feedback_store, feedback_submitters, odoo_client
 from ..feedback_content import safe_page_url
 from ..feedback_image import ImageRejected, MAX_INPUT_BYTES, normalize_image
 from ..feedback_types import feedback_type, feedback_type_or_legacy_bug
@@ -67,10 +67,14 @@ async def submit_feedback(
     type: str = Form("bug"),
     description: str = Form(...),
     page_url: str | None = Form(None),
+    submitter_employee_id: str | None = Form(None),
     screenshot: UploadFile | None = File(default=None),
 ) -> JSONResponse:
     try:
-        kind = feedback_type(type).value
+        canonical_type = feedback_type(type)
+        if canonical_type.behavior == "external":
+            raise ValueError("external feedback type")
+        kind = canonical_type.value
     except ValueError:
         return JSONResponse(
             {"ok": False, "error": "Unsupported feedback type."}, status_code=400
@@ -80,7 +84,28 @@ async def submit_feedback(
         return JSONResponse({"ok": False, "error": "Description is required."},
                             status_code=400)
 
-    submitter = getattr(request.state, "user_upn", None)
+    private_upn = getattr(request.state, "user_upn", None)
+    try:
+        if private_upn is not None:
+            resolved_submitter = feedback_submitters.resolve_private(private_upn)
+        else:
+            raw_employee_id = (submitter_employee_id or "").strip()
+            if not raw_employee_id.isascii() or not raw_employee_id.isdecimal():
+                raise feedback_submitters.SubmitterError("employee id is required")
+            try:
+                parsed_employee_id = int(raw_employee_id)
+            except ValueError as error:
+                raise feedback_submitters.SubmitterError(
+                    "employee id is invalid"
+                ) from error
+            resolved_submitter = feedback_submitters.resolve_timeclock(
+                parsed_employee_id
+            )
+    except feedback_submitters.SubmitterError:
+        return JSONResponse(
+            {"ok": False, "error": "Choose your name and try again."},
+            status_code=400,
+        )
     safe_url = safe_page_url(page_url)
 
     before_image = None
@@ -96,7 +121,8 @@ async def submit_feedback(
 
     new_id = feedback_store.create_submission(
         message=text,
-        submitter=submitter,
+        submitter=resolved_submitter.email,
+        submitter_employee_odoo_id=resolved_submitter.employee_id,
         page_url=safe_url,
         task_type=kind,
         status="requested",

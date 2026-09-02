@@ -194,6 +194,7 @@ def test_verify_readback_accepts_odoo_normalized_literal_quotes_in_note():
         ("feature", "Digital - New Feature"),
         ("floor_issue", "Physical - Issue"),
         ("floor_suggestion", "Physical - Suggestion"),
+        ("two_s_improvement", "2s Improvement"),
     ],
 )
 def test_projection_uses_authoritative_odoo_type(local_value, odoo_value):
@@ -206,6 +207,13 @@ def test_projection_uses_authoritative_odoo_type(local_value, odoo_value):
     )
 
     assert projected.fields["x_studio_type"] == odoo_value
+
+
+def test_projection_contract_excludes_external_repair_type():
+    from zira_dashboard import feedback_projection
+
+    assert "repair" not in feedback_projection.TYPE_VALUES
+    assert None not in feedback_projection.TYPE_VALUES.values()
 
 
 def test_missing_optional_values_and_remote_sync_tokens_are_never_emitted():

@@ -33,7 +33,9 @@ _BLOCK_REASONS = frozenset(
     }
 )
 _MISSING_SUMMARY = "Task delivery record is missing."
-_FEEDBACK_TYPE_VALUES = tuple(item.value for item in FEEDBACK_TYPES)
+_FEEDBACK_TYPE_VALUES = tuple(
+    item.value for item in FEEDBACK_TYPES if item.odoo_value is not None
+)
 
 
 class StateTransitionError(RuntimeError):

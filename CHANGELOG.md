@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Know who sent timeclock feedback
+
+- **Plant Manager can now tell which review button was pressed and can safely identify the person sending it from the timeclock.**
+
 ### Keep the new review buttons in sync
 
 - **The three task apps now agree on the safe labels and history used by the new review buttons. The buttons are still hidden.**

@@ -16,6 +16,15 @@ def test_schema_defines_feedback_table():
         assert col in SCHEMA_DDL, f"missing column {col}"
 
 
+def test_feedback_schema_keeps_exact_submitter_employee_id():
+    assert "submitter_employee_odoo_id BIGINT" in SCHEMA_DDL
+    assert "ADD COLUMN IF NOT EXISTS submitter_employee_odoo_id BIGINT" in SCHEMA_DDL
+    assert "feedback_submitter_employee_odoo_id_check" in SCHEMA_DDL
+    assert "submitter_employee_odoo_id IS NULL OR submitter_employee_odoo_id > 0" in (
+        " ".join(SCHEMA_DDL.split())
+    )
+
+
 def test_schema_has_idempotent_alters_for_new_feedback_columns():
     assert "ADD COLUMN IF NOT EXISTS task_type" in SCHEMA_DDL
     assert "ADD COLUMN IF NOT EXISTS odoo_task_id" in SCHEMA_DDL
@@ -130,5 +139,5 @@ def test_feedback_active_attempt_belongs_to_same_feedback():
 
 def test_feedback_constraint_guards_are_table_scoped():
     ddl = " ".join(SCHEMA_DDL.split())
-    assert ddl.count("AND conrelid = 'feedback'::regclass") == 3
+    assert ddl.count("AND conrelid = 'feedback'::regclass") == 4
     assert "AND conrelid = 'feedback_odoo_sync'::regclass" in ddl

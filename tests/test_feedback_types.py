@@ -12,16 +12,39 @@ CONTRACT_PATH = Path(__file__).parents[1] / "docs/odoo/contracts/2s-review-workf
 
 def test_feedback_types_match_odoo_reference_order_and_values():
     assert [item.value for item in FEEDBACK_TYPES] == [
-        "bug", "feature", "floor_issue", "floor_suggestion"
+        "bug",
+        "feature",
+        "floor_issue",
+        "floor_suggestion",
+        "repair",
+        "two_s_improvement",
     ]
     assert [item.label for item in FEEDBACK_TYPES] == [
-        "Bug", "New Feature", "Floor Issue", "Floor Suggestion"
+        "Bug",
+        "New Feature",
+        "Floor Issue",
+        "Floor Suggestion",
+        "Repair",
+        "2s Improvement",
     ]
     assert [item.odoo_value for item in FEEDBACK_TYPES] == [
         "Digital",
         "Digital - New Feature",
         "Physical - Issue",
         "Physical - Suggestion",
+        None,
+        "2s Improvement",
+    ]
+
+
+def test_feedback_catalog_has_exact_six_routes():
+    assert [(item.label, item.group, item.behavior) for item in FEEDBACK_TYPES] == [
+        ("Bug", "reporting", "coding"),
+        ("New Feature", "reporting", "coding"),
+        ("Floor Issue", "reporting", "review"),
+        ("Floor Suggestion", "reporting", "review"),
+        ("Repair", "ready", "external"),
+        ("2s Improvement", "ready", "review"),
     ]
 
 
@@ -44,7 +67,9 @@ def test_dark_v3_contract_constants_match_the_shared_contract():
         "Declined",
     )
     assert feedback_types.REPAIR_URL == "https://www.gpimaintenance.com/request"
-    assert "2s Improvement" not in {item.odoo_value for item in FEEDBACK_TYPES}
+    assert [
+        item.odoo_value for item in FEEDBACK_TYPES if item.odoo_value is not None
+    ] == list(feedback_types.IMPROVEMENT_TYPE_VALUES)
 
 
 def test_canonical_v2_contract_fixture_has_exact_shared_values():

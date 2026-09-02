@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Literal
 
 
 IMPROVEMENT_CONTRACT_VERSION = 3
@@ -40,28 +41,59 @@ class FeedbackType:
     value: str
     label: str
     description: str
-    odoo_value: str
+    odoo_value: str | None
+    group: Literal["reporting", "ready"]
+    behavior: Literal["coding", "review", "external"]
 
 
 FEEDBACK_TYPES = (
-    FeedbackType("bug", "Bug", "Something in this app is broken", "Digital"),
+    FeedbackType(
+        "bug",
+        "Bug",
+        "Something in this app is broken",
+        "Digital",
+        "reporting",
+        "coding",
+    ),
     FeedbackType(
         "feature",
         "New Feature",
         "An idea to make this app better",
         "Digital - New Feature",
+        "reporting",
+        "coding",
     ),
     FeedbackType(
         "floor_issue",
         "Floor Issue",
         "Something wrong out on the floor",
         "Physical - Issue",
+        "reporting",
+        "review",
     ),
     FeedbackType(
         "floor_suggestion",
         "Floor Suggestion",
         "An idea for the team to consider",
         "Physical - Suggestion",
+        "reporting",
+        "review",
+    ),
+    FeedbackType(
+        "repair",
+        "Repair",
+        "Create a maintenance request",
+        None,
+        "ready",
+        "external",
+    ),
+    FeedbackType(
+        "two_s_improvement",
+        "2s Improvement",
+        "Work ready for the floor team",
+        "2s Improvement",
+        "ready",
+        "review",
     ),
 )
 _BY_VALUE = {item.value: item for item in FEEDBACK_TYPES}

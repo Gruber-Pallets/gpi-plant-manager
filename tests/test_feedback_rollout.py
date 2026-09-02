@@ -264,6 +264,7 @@ def test_preflight_returns_detached_partial_safe_diagnostics():
     (
         "x_studio_type:Physical - Issue",
         "x_studio_type:Physical - Suggestion",
+        "x_studio_type:2s Improvement",
     ),
 )
 def test_preflight_preserves_each_canonical_physical_type_diagnostic(missing_type):
@@ -285,6 +286,19 @@ def test_preflight_rejects_obsolete_generic_physical_type_diagnostic():
             missing_fields=(),
             wrong_types=(),
             missing_selections=("x_studio_type:Physical",),
+            source_value_present=True,
+        )
+
+
+def test_preflight_rejects_external_repair_type_diagnostic():
+    with pytest.raises(ValueError, match="diagnostics are malformed"):
+        PreflightReport(
+            database_uuid_matches=True,
+            company_matches=True,
+            fields_ok=False,
+            missing_fields=(),
+            wrong_types=(),
+            missing_selections=("x_studio_type:None",),
             source_value_present=True,
         )
 
@@ -527,6 +541,16 @@ def _contract_fields() -> dict[str, dict[str, object]]:
                 "type": "many2one",
                 "readonly": False,
                 "relation": "hr.employee",
+            },
+            "x_studio_linked_task": {
+                "type": "many2one",
+                "readonly": False,
+                "relation": "project.task",
+            },
+            "x_studio_linked_wo": {
+                "type": "many2one",
+                "readonly": False,
+                "relation": "maintenance.request",
             },
             "x_studio_notes": {"type": "html", "readonly": False},
             "x_studio_image": {"type": "binary", "readonly": False},

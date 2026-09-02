@@ -1806,6 +1806,7 @@ CREATE TABLE IF NOT EXISTS feedback (
   id           SERIAL PRIMARY KEY,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   submitter    TEXT,
+  submitter_employee_odoo_id BIGINT,
   page_url     TEXT,
   category     TEXT,
   message      TEXT NOT NULL,
@@ -1814,6 +1815,7 @@ CREATE TABLE IF NOT EXISTS feedback (
 );
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS task_type TEXT;
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS odoo_task_id BIGINT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS submitter_employee_odoo_id BIGINT;
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS status TEXT;
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS lifecycle_origin TEXT;
 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
@@ -1842,6 +1844,16 @@ BEGIN
     ALTER TABLE feedback ADD CONSTRAINT feedback_lifecycle_origin_check CHECK (
       lifecycle_origin IS NULL OR lifecycle_origin IN ('local', 'legacy_project_task')
     );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'feedback_submitter_employee_odoo_id_check'
+      AND conrelid = 'feedback'::regclass
+  ) THEN
+    ALTER TABLE feedback
+      ADD CONSTRAINT feedback_submitter_employee_odoo_id_check CHECK (
+        submitter_employee_odoo_id IS NULL OR submitter_employee_odoo_id > 0
+      );
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
