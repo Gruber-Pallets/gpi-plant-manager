@@ -105,7 +105,54 @@ def contract_fields(source_selection=None):
                 ["Physical - Suggestion", "Physical - Suggestion"],
             ],
         },
+        "x_studio_linked_task": {
+            "type": "many2one",
+            "readonly": False,
+            "relation": "project.task",
+        },
+        "x_studio_linked_wo": {
+            "type": "many2one",
+            "readonly": False,
+            "relation": "maintenance.request",
+        },
     }
+
+
+V1_TYPE_VALUES = {
+    "Digital",
+    "Digital - New Feature",
+    "Physical - Issue",
+    "Physical - Suggestion",
+}
+V2_TYPE_VALUES = V1_TYPE_VALUES | {"2s Improvement"}
+
+
+@pytest.mark.parametrize(
+    ("selection_values", "expected_version"),
+    [(V1_TYPE_VALUES, 1), (V2_TYPE_VALUES, 2)],
+)
+def test_contract_version_accepts_only_exact_known_type_sets(selection_values, expected_version):
+    assert improvements.odoo_contract_version(selection_values) == expected_version
+
+
+@pytest.mark.parametrize(
+    "selection_values",
+    [
+        V1_TYPE_VALUES - {"Physical - Suggestion"},
+        (V2_TYPE_VALUES - {"2s Improvement"}) | {"2S Improvement"},
+        V2_TYPE_VALUES | {"Unknown"},
+    ],
+)
+def test_contract_version_rejects_missing_renamed_or_extra_type_values(selection_values):
+    with pytest.raises(ContractError, match="type selection values"):
+        improvements.odoo_contract_version(selection_values)
+
+
+def test_linked_fields_are_readable_but_not_app_writable():
+    assert {"x_studio_linked_task", "x_studio_linked_wo"} <= improvements._READ_FIELDS
+    assert {"x_studio_linked_task", "x_studio_linked_wo"}.isdisjoint(
+        improvements.WRITABLE_TARGET_FIELDS
+    )
 
 
 def client_with(monkeypatch, executor, *, uid=None):

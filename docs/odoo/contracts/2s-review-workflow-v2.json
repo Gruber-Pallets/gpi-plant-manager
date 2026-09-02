@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "model": "x_2s_improvements",
+  "types": ["Digital", "Digital - New Feature", "Physical - Issue", "Physical - Suggestion", "2s Improvement"],
+  "reviewTypes": ["Physical - Issue", "Physical - Suggestion", "2s Improvement"],
+  "statuses": ["Requested", "In-Progress", "Completed", "Declined"],
+  "taskStates": {"accepted": "03_approved", "declined": "1_canceled", "completed": "1_done"},
+  "project": "GPI OS Manager - TASKS",
+  "stages": {"initial": "General", "meeting": "L10"},
+  "repairUrl": "https://www.gpimaintenance.com/request"
+}

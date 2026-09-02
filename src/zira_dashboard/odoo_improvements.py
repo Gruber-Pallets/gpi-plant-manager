@@ -17,13 +17,13 @@ from datetime import datetime
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from .feedback_types import FEEDBACK_TYPES
+from .feedback_types import IMPROVEMENT_STATUS_VALUES, IMPROVEMENT_TYPE_VALUES
 
 
 TARGET_MODEL = "x_2s_improvements"
 SOURCE_VALUE = "GPI Plant Manager"
 
-TARGET_FIELDS = frozenset(
+WRITABLE_TARGET_FIELDS = frozenset(
     {
         "x_name",
         "x_studio_source_id",
@@ -39,6 +39,8 @@ TARGET_FIELDS = frozenset(
         "x_studio_source",
     }
 )
+LINKED_TARGET_FIELDS = frozenset({"x_studio_linked_task", "x_studio_linked_wo"})
+TARGET_FIELDS = WRITABLE_TARGET_FIELDS | LINKED_TARGET_FIELDS
 
 ALLOWED = frozenset(
     {
@@ -86,10 +88,19 @@ _EXPECTED_TYPES = {
     "x_studio_source": "selection",
     "x_studio_status": "selection",
     "x_studio_type": "selection",
+    "x_studio_linked_task": "many2one",
+    "x_studio_linked_wo": "many2one",
 }
-_EXPECTED_STATUS_VALUES = frozenset({"Requested", "In-Progress", "Completed", "Declined"})
-_EXPECTED_TYPE_VALUES = frozenset(item.odoo_value for item in FEEDBACK_TYPES)
-_WRITABLE_TYPE_VALUES = _EXPECTED_TYPE_VALUES
+_EXPECTED_RELATIONS = {
+    "x_studio_submitted_by": "hr.employee",
+    "x_studio_completed_by": "hr.employee",
+    "x_studio_linked_task": "project.task",
+    "x_studio_linked_wo": "maintenance.request",
+}
+_EXPECTED_STATUS_VALUES = frozenset(IMPROVEMENT_STATUS_VALUES)
+_V1_TYPE_VALUES = frozenset(IMPROVEMENT_TYPE_VALUES[:-1])
+_V2_TYPE_VALUES = frozenset(IMPROVEMENT_TYPE_VALUES)
+_WRITABLE_TYPE_VALUES = _V2_TYPE_VALUES
 _WRITABLE_STATUS_VALUES = _EXPECTED_STATUS_VALUES
 
 
@@ -111,6 +122,15 @@ class TargetIdentityError(RuntimeError):
 
 class ContractError(RuntimeError):
     """An RPC or target-field request is outside the permanent contract."""
+
+
+def odoo_contract_version(selection_values: set[str]) -> int:
+    """Return 1 or 2 for an exact known contract; raise ContractError otherwise."""
+    if selection_values == _V1_TYPE_VALUES:
+        return 1
+    if selection_values == _V2_TYPE_VALUES:
+        return 2
+    raise ContractError("type selection values do not match a known contract")
 
 
 class MalformedMutationResponse(RuntimeError):
@@ -166,6 +186,7 @@ class ImprovementsConfig:
 class ImprovementContract:
     start_type: str
     stop_type: str
+    version: int = 1
 
 
 @dataclass(frozen=True)
@@ -194,7 +215,7 @@ class TargetInspection:
         allowed_diagnostics = {
             *TARGET_FIELDS,
             *(f"x_studio_status:{value}" for value in _EXPECTED_STATUS_VALUES),
-            *(f"x_studio_type:{value}" for value in _EXPECTED_TYPE_VALUES),
+            *(f"x_studio_type:{value}" for value in _V2_TYPE_VALUES),
         }
         for value in (
             self.missing_fields,
@@ -530,7 +551,7 @@ class ImprovementsClient:
                 raise ContractError("token fields are forbidden")
             if field_name == "active":
                 raise ContractError("active is not writable")
-            if field_name not in TARGET_FIELDS:
+            if field_name not in WRITABLE_TARGET_FIELDS:
                 raise ContractError("target payload contains a forbidden field")
             _validate_field_value(field_name, value, feedback_id)
         if require_identity and (
@@ -899,12 +920,9 @@ class ImprovementsClient:
                     wrong_types.add(field_name)
             elif field_name in _EXPECTED_TYPES and field_type != _EXPECTED_TYPES[field_name]:
                 wrong_types.add(field_name)
-            if (
-                field_name in {"x_studio_submitted_by", "x_studio_completed_by"}
-                and field_type == "many2one"
-            ):
+            if field_name in _EXPECTED_RELATIONS and field_type == "many2one":
                 relation = metadata.get("relation")
-                if relation != "hr.employee":
+                if relation != _EXPECTED_RELATIONS[field_name]:
                     wrong_relations.add(field_name)
 
         selection_fields = {
@@ -918,17 +936,25 @@ class ImprovementsClient:
                 selections[field_name] = _normalize_selection(result[field_name], field_name)
         if "x_studio_source" in selections:
             source_value_present = SOURCE_VALUE in selections["x_studio_source"]
-        expected_selections = {
-            "x_studio_status": _EXPECTED_STATUS_VALUES,
-            "x_studio_type": _EXPECTED_TYPE_VALUES,
-        }
-        for field_name, expected in expected_selections.items():
-            actual = selections.get(field_name)
-            if actual is None:
-                continue
-            missing_selections.update(f"{field_name}:{value}" for value in expected - actual)
-            if actual - expected:
-                wrong_selections.add(field_name)
+        status_values = selections.get("x_studio_status")
+        if status_values is not None:
+            missing_selections.update(
+                f"x_studio_status:{value}" for value in _EXPECTED_STATUS_VALUES - status_values
+            )
+            if status_values - _EXPECTED_STATUS_VALUES:
+                wrong_selections.add("x_studio_status")
+        type_values = selections.get("x_studio_type")
+        if type_values is not None:
+            try:
+                odoo_contract_version(type_values)
+            except ContractError:
+                missing_selections.update(
+                    f"x_studio_type:{value}" for value in _V1_TYPE_VALUES - type_values
+                )
+                if type_values - _V2_TYPE_VALUES or (
+                    not (_V1_TYPE_VALUES - type_values) and type_values != _V2_TYPE_VALUES
+                ):
+                    wrong_selections.add("x_studio_type")
 
         return TargetInspection(
             database_uuid_matches=database_uuid_matches,
@@ -957,7 +983,7 @@ class ImprovementsClient:
         if missing:
             raise ContractError("target contract is missing required fields")
 
-        for field_name in TARGET_FIELDS:
+        for field_name in WRITABLE_TARGET_FIELDS:
             metadata = result.get(field_name)
             if type(metadata) is not dict or metadata.get("readonly") is not False:
                 raise ContractError(f"{field_name} must be writable")
@@ -966,9 +992,9 @@ class ImprovementsClient:
             if result[field_name].get("type") != expected_type:
                 raise ContractError(f"{field_name} has the wrong type")
 
-        for field_name in {"x_studio_submitted_by", "x_studio_completed_by"}:
-            if result[field_name].get("relation") != "hr.employee":
-                raise ContractError("employee field has the wrong relation")
+        for field_name, relation in _EXPECTED_RELATIONS.items():
+            if result[field_name].get("relation") != relation:
+                raise ContractError(f"{field_name} has the wrong relation")
 
         start_type = result["x_studio_date_start"].get("type")
         stop_type = result["x_studio_date_stop"].get("type")
@@ -984,9 +1010,8 @@ class ImprovementsClient:
             raise ContractError("required source selection value is absent")
         if status_values != _EXPECTED_STATUS_VALUES:
             raise ContractError("status selection values do not match the contract")
-        if type_values != _EXPECTED_TYPE_VALUES:
-            raise ContractError("type selection values do not match the contract")
-        return ImprovementContract(start_type=start_type, stop_type=stop_type)
+        version = odoo_contract_version(type_values)
+        return ImprovementContract(start_type=start_type, stop_type=stop_type, version=version)
 
     def read_contract(self) -> ImprovementContract:
         """Read and validate target metadata without caching it."""

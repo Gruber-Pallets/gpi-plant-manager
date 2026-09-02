@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Get ready for one shared review task
+
+- **Plant Manager can now recognize both the old and new shared feedback lists.** This keeps today’s feedback working while the new review choices stay hidden until the full workflow is ready.
+
 ### Finish the shared review workflow plan
 
 - **The step-by-step plan for one shared Odoo review task is ready.** It covers the six light-bulb choices, the Maintenance link, and matching review buttons in Sales Manager and OS Manager. Nothing in the app has changed yet.

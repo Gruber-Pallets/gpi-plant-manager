@@ -1,6 +1,21 @@
 from dataclasses import dataclass
 
 
+IMPROVEMENT_CONTRACT_VERSION = 2
+IMPROVEMENT_TYPE_VALUES = (
+    "Digital",
+    "Digital - New Feature",
+    "Physical - Issue",
+    "Physical - Suggestion",
+    "2s Improvement",
+)
+REVIEW_IMPROVEMENT_TYPES = frozenset(
+    {"Physical - Issue", "Physical - Suggestion", "2s Improvement"}
+)
+IMPROVEMENT_STATUS_VALUES = ("Requested", "In-Progress", "Completed", "Declined")
+REPAIR_URL = "https://www.gpimaintenance.com/request"
+
+
 @dataclass(frozen=True)
 class FeedbackType:
     value: str
