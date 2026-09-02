@@ -55,9 +55,11 @@ def _install_console_capture(page: Page) -> list[str]:
           if (!url.includes('/people-performance/warnings/')) throw new Error('unexpected preview request');
           return new Response(
             '<section id="pp-warning-panel-content" data-warning-state="open" data-warning-key="111111111111111111111111" aria-labelledby="pp-warning-title">' +
-            '<header><h2 id="pp-warning-title">Trim Saw 1 production is unavailable</h2><button type="button" data-pp-warning-close aria-label="Close warning details">×</button></header>' +
-            '<p>Trim Saw 1 production could not be calculated.</p><p class="pp-warning-impact"><strong>People page impact:</strong> Production is hidden.</p>' +
-            '<footer><button type="button" data-pp-warning-action="check_again">Check again</button><a href="/wc/trim-saw-1?day=2026-09-02">Open work center dashboard</a></footer></section>',
+            '<header><h2 id="pp-warning-title">Production Meters Unavailable</h2><button type="button" data-pp-warning-close aria-label="Close warning details">×</button></header>' +
+            '<p>2 production meters are unavailable.</p><p class="pp-warning-impact"><strong>People page impact:</strong> Production details are hidden for the listed work centers.</p>' +
+            '<div class="pp-warning-members"><section class="pp-warning-member" aria-labelledby="pp-warning-member-1"><h3 id="pp-warning-member-1">Hand Build #1</h3><p>Plant Manager could not safely calculate this production result.</p></section>' +
+            '<section class="pp-warning-member" aria-labelledby="pp-warning-member-2"><h3 id="pp-warning-member-2">Trim Saw 1</h3><p>Plant Manager could not safely calculate this production result.</p>' +
+            '<footer><button type="button" data-pp-warning-action="check_again">Check again</button><a href="/wc/trim-saw-1?day=2026-09-02">Open work center dashboard</a></footer></section></div></section>',
             {status: 200, headers: {'X-People-Performance-Response': 'warning-detail'}}
           );
         };
@@ -104,20 +106,18 @@ def test_preview_contains_busy_people_fixture():
         {
             "key": "111111111111111111111111",
             "kind": "production_metric_unavailable",
-            "label": "Production metric unavailable: Trim Saw 1",
-            "summary": "Trim Saw 1 production could not be calculated.",
-        },
-        {
-            "key": "222222222222222222222222",
-            "kind": "production_metric_unavailable",
-            "label": "Production metric unavailable: Hand Build #1",
-            "summary": "Hand Build #1 production could not be calculated.",
+            "label": "Production Meters Unavailable",
+            "summary": "2 production meters are unavailable.",
+            "count": 2,
+            "accessible_label": "Production Meters Unavailable: 2",
         },
         {
             "key": "333333333333333333333333",
             "kind": "unmatched_forklift_calls",
             "label": "Unmatched forklift calls: 107",
             "summary": "Forklift calls could not be matched to active employees.",
+            "count": None,
+            "accessible_label": "Unmatched forklift calls: 107",
         },
     )
     result = _render_preview()
@@ -132,8 +132,9 @@ def test_preview_contains_busy_people_fixture():
     assert "6:00 AM" in html
     assert "11:30" in html
     assert "2:00 PM" in html
-    assert "Production metric unavailable: Trim Saw 1" in html
-    assert "Production metric unavailable: Hand Build #1" in html
+    assert html.count('data-warning-kind="production_metric_unavailable"') == 1
+    assert "Production Meters Unavailable" in html
+    assert '<span class="pp-warning-count" aria-hidden="true">2</span>' in html
     assert "Unmatched forklift calls: 107" in html
     assert html.count('class="pp-source-warnings"') == 1
     assert ">Production<" in html
@@ -324,7 +325,7 @@ def test_preview_warning_supports_native_keyboard_and_panel_action():
             browser.close()
 
 
-def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
+def test_preview_fits_all_manager_viewports_with_one_compact_manager_row():
     _render_preview()
     fixture_url = (OUT / "index.html").as_uri()
 
@@ -341,7 +342,7 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                 count_buttons = page.locator(".pp-counts > button")
                 warning_buttons = page.locator(".pp-source-warnings > .pp-warning-trigger")
                 assert count_buttons.count() == 3
-                assert warning_buttons.count() == 3
+                assert warning_buttons.count() == 2
                 assert count_buttons.evaluate_all(
                     "buttons => buttons.every(button => button.tagName === 'BUTTON' && button.type === 'button')"
                 )
@@ -373,7 +374,7 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                     warning_trigger.hover()
                     assert page.locator("#pp-warning-popover").is_visible()
                     assert (
-                        "Trim Saw 1 production could not be calculated."
+                        "2 production meters are unavailable."
                         in page.locator("#pp-warning-popover").text_content()
                     )
                 else:
@@ -459,6 +460,8 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                     () => ({
                       documentWidth: document.documentElement.scrollWidth,
                       bodyWidth: document.body.scrollWidth,
+                      managerHeight: document.querySelector('.pp-manager-strip')
+                        .getBoundingClientRect().height,
                       rowRights: [...document.querySelectorAll('.pp-row')]
                         .map(row => row.getBoundingClientRect().right),
                       scheduleLabelsDoNotOverlap: [...document.querySelectorAll('.pp-section-header')]
@@ -479,24 +482,30 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                         group.scrollWidth <= group.clientWidth + 0.5
                         && !['auto', 'scroll'].includes(getComputedStyle(group).overflowX)
                       )),
-                      primaryAndWarningsDoNotOverlap: (() => {
+                      warningsStayWithinPrimary: (() => {
                         const primary = document.querySelector('.pp-manager-primary');
                         const warnings = document.querySelector('.pp-source-warnings');
                         if (!primary || !warnings) return false;
                         const primaryBox = primary.getBoundingClientRect();
                         const warningBox = warnings.getBoundingClientRect();
-                        return warningBox.top >= primaryBox.bottom - 0.5;
+                        return warningBox.left >= primaryBox.left - 0.5
+                          && warningBox.right <= primaryBox.right + 0.5
+                          && warningBox.top >= primaryBox.top - 0.5
+                          && warningBox.bottom <= primaryBox.bottom + 0.5;
                       })(),
                       primaryGroupsDoNotOverlap: (() => {
                         const counts = document.querySelector('.pp-counts');
+                        const warnings = document.querySelector('.pp-source-warnings');
                         const actions = document.querySelector('.pp-manager-actions');
-                        const countBox = counts.getBoundingClientRect();
-                        const actionBox = actions.getBoundingClientRect();
-                        const separatedHorizontally = countBox.right <= actionBox.left + 0.5
-                          || actionBox.right <= countBox.left + 0.5;
-                        const separatedVertically = countBox.bottom <= actionBox.top + 0.5
-                          || actionBox.bottom <= countBox.top + 0.5;
-                        return separatedHorizontally || separatedVertically;
+                        const boxes = [counts, warnings, actions]
+                          .map(node => node.getBoundingClientRect());
+                        return boxes.every((box, index) => boxes.slice(index + 1).every(other => {
+                          const separatedHorizontally = box.right <= other.left + 0.5
+                            || other.right <= box.left + 0.5;
+                          const separatedVertically = box.bottom <= other.top + 0.5
+                            || other.bottom <= box.top + 0.5;
+                          return separatedHorizontally || separatedVertically;
+                        }));
                       })(),
                       managerDescendantsContained: (() => {
                         const strip = document.querySelector('.pp-manager-strip');
@@ -552,13 +561,15 @@ def test_preview_fits_all_manager_viewports_with_two_nonoverlapping_bands():
                 assert after["x"] + after["width"] <= width
                 assert geometry["documentWidth"] <= width
                 assert geometry["bodyWidth"] <= width
+                if width >= 1195:
+                    assert geometry["managerHeight"] <= 60
                 assert max(geometry["rowRights"]) <= width
                 assert geometry["scheduleLabelsDoNotOverlap"] is True
                 assert geometry["identityNamesFit"] is True
                 assert page.locator(".pp-timeline").first.bounding_box()["width"] >= 480
                 assert geometry["localOverflowContained"] is True
                 assert geometry["managerGroupsDoNotScroll"] is True
-                assert geometry["primaryAndWarningsDoNotOverlap"] is True
+                assert geometry["warningsStayWithinPrimary"] is True
                 assert geometry["primaryGroupsDoNotOverlap"] is True
                 assert geometry["managerDescendantsContained"] is True
                 assert geometry["managerClearsFirstSection"] is True

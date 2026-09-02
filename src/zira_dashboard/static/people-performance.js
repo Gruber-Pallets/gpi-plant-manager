@@ -318,17 +318,25 @@
     var panel = ensureWarningPanel();
     if (!trigger || !panel) return;
     var box = trigger.getBoundingClientRect();
-    var detail = panel.getBoundingClientRect();
     var viewportTop = windowObject.scrollY + 8;
     var viewportBottom = windowObject.scrollY + windowObject.innerHeight - 8;
+    var below = box.bottom + windowObject.scrollY + 8;
+    var spaceBelow = Math.max(0, viewportBottom - below);
+    var spaceAbove = Math.max(
+      0,
+      box.top + windowObject.scrollY - 8 - viewportTop
+    );
+    panel.style.maxHeight = "";
+    var naturalHeight = panel.getBoundingClientRect().height;
+    var useAbove = naturalHeight > spaceBelow && spaceAbove > spaceBelow;
+    var availableHeight = useAbove ? spaceAbove : spaceBelow;
+    panel.style.maxHeight = availableHeight + "px";
+    var detail = panel.getBoundingClientRect();
     var minLeft = windowObject.scrollX + 8;
     var maxLeft = windowObject.scrollX + windowObject.innerWidth - detail.width - 8;
     var left = box.left + windowObject.scrollX + box.width / 2 - detail.width / 2;
-    var below = box.bottom + windowObject.scrollY + 8;
     var above = box.top + windowObject.scrollY - detail.height - 8;
-    var top = below;
-
-    if (below + detail.height > viewportBottom && above >= viewportTop) top = above;
+    var top = useAbove ? above : below;
     top = clamp(top, viewportTop, Math.max(viewportTop, viewportBottom - detail.height));
     panel.style.left = clamp(left, minLeft, Math.max(minLeft, maxLeft)) + "px";
     panel.style.top = top + "px";

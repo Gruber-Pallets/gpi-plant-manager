@@ -78,6 +78,8 @@ def test_manager_strip_is_sticky_and_manager_groups_wrap_without_scrollbars():
     assert "overflow" not in strip.group(1)
     assert primary and "flex-wrap: wrap" in primary.group(1)
     assert actions and "flex-wrap: wrap" in actions.group(1)
+    action_rules = re.findall(r"\.pp-manager-actions\s*\{([^}]*)\}", css)
+    assert any("flex: 1 1 16rem" in rule for rule in action_rules)
     assert warnings and "flex-wrap: wrap" in warnings.group(1)
     assert "flex: 0 1 auto" in warnings.group(1)
     assert "width: auto" in warnings.group(1)
