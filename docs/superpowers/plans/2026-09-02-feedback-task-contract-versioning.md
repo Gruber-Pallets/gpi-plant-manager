@@ -48,7 +48,7 @@
 - Produces database columns `desired_contract_version BIGINT` and `last_synced_contract_version BIGINT` on `feedback_task_delivery`.
 - Fresh rows target contract 2; existing rows migrate below contract 2 so reconciliation can verify them.
 
-- [ ] **Step 1: Write the failing schema tests**
+- [x] **Step 1: Write the failing schema tests**
 
 Add assertions to `test_feedback_task_delivery_schema_is_durable_and_safe` (or the current equivalent):
 
@@ -63,7 +63,7 @@ assert "ALTER COLUMN desired_contract_version SET DEFAULT 2" in ddl
 assert "last_synced_contract_version <= desired_contract_version" in ddl
 ```
 
-- [ ] **Step 2: Run the schema test and verify RED**
+- [x] **Step 2: Run the schema test and verify RED**
 
 Run:
 
@@ -73,7 +73,7 @@ DATABASE_URL= .venv/bin/python -m pytest tests/test_feedback_schema.py -q
 
 Expected: FAIL because the two task-contract columns and constraints are absent.
 
-- [ ] **Step 3: Add the idempotent schema migration**
+- [x] **Step 3: Add the idempotent schema migration**
 
 Extend the fresh table definition with:
 
@@ -107,7 +107,7 @@ The `ADD COLUMN` default of 1 deliberately marks existing rows as needing the
 new contract. The later default of 2 affects only future inserts. Fresh tables
 already contain the column with default 2, so the guarded add is a no-op.
 
-- [ ] **Step 4: Run schema tests GREEN**
+- [x] **Step 4: Run schema tests GREEN**
 
 Run:
 
@@ -118,7 +118,7 @@ DATABASE_URL= .venv/bin/python -m pytest tests/test_feedback_schema.py -q
 
 Expected: all tests pass and Ruff reports `All checks passed!`.
 
-- [ ] **Step 5: Commit the schema slice**
+- [x] **Step 5: Commit the schema slice**
 
 ```bash
 git add src/zira_dashboard/_schema.py tests/test_feedback_schema.py
@@ -140,7 +140,7 @@ git push origin main
 - `queue_existing_lifecycle_mismatches(limit: int = 100) -> int` queues lifecycle or contract mismatches.
 - `mark_delivered(claim, now=None) -> None` settles both verified version pairs atomically.
 
-- [ ] **Step 1: Write failing model and enqueue tests**
+- [x] **Step 1: Write failing model and enqueue tests**
 
 Add tests that construct a claim with contract versions and reject inverted or
 nonpositive values:
@@ -164,7 +164,7 @@ assert claim.desired_contract_version == delivery.TASK_SYNC_CONTRACT_VERSION
 Update the enqueue SQL test to require both contract columns and the current
 constant as inserted parameters.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -175,7 +175,7 @@ DATABASE_URL= .venv/bin/python -m pytest \
 
 Expected: FAIL because the constant and claim fields do not exist.
 
-- [ ] **Step 3: Add the current contract and claim fields**
+- [x] **Step 3: Add the current contract and claim fields**
 
 Add near the existing limits:
 
@@ -199,11 +199,11 @@ Extend `enqueue_submission` so its explicit column list ends with
 `desired_contract_version, last_synced_contract_version`, its value list ends
 with `%s, 0`, and `TASK_SYNC_CONTRACT_VERSION` is the final parameter.
 
-- [ ] **Step 4: Run the model and enqueue tests GREEN**
+- [x] **Step 4: Run the model and enqueue tests GREEN**
 
 Run the same focused command. Expected: PASS.
 
-- [ ] **Step 5: Write failing reconciliation tests**
+- [x] **Step 5: Write failing reconciliation tests**
 
 Cover these SQL behaviors with the existing recording cursor:
 
@@ -221,7 +221,7 @@ Also lock `enqueue_lifecycle` so a normal lifecycle transition raises
 `desired_contract_version` with `GREATEST(desired_contract_version, %s)` and can
 queue a row whose lifecycle version already matches but contract is stale.
 
-- [ ] **Step 6: Run reconciliation tests and verify RED**
+- [x] **Step 6: Run reconciliation tests and verify RED**
 
 Run:
 
@@ -232,7 +232,7 @@ DATABASE_URL= .venv/bin/python -m pytest \
 
 Expected: FAIL because reconciliation ignores the task contract.
 
-- [ ] **Step 7: Implement bounded contract reconciliation**
+- [x] **Step 7: Implement bounded contract reconciliation**
 
 Extend candidate eligibility with:
 
@@ -260,11 +260,11 @@ desired_contract_version = GREATEST(desired_contract_version, %s)
 and allow the guarded update when either the lifecycle version advances or the
 desired contract is older than the current contract.
 
-- [ ] **Step 8: Run reconciliation tests GREEN**
+- [x] **Step 8: Run reconciliation tests GREEN**
 
 Run the Step 6 command. Expected: PASS.
 
-- [ ] **Step 9: Write failing settlement-race tests**
+- [x] **Step 9: Write failing settlement-race tests**
 
 Extend `mark_delivered` SQL assertions to require:
 
@@ -277,7 +277,7 @@ assert "last_synced_contract_version = %s" in sql
 Cover both outcomes: matching desired contract becomes `delivered`; a newer
 desired contract leaves the row `pending` and due immediately.
 
-- [ ] **Step 10: Run settlement tests and verify RED**
+- [x] **Step 10: Run settlement tests and verify RED**
 
 Run:
 
@@ -288,7 +288,7 @@ DATABASE_URL= .venv/bin/python -m pytest \
 
 Expected: FAIL because settlement only fences the feedback lifecycle version.
 
-- [ ] **Step 11: Settle both version pairs atomically**
+- [x] **Step 11: Settle both version pairs atomically**
 
 Update `mark_delivered` to set:
 
@@ -307,7 +307,7 @@ The `WHERE` fence must require desired versions not older than the claim and
 verified versions exactly equal to the claim's starting verified versions.
 This prevents an old lease from settling new lifecycle or contract intent.
 
-- [ ] **Step 12: Run the task-delivery module GREEN**
+- [x] **Step 12: Run the task-delivery module GREEN**
 
 Run:
 
@@ -319,7 +319,7 @@ DATABASE_URL= .venv/bin/python -m pytest tests/test_feedback_task_delivery.py -q
 
 Expected: all tests pass and Ruff is clean.
 
-- [ ] **Step 13: Commit the durable queue behavior**
+- [x] **Step 13: Commit the durable queue behavior**
 
 ```bash
 git add src/zira_dashboard/feedback_task_delivery.py tests/test_feedback_task_delivery.py
@@ -345,7 +345,7 @@ git push origin main
 - Command JSON keeps its existing safe shape; `task_sync_state` becomes `pending` until both version pairs are current.
 - Admin status says `Owner task synced` only when both pairs match the current contract.
 
-- [ ] **Step 1: Write failing lifecycle-command tests**
+- [x] **Step 1: Write failing lifecycle-command tests**
 
 Extend the lifecycle state fixture with:
 
@@ -358,7 +358,7 @@ Assert a delivered row with equal lifecycle versions but verified contract 1
 reports `"task_sync_state":"pending"`. Add the matching contract-2 case and
 assert it reports `synced`.
 
-- [ ] **Step 2: Run command tests and verify RED**
+- [x] **Step 2: Run command tests and verify RED**
 
 Run:
 
@@ -368,7 +368,7 @@ DATABASE_URL= .venv/bin/python -m pytest tests/test_feedback_lifecycle_scripts.p
 
 Expected: FAIL because lifecycle state does not expose or check contract versions.
 
-- [ ] **Step 3: Expose and validate contract state**
+- [x] **Step 3: Expose and validate contract state**
 
 In `feedback_store.lifecycle_state`, select aliases:
 
@@ -393,17 +393,17 @@ and state["task_last_synced_contract_version"]
 
 Do not add raw IDs or Odoo content to command JSON.
 
-- [ ] **Step 4: Run command tests GREEN**
+- [x] **Step 4: Run command tests GREEN**
 
 Run the Step 2 command. Expected: PASS.
 
-- [ ] **Step 5: Write failing admin-status tests**
+- [x] **Step 5: Write failing admin-status tests**
 
 Add one row with equal lifecycle versions, delivered state, desired contract 2,
 and verified contract 1. Assert `admin_status_for` returns `("Task update pending", None)`.
 Add the fully matched contract-2 row and assert `("Owner task synced", None)`.
 
-- [ ] **Step 6: Run admin tests and verify RED**
+- [x] **Step 6: Run admin tests and verify RED**
 
 Run:
 
@@ -414,7 +414,7 @@ DATABASE_URL= .venv/bin/python -m pytest \
 
 Expected: FAIL because admin status checks only lifecycle versions.
 
-- [ ] **Step 7: Include contract state in admin shaping**
+- [x] **Step 7: Include contract state in admin shaping**
 
 Add contract aliases to the feedback admin query in `feedback_store.py`, pass
 them through to `admin_status_for`, and remove the raw aliases before returning
@@ -423,17 +423,17 @@ Return `Owner task synced` only for delivered rows whose lifecycle versions
 match and whose desired and verified contract both equal
 `TASK_SYNC_CONTRACT_VERSION`.
 
-- [ ] **Step 8: Run admin tests GREEN**
+- [x] **Step 8: Run admin tests GREEN**
 
 Run the Step 6 command. Expected: PASS.
 
-- [ ] **Step 9: Write failing standalone-reconciler tests**
+- [x] **Step 9: Write failing standalone-reconciler tests**
 
 Update the recording-cursor tests to assert both `_ELIGIBLE` and `_APPLY`
 contain contract-version predicates and `_APPLY` raises
 `desired_contract_version` to contract 2 without touching blocked rows.
 
-- [ ] **Step 10: Run reconciler tests and verify RED**
+- [x] **Step 10: Run reconciler tests and verify RED**
 
 Run:
 
@@ -444,14 +444,14 @@ DATABASE_URL= .venv/bin/python -m pytest \
 
 Expected: FAIL because the standalone script checks only lifecycle versions.
 
-- [ ] **Step 11: Version the standalone reconciler**
+- [x] **Step 11: Version the standalone reconciler**
 
 Import `feedback_task_delivery` and add `%s` contract placeholders to
 `_ELIGIBLE` and `_APPLY` matching the service reconciler. Execute each query
 with `TASK_SYNC_CONTRACT_VERSION` parameters. Keep preview read-only and apply
 local-only.
 
-- [ ] **Step 12: Run all reporting and reconciliation tests GREEN**
+- [x] **Step 12: Run all reporting and reconciliation tests GREEN**
 
 Run:
 
@@ -469,7 +469,7 @@ DATABASE_URL= .venv/bin/python -m pytest \
 
 Expected: all tests pass and Ruff is clean.
 
-- [ ] **Step 13: Commit synchronization reporting**
+- [x] **Step 13: Commit synchronization reporting**
 
 ```bash
 git add src/zira_dashboard/feedback_store.py \
@@ -494,7 +494,7 @@ git push origin main
 - Repository agents must verify both the exact Improvement and the durably associated task before completion.
 - Worker regression coverage models task 3656's observed Done-stage/In-Progress-Status mismatch.
 
-- [ ] **Step 1: Strengthen the worker regression name and assertions**
+- [x] **Step 1: Strengthen the worker regression name and assertions**
 
 Rename or extend the existing terminal repair test so its fixture explicitly
 documents the production shape without hard-coding task identity into product
@@ -542,7 +542,7 @@ Set the claim's desired contract to 2 and verified contract to 1. Verify
 `mark_delivered` receives that exact claim only after the second task read
 returns `state="1_done"`.
 
-- [ ] **Step 2: Run the regression test GREEN**
+- [x] **Step 2: Run the regression test GREEN**
 
 Run:
 
@@ -554,7 +554,7 @@ DATABASE_URL= .venv/bin/python -m pytest \
 
 Expected: PASS using the generalized worker path.
 
-- [ ] **Step 3: Update repository completion instructions**
+- [x] **Step 3: Update repository completion instructions**
 
 Add to the Plant Manager lifecycle section in `AGENTS.md`:
 
@@ -572,7 +572,7 @@ Add to the Plant Manager lifecycle section in `AGENTS.md`:
 Extend the existing failure rule so a missing relationship, task write failure,
 or task readback mismatch keeps the task incomplete.
 
-- [ ] **Step 4: Add the plain-language patch note**
+- [x] **Step 4: Add the plain-language patch note**
 
 At the top of `CHANGELOG.md` under `2026-09-02`, add:
 
@@ -582,7 +582,7 @@ At the top of `CHANGELOG.md` under `2026-09-02`, add:
 - **Finished feedback now checks its matching task again when the rules change.** Plant Manager does not call the work finished until both the feedback card and its task show as done.
 ```
 
-- [ ] **Step 5: Run focused verification**
+- [x] **Step 5: Run focused verification**
 
 Run:
 
@@ -609,7 +609,7 @@ git diff --check
 Expected: all available focused tests pass, Postgres-only tests skip when
 `DATABASE_URL` is empty, Ruff is clean, and `git diff --check` is silent.
 
-- [ ] **Step 6: Commit and push the process guard**
+- [x] **Step 6: Commit and push the process guard**
 
 ```bash
 git add AGENTS.md CHANGELOG.md tests/test_feedback_task_worker.py
@@ -629,7 +629,7 @@ git push origin main
 - Production must migrate, queue, process, and read back the existing durable relationship for feedback 43.
 - Final evidence must identify exactly one Improvement and the locally associated task, without exposing credentials or unrelated records.
 
-- [ ] **Step 1: Run the full available suite**
+- [x] **Step 1: Run the full available suite**
 
 Run:
 
@@ -642,7 +642,7 @@ git diff --check
 Expected: zero failures; Postgres-gated tests may skip only because
 `DATABASE_URL` is unset; Ruff and whitespace checks pass.
 
-- [ ] **Step 2: Confirm only intended files changed**
+- [x] **Step 2: Confirm only intended files changed**
 
 Run:
 
@@ -654,7 +654,7 @@ git diff --stat origin/main...HEAD
 Expected: unrelated pre-existing files remain unstaged and unchanged by this
 work. All intended implementation commits are on `main` and pushed.
 
-- [ ] **Step 3: Wait for the production deployment**
+- [x] **Step 3: Wait for the production deployment**
 
 Run:
 
@@ -666,7 +666,7 @@ Expected: project `GPI-Plant-Manager`, service `web`, repository
 `Gruber-Pallets/gpi-plant-manager`, and status `Online` after the newest main
 deployment.
 
-- [ ] **Step 4: Preview and apply bounded local reconciliation**
+- [x] **Step 4: Preview and apply bounded local reconciliation**
 
 Run inside the Railway web service:
 
@@ -678,7 +678,7 @@ python -m scripts.reconcile_feedback_task_lifecycle --yes
 Expected: preview reports at least one eligible contract-stale relationship;
 apply queues bounded rows and performs no direct Odoo write.
 
-- [ ] **Step 5: Let the normal task worker settle feedback 43**
+- [x] **Step 5: Let the normal task worker settle feedback 43**
 
 Wait for the scheduled worker. Poll the sanitized local lifecycle state for
 feedback 43 until all are true:
@@ -694,14 +694,14 @@ desired_contract_version = last_synced_contract_version = 2
 Do not write the Odoo task directly. If the worker enters attention or blocked
 state, stop and report the sanitized reason.
 
-- [ ] **Step 6: Read back the exact Odoo Improvement**
+- [x] **Step 6: Read back the exact Odoo Improvement**
 
 Using `ImprovementsClient`, find exact source ID `GPI-PM-FB-43`, require exactly
 one result, and read only `x_studio_source_id` plus `x_studio_status`.
 
 Expected: one row with source ID `GPI-PM-FB-43` and Status `Completed`.
 
-- [ ] **Step 7: Read back the locally associated Odoo task**
+- [x] **Step 7: Read back the locally associated Odoo task**
 
 Use the task ID obtained from `feedback_task_delivery`, not the pasted request.
 Call `odoo_client.read_feedback_task(3656)` and verify:
@@ -716,7 +716,7 @@ name begins with [GPI-PM-FB-43]
 
 Expected: the task is closed in both Odoo representations.
 
-- [ ] **Step 8: Mark design and plan implemented**
+- [x] **Step 8: Mark design and plan implemented**
 
 Only after Steps 1-7 succeed, change the design status to `Implemented` and
 check every completed plan step. Then run:
@@ -729,7 +729,7 @@ git commit -m "docs: record durable feedback task repair"
 git push origin main
 ```
 
-- [ ] **Step 9: Final readback after the documentation deployment**
+- [x] **Step 9: Final readback after the documentation deployment**
 
 Repeat Steps 6 and 7 after the final push. Expected: Improvement remains
 `Completed`; task 3656 remains in stage `Done` with Status `1_done`.
