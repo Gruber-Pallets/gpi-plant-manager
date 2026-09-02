@@ -80,6 +80,14 @@ def test_schema_has_owner_task_delivery_outbox():
     assert "desired_status TEXT NOT NULL DEFAULT 'requested'" in ddl
     assert "last_synced_version <= desired_version" in ddl
     assert "ADD COLUMN IF NOT EXISTS desired_version BIGINT NOT NULL DEFAULT 1" in ddl
+    assert "desired_contract_version BIGINT NOT NULL DEFAULT 2" in ddl
+    assert "last_synced_contract_version BIGINT NOT NULL DEFAULT 0" in ddl
+    assert (
+        "ADD COLUMN IF NOT EXISTS desired_contract_version BIGINT NOT NULL DEFAULT 1"
+        in ddl
+    )
+    assert "ALTER COLUMN desired_contract_version SET DEFAULT 2" in ddl
+    assert "last_synced_contract_version <= desired_contract_version" in ddl
 
 
 
