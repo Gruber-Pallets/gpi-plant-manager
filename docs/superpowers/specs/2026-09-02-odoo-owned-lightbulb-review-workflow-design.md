@@ -1,7 +1,12 @@
 # Odoo-Owned Light-Bulb Review Workflow Design
 
+> **Superseded on 2026-09-02. Do not implement this design.** Dale chose the
+> simpler app-owned workflow in
+> `2026-09-02-simple-lightbulb-task-sync-design.md`. That replacement uses no
+> custom code, Studio automation, or webhook in Odoo.
+
 **Date:** 2026-09-02
-**Status:** Approved design, awaiting implementation plan
+**Status:** Superseded; do not implement
 
 ## Goal
 

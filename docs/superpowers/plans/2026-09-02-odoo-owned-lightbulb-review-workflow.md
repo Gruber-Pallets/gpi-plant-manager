@@ -1,5 +1,11 @@
 # Odoo-Owned Light-Bulb Review Workflow Implementation Plan
 
+> **Superseded on 2026-09-02. Do not continue this plan.** Dale approved the
+> simpler app-owned workflow in
+> `docs/superpowers/specs/2026-09-02-simple-lightbulb-task-sync-design.md`.
+> The replacement uses no custom Odoo code, Studio automation, special webhook,
+> or duplicate-database setup.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add the exact six light-bulb choices, send Repair only to GPI Maintenance, and make Odoo create and govern one shared review task for Floor Issue, Floor Suggestion, and 2s Improvement across Plant Manager, Sales Manager, and OS Manager.

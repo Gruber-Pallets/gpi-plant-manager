@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Make the light-bulb plan simpler
+
+- **The new light-bulb buttons will use the task system the apps already share.** Odoo will not need special code, secret links, or a test copy. The matching reference row may take about one minute to catch up.
+
 ### Check the shared review setup safely
 
 - **A new check can find missing or changed parts of the shared Odoo review setup without showing its secret link.** A test copy of Odoo must match the right company and pass extra safety checks before the review steps can be tried. If a test reply is broken, the check reads the exact item and waits before cleaning up.
