@@ -26,6 +26,13 @@
   var synchronizingScroll = false;
   var suppressFocusOpen = false;
   var navigationSignal = {};
+  var warningTrigger = null;
+  var warningKey = null;
+  var warningPinned = false;
+  var warningPanel = null;
+  var warningRequestController = null;
+  var warningRequestEpoch = 0;
+  var warningCheckPromise = null;
 
   function listen(target, type, callback, options) {
     target.addEventListener(type, callback, options);
@@ -34,6 +41,43 @@
 
   function triggerFor(node) {
     return node && node.closest ? node.closest(triggerSelector) : null;
+  }
+
+  function warningTriggerFor(node) {
+    return node && node.closest ? node.closest(".pp-warning-trigger") : null;
+  }
+
+  function warningActionFor(node) {
+    return node && node.closest ? node.closest("[data-pp-warning-action]") : null;
+  }
+
+  function warningCloseFor(node) {
+    return node && node.closest ? node.closest("[data-pp-warning-close]") : null;
+  }
+
+  function countControlFor(node) {
+    return node && node.closest ? node.closest("[data-pp-count-filter]") : null;
+  }
+
+  function peopleUrl(day, status, attention) {
+    var params = ["day=" + encodeURIComponent(day)];
+    if (status) params.push("status=" + encodeURIComponent(status));
+    if (attention) params.push("attention=1");
+    return "/people-performance?" + params.join("&");
+  }
+
+  function activateCountFilter(control) {
+    var rows = document.getElementById("people-performance-live");
+    if (!rows || control.disabled) return;
+    var status = rows.dataset.status || "";
+    var attention = rows.dataset.attention === "1";
+    var pressed = control.getAttribute("aria-pressed") === "true";
+    if (control.dataset.ppCountFilter === "status") {
+      status = pressed ? "" : control.dataset.filterValue;
+    } else if (control.dataset.ppCountFilter === "attention") {
+      attention = !pressed;
+    }
+    windowObject.location.assign(peopleUrl(rows.dataset.day, status, attention));
   }
 
   function triggerKind(trigger) {
@@ -51,6 +95,60 @@
     popover.hidden = true;
     document.body.appendChild(popover);
     return popover;
+  }
+
+  function ensureWarningPanel() {
+    if (!warningPanel) warningPanel = document.getElementById("pp-warning-popover");
+    return warningPanel;
+  }
+
+  function renderWarningMessage(message, busy) {
+    var panel = ensureWarningPanel();
+    if (!panel) return;
+    var content = document.createElement("section");
+    var heading = document.createElement("h2");
+    var body = document.createElement("p");
+    heading.textContent = busy ? "Checking warning" : "Warning details";
+    body.textContent = message;
+    content.appendChild(heading);
+    content.appendChild(body);
+    panel.replaceChildren(content);
+    panel.hidden = false;
+    panel.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+
+  function renderWarningError() {
+    var panel = ensureWarningPanel();
+    if (!panel) return;
+    var content = document.createElement("section");
+    var message = document.createElement("p");
+    var retry = document.createElement("button");
+    message.textContent = "Details could not be loaded.";
+    retry.type = "button";
+    retry.textContent = "Retry";
+    retry.setAttribute("data-pp-warning-action", "retry");
+    content.appendChild(message);
+    content.appendChild(retry);
+    panel.replaceChildren(content);
+    panel.hidden = false;
+    panel.setAttribute("aria-busy", "false");
+  }
+
+  function renderWarningCheckFailure() {
+    var panel = ensureWarningPanel();
+    if (!panel) return;
+    var content = document.createElement("section");
+    var message = document.createElement("p");
+    var retry = document.createElement("button");
+    message.textContent = "The check could not finish.";
+    retry.type = "button";
+    retry.textContent = "Try again";
+    retry.setAttribute("data-pp-warning-action", "check_again");
+    content.appendChild(message);
+    content.appendChild(retry);
+    panel.replaceChildren(content);
+    panel.hidden = false;
+    panel.setAttribute("aria-busy", "false");
   }
 
   function clamp(value, minimum, maximum) {
@@ -166,6 +264,26 @@
     popover.style.top = top + "px";
   }
 
+  function positionWarning(trigger) {
+    var panel = ensureWarningPanel();
+    if (!trigger || !panel) return;
+    var box = trigger.getBoundingClientRect();
+    var detail = panel.getBoundingClientRect();
+    var viewportTop = windowObject.scrollY + 8;
+    var viewportBottom = windowObject.scrollY + windowObject.innerHeight - 8;
+    var minLeft = windowObject.scrollX + 8;
+    var maxLeft = windowObject.scrollX + windowObject.innerWidth - detail.width - 8;
+    var left = box.left + windowObject.scrollX + box.width / 2 - detail.width / 2;
+    var below = box.bottom + windowObject.scrollY + 8;
+    var above = box.top + windowObject.scrollY - detail.height - 8;
+    var top = below;
+
+    if (below + detail.height > viewportBottom && above >= viewportTop) top = above;
+    top = clamp(top, viewportTop, Math.max(viewportTop, viewportBottom - detail.height));
+    panel.style.left = clamp(left, minLeft, Math.max(minLeft, maxLeft)) + "px";
+    panel.style.top = top + "px";
+  }
+
   function hideMarker(trigger) {
     var marker = trigger && trigger.querySelector
       ? trigger.querySelector(".pp-hover-marker")
@@ -251,6 +369,184 @@
     return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   }
 
+  function escapeSelectorValue(value) {
+    return escapeSelector(value);
+  }
+
+  function warningTriggerForKey(key) {
+    if (!key) return null;
+    return document.querySelector(
+      '.pp-warning-trigger[data-warning-key="' + escapeSelectorValue(key) + '"]'
+    );
+  }
+
+  function abortWarningRequest() {
+    if (warningRequestController) warningRequestController.abort();
+    warningRequestController = null;
+  }
+
+  function announceAction(message) {
+    var status = document.getElementById("pp-action-status");
+    if (status && status.textContent !== message) status.textContent = message;
+  }
+
+  function loadWarningDetail(key, trigger, announceResult) {
+    var panel = ensureWarningPanel();
+    var rows = document.getElementById("people-performance-live");
+    var fetcher = windowObject.gpiFetch || (
+      windowObject.fetch ? windowObject.fetch.bind(windowObject) : null
+    );
+    if (destroyed || !panel || !rows || !key || !fetcher) {
+      if (!destroyed) renderWarningError();
+      return Promise.resolve(false);
+    }
+
+    warningRequestEpoch += 1;
+    var epoch = warningRequestEpoch;
+    abortWarningRequest();
+    var AbortControllerType = windowObject.AbortController;
+    warningRequestController = typeof AbortControllerType === "function"
+      ? new AbortControllerType()
+      : null;
+    var signal = warningRequestController ? warningRequestController.signal : undefined;
+    var url = "/people-performance/warnings/" + encodeURIComponent(key)
+      + "?day=" + encodeURIComponent(rows.dataset.day);
+
+    return Promise.resolve(fetcher(url, {
+      cache: "no-store",
+      redirect: "follow",
+      signal: signal,
+    })).then(function (response) {
+      if (epoch !== warningRequestEpoch || destroyed) return null;
+      if (
+        response.redirected
+        || response.status === 401
+        || response.status === 403
+        || !response.ok
+        || responseHeader(response) !== "warning-detail"
+      ) {
+        throw new Error("Warning detail request failed");
+      }
+      return response.text();
+    }).then(function (html) {
+      if (html === null || epoch !== warningRequestEpoch || destroyed) return false;
+      var parsed = new windowObject.DOMParser().parseFromString(html, "text/html");
+      var content = parsed.getElementById("pp-warning-panel-content");
+      if (!content) throw new Error("Warning detail response was incomplete");
+      panel.replaceChildren(content);
+      panel.hidden = false;
+      panel.setAttribute("aria-busy", "false");
+      if (trigger) positionWarning(trigger);
+      if (announceResult) {
+        var state = content.dataset
+          ? content.dataset.warningState
+          : content.getAttribute("data-warning-state");
+        announceAction(
+          state === "cleared" ? "Issue cleared." : "The warning is still active."
+        );
+      }
+      return true;
+    }).catch(function () {
+      if (epoch !== warningRequestEpoch || destroyed) return false;
+      renderWarningError();
+      if (trigger) positionWarning(trigger);
+      return false;
+    }).finally(function () {
+      if (epoch === warningRequestEpoch) warningRequestController = null;
+    });
+  }
+
+  function closeWarning(restoreFocus) {
+    var previous = warningTrigger;
+    warningRequestEpoch += 1;
+    abortWarningRequest();
+    if (warningTrigger) warningTrigger.setAttribute("aria-expanded", "false");
+    warningTrigger = null;
+    warningKey = null;
+    warningPinned = false;
+    var panel = ensureWarningPanel();
+    if (panel) {
+      panel.hidden = true;
+      panel.setAttribute("aria-busy", "false");
+    }
+    if (restoreFocus) focusWithoutScrolling(previous, true);
+  }
+
+  function detachWarningForRefresh() {
+    warningRequestEpoch += 1;
+    abortWarningRequest();
+    if (warningTrigger) warningTrigger.setAttribute("aria-expanded", "false");
+    warningTrigger = null;
+    warningKey = null;
+    warningPinned = false;
+  }
+
+  function previewWarning(trigger) {
+    if (warningPinned) return;
+    if (warningTrigger && warningTrigger !== trigger) {
+      warningTrigger.setAttribute("aria-expanded", "false");
+    }
+    warningTrigger = trigger;
+    warningKey = trigger.dataset.warningKey;
+    trigger.setAttribute("aria-expanded", "true");
+    renderWarningMessage(trigger.dataset.warningSummary, false);
+    positionWarning(trigger);
+  }
+
+  function pinWarning(trigger) {
+    if (warningPinned && warningTrigger === trigger) {
+      closeWarning(true);
+      return Promise.resolve(false);
+    }
+    if (warningTrigger && warningTrigger !== trigger) closeWarning(false);
+    warningPinned = true;
+    warningTrigger = trigger;
+    warningKey = trigger.dataset.warningKey;
+    trigger.setAttribute("aria-expanded", "true");
+    renderWarningMessage("Loading warning details…", true);
+    positionWarning(trigger);
+    return loadWarningDetail(warningKey, trigger, false);
+  }
+
+  function pinWarningReplacement(trigger, key, announceResult) {
+    if (warningTrigger && warningTrigger !== trigger) {
+      warningTrigger.setAttribute("aria-expanded", "false");
+    }
+    warningTrigger = trigger;
+    warningKey = key;
+    warningPinned = true;
+    trigger.setAttribute("aria-expanded", "true");
+    var panel = ensureWarningPanel();
+    if (panel) {
+      panel.hidden = false;
+      panel.setAttribute("aria-busy", "true");
+    }
+    positionWarning(trigger);
+    return loadWarningDetail(key, trigger, Boolean(announceResult));
+  }
+
+  function checkWarningAgain(button) {
+    if (warningCheckPromise) return warningCheckPromise;
+    button.disabled = true;
+    button.textContent = "Checking…";
+    var checkingKey = warningKey;
+    warningCheckPromise = refreshRows().then(function (refreshed) {
+      if (destroyed) return false;
+      if (!warningPinned || warningKey !== checkingKey) return false;
+      if (!refreshed) {
+        renderWarningCheckFailure();
+        announceAction("The check could not finish.");
+        return false;
+      }
+      var replacement = warningTriggerForKey(checkingKey);
+      if (replacement) return pinWarningReplacement(replacement, checkingKey, true);
+      return loadWarningDetail(checkingKey, null, true);
+    }).finally(function () {
+      warningCheckPromise = null;
+    });
+    return warningCheckPromise;
+  }
+
   function selectorFor(kind, key) {
     var className = kind === "shortcut" ? ".pp-interval-shortcut" : ".pp-interval-trigger";
     return className + '[data-interval-key="' + escapeSelector(key) + '"]';
@@ -299,6 +595,7 @@
   function captureState() {
     var focused = triggerFor(document.activeElement);
     var managerControl = managerControlFor(document.activeElement);
+    var focusedWarning = warningTriggerFor(document.activeElement);
     return {
       scrollX: windowObject.scrollX,
       scrollY: windowObject.scrollY,
@@ -315,6 +612,8 @@
       pinnedKey: pinned ? pinned.dataset.intervalKey : null,
       pinnedKind: triggerKind(pinned),
       pinnedAtMs: pinned ? selectedAtMs : null,
+      warningKey: warningPinned ? warningKey : null,
+      warningFocused: Boolean(warningPinned && focusedWarning === warningTrigger),
     };
   }
 
@@ -322,6 +621,7 @@
     var focusTarget = restoredTrigger(state.focusKind, state.focusKey);
     var pinTarget = restoredTrigger(state.pinnedKind, state.pinnedKey);
     var managerControl = restoredManagerControl(state.managerControlKey);
+    var restoredWarning = warningTriggerForKey(state.warningKey);
 
     if (managerControl && state.managerControlKey === "day") {
       managerControl.value = state.managerControlValue;
@@ -335,6 +635,18 @@
     if (pinTarget) open(pinTarget, true, state.pinnedAtMs);
     else if (focusTarget) open(focusTarget, false);
     else close(false);
+    if (state.warningKey) {
+      if (restoredWarning) {
+        pinWarningReplacement(restoredWarning, state.warningKey, false);
+        if (state.warningFocused) focusWithoutScrolling(restoredWarning, true);
+      } else {
+        warningTrigger = null;
+        warningKey = state.warningKey;
+        warningPinned = true;
+        renderWarningMessage("Loading warning details…", true);
+        loadWarningDetail(state.warningKey, null, false);
+      }
+    }
     syncHorizontalScroll(state.horizontalScroll, null);
     windowObject.scrollTo(state.scrollX, state.scrollY);
   }
@@ -390,6 +702,7 @@
     var signal = requestController ? requestController.signal : undefined;
     var rowsUrl = page.dataset.rowsUrl || "/people-performance/rows";
     var url = rowsUrl + "?day=" + encodeURIComponent(rows.dataset.day)
+      + (rows.dataset.status ? "&status=" + encodeURIComponent(rows.dataset.status) : "")
       + "&attention=" + encodeURIComponent(rows.dataset.attention || "0");
     var fetcher = windowObject.gpiFetch || (
       windowObject.fetch ? windowObject.fetch.bind(windowObject) : null
@@ -424,8 +737,13 @@
         replacement.dataset.day !== rows.dataset.day
         || replacement.dataset.isToday !== "1"
       ) {
-        var todayTarget = "/people-performance";
-        if (rows.dataset.attention === "1") todayTarget += "?attention=1";
+        var filterParams = [];
+        if (rows.dataset.status) {
+          filterParams.push("status=" + encodeURIComponent(rows.dataset.status));
+        }
+        if (rows.dataset.attention === "1") filterParams.push("attention=1");
+        var todayTarget = "/people-performance"
+          + (filterParams.length ? "?" + filterParams.join("&") : "");
         safeFullNavigation(null, todayTarget);
       }
 
@@ -433,6 +751,7 @@
       // interactions made while the request was in flight win.
       var state = captureState();
       close(false);
+      detachWarningForRefresh();
       setBusy(replacement, false);
       rows.replaceWith(replacement);
       restoreState(state);
@@ -457,6 +776,13 @@
   }
 
   function onPointerOver(event) {
+    var warning = warningTriggerFor(event.target);
+    var coarsePointer = windowObject.matchMedia
+      && windowObject.matchMedia("(pointer: coarse)").matches;
+    if (warning && !warningPinned && !coarsePointer) {
+      previewWarning(warning);
+      return;
+    }
     var trigger = triggerFor(event.target);
     if (trigger && !pinned) open(trigger, false);
   }
@@ -477,6 +803,17 @@
   }
 
   function onPointerOut(event) {
+    var warning = warningTriggerFor(event.target);
+    var panel = ensureWarningPanel();
+    var leftWarning = warning && warning === warningTrigger;
+    var leftPanel = panel && panel.contains(event.target);
+    var relatedInside = (
+      warningTrigger && warningTrigger.contains && warningTrigger.contains(event.relatedTarget)
+    ) || (panel && panel.contains(event.relatedTarget));
+    if (!warningPinned && (leftWarning || leftPanel) && !relatedInside) {
+      closeWarning(false);
+      return;
+    }
     var trigger = triggerFor(event.target);
     if (trigger && trigger === active && !pinned && leftTrigger(trigger, event.relatedTarget)) {
       close(false);
@@ -484,11 +821,27 @@
   }
 
   function onFocusIn(event) {
+    var warning = warningTriggerFor(event.target);
+    if (warning && !warningPinned && !suppressFocusOpen) {
+      previewWarning(warning);
+      return;
+    }
     var trigger = triggerFor(event.target);
     if (trigger && !pinned && !suppressFocusOpen) open(trigger, false);
   }
 
   function onFocusOut(event) {
+    var warning = warningTriggerFor(event.target);
+    var panel = ensureWarningPanel();
+    var leftWarning = warning && warning === warningTrigger;
+    var leftPanel = panel && panel.contains(event.target);
+    var relatedInside = (
+      warningTrigger && warningTrigger.contains && warningTrigger.contains(event.relatedTarget)
+    ) || (panel && panel.contains(event.relatedTarget));
+    if (!warningPinned && (leftWarning || leftPanel) && !relatedInside) {
+      closeWarning(false);
+      return;
+    }
     var trigger = triggerFor(event.target);
     if (trigger && trigger === active && !pinned && leftTrigger(trigger, event.relatedTarget)) {
       close(false);
@@ -496,6 +849,38 @@
   }
 
   function onClick(event) {
+    var countControl = countControlFor(event.target);
+    if (countControl) {
+      event.preventDefault();
+      activateCountFilter(countControl);
+      return;
+    }
+    var warningAction = warningActionFor(event.target);
+    if (warningAction) {
+      var action = warningAction.dataset
+        ? warningAction.dataset.ppWarningAction
+        : warningAction.getAttribute("data-pp-warning-action");
+      if (action === "retry") {
+        event.preventDefault();
+        renderWarningMessage("Loading warning details…", true);
+        return loadWarningDetail(warningKey, warningTrigger, false);
+      }
+      if (action === "check_again") {
+        event.preventDefault();
+        return checkWarningAgain(warningAction);
+      }
+      return;
+    }
+    if (warningCloseFor(event.target)) {
+      event.preventDefault();
+      closeWarning(true);
+      return;
+    }
+    var warning = warningTriggerFor(event.target);
+    if (warning) {
+      event.preventDefault();
+      return pinWarning(warning);
+    }
     var trigger = triggerFor(event.target);
     if (!trigger) return;
     event.preventDefault();
@@ -504,13 +889,25 @@
   }
 
   function onPointerDown(event) {
+    var panel = ensureWarningPanel();
+    if (warningKey || warningTrigger) {
+      if (!warningTriggerFor(event.target) && !(panel && panel.contains(event.target))) {
+        closeWarning(false);
+      }
+    }
     if (!pinned || triggerFor(event.target)) return;
     if (popover && popover.contains(event.target)) return;
     close(false);
   }
 
   function onKeyDown(event) {
-    if (event.key === "Escape" && active) close(Boolean(pinned));
+    if (event.key !== "Escape") return;
+    var panel = ensureWarningPanel();
+    if ((warningKey || warningTrigger) && panel && !panel.hidden) {
+      closeWarning(true);
+      return;
+    }
+    if (active) close(Boolean(pinned));
   }
 
   function onVisibilityChange() {
@@ -534,16 +931,19 @@
       syncHorizontalScroll(target.scrollLeft, target);
     }
     if (active) position(active);
+    if (warningTrigger && warningPanel && !warningPanel.hidden) positionWarning(warningTrigger);
   }
 
   function onViewportChange() {
     if (active) position(active);
+    if (warningTrigger && warningPanel && !warningPanel.hidden) positionWarning(warningTrigger);
   }
 
   function init() {
     if (initialized || destroyed) return;
     initialized = true;
     ensurePopover();
+    ensureWarningPanel();
     listen(document, "pointerover", onPointerOver);
     listen(document, "pointermove", onPointerMove);
     listen(document, "pointerout", onPointerOut);
@@ -565,6 +965,8 @@
     destroyed = true;
     requestEpoch += 1;
     abortRequest();
+    warningRequestEpoch += 1;
+    abortWarningRequest();
     if (timer) windowObject.clearInterval(timer);
     timer = null;
     listeners.forEach(function (entry) {
@@ -572,6 +974,7 @@
     });
     listeners = [];
     close(false);
+    closeWarning(false);
     if (popover && popover.remove) popover.remove();
     popover = null;
   }

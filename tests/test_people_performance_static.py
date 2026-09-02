@@ -135,7 +135,7 @@ def test_manager_groups_wrap_at_all_widths_without_local_horizontal_scroll():
         r"\.pp-counts,\s*\.pp-source-warnings,\s*\.pp-controls\s*\{([^}]*)\}",
         css,
     )
-    warning_pill = re.search(r"\.pp-source-warnings span\s*\{([^}]*)\}", css)
+    warning_pill = re.search(r"\.pp-warning-trigger\s*\{([^}]*)\}", css)
     mobile = css.split("@media (max-width: 760px)", 1)[1]
 
     assert shared and "flex-wrap: wrap" in shared.group(1)
@@ -146,6 +146,42 @@ def test_manager_groups_wrap_at_all_widths_without_local_horizontal_scroll():
     for selector in (".pp-counts", ".pp-source-warnings", ".pp-controls"):
         rule = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", mobile)
         assert not rule or "overflow-x" not in rule.group(1)
+
+
+def test_warning_triggers_and_panel_have_accessible_action_styles():
+    css = CSS_PATH.read_text(encoding="utf-8")
+    trigger = re.search(r"\.pp-warning-trigger\s*\{([^}]*)\}", css)
+    panel = re.search(r"\.pp-warning-popover\s*\{([^}]*)\}", css)
+    actions = re.search(
+        r"\.pp-warning-popover button,\s*\.pp-warning-popover a\s*\{([^}]*)\}",
+        css,
+    )
+
+    assert trigger
+    for declaration in (
+        "min-height: 44px",
+        "cursor: pointer",
+        "font: inherit",
+        "white-space: normal",
+        "overflow-wrap: anywhere",
+    ):
+        assert declaration in trigger.group(1)
+    assert ".pp-warning-trigger:focus-visible" in css
+    assert '.pp-warning-trigger[aria-expanded="true"]' in css
+    assert panel
+    for declaration in (
+        "position: absolute",
+        "z-index: 1050",
+        "width: min(26rem, calc(100vw - 1rem))",
+        "max-height: min(34rem, calc(100vh - 1rem))",
+        "overflow: auto",
+    ):
+        assert declaration in panel.group(1)
+    assert ".pp-warning-popover[hidden]" in css
+    assert ".pp-warning-popover header," in css
+    assert ".pp-warning-popover footer" in css
+    assert ".pp-warning-popover dl div" in css
+    assert actions and "min-height: 44px" in actions.group(1)
 
 
 def test_short_intervals_have_a_separate_nonoverlapping_touch_target():
@@ -232,7 +268,14 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           };
         }
 
-        function makeEnvironment(today) {
+        function detailResponse(token, options) {
+          return response(Object.assign(
+            {header: 'warning-detail', token}, options || {}
+          ));
+        }
+
+        function makeEnvironment(today, environmentOptions) {
+          environmentOptions = environmentOptions || {};
           const requests = [];
           const timers = [];
           const aborts = [];
@@ -252,6 +295,7 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             scrollY: 10,
           });
           const status = {textContent: ''};
+          const actionStatus = {textContent: ''};
           const page = {dataset: {today: String(today)}};
           const filterForm = {
             requestSubmit() { filterSubmissions.push('requestSubmit'); },
@@ -341,18 +385,113 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             return trigger;
           }
 
-          function makeRows(day, isToday, triggers, controls) {
+          function makeWarningTrigger(key, summary, top) {
+            const attributes = {"aria-expanded": "false"};
+            const trigger = {
+              dataset: {warningKey: key, warningSummary: summary},
+              focusCount: 0,
+              closest(selector) {
+                return selector === '.pp-warning-trigger' ? this : null;
+              },
+              matches(selector) { return selector === '.pp-warning-trigger'; },
+              contains(node) { return node === this; },
+              getBoundingClientRect() {
+                boundsReads += 1;
+                const y = top == null ? 160 : top;
+                return {left: 260, right: 310, top: y, bottom: y + 44, width: 50, height: 44};
+              },
+              setAttribute(name, value) { attributes[name] = String(value); },
+              removeAttribute(name) { delete attributes[name]; },
+              getAttribute(name) { return attributes[name]; },
+              focus(options) {
+                this.focusCount += 1;
+                focusOptions.push(options);
+                document.activeElement = this;
+                document.emit('focusin', {target: this});
+              },
+            };
+            return trigger;
+          }
+
+          function makeElement(tagName) {
+            const attributes = {};
+            return {
+              tagName: String(tagName || '').toUpperCase(),
+              hidden: false,
+              disabled: false,
+              removed: false,
+              style: {},
+              textContent: '',
+              id: '',
+              className: '',
+              children: [],
+              parentNode: null,
+              appendChild(node) {
+                node.parentNode = this;
+                this.children.push(node);
+                return node;
+              },
+              replaceChildren(...nodes) {
+                this.children.forEach((node) => { node.parentNode = null; });
+                this.children = [];
+                nodes.forEach((node) => this.appendChild(node));
+              },
+              setAttribute(name, value) { attributes[name] = String(value); },
+              removeAttribute(name) { delete attributes[name]; },
+              getAttribute(name) { return attributes[name]; },
+              contains(node) {
+                return node === this || this.children.some((child) => child.contains && child.contains(node));
+              },
+              closest(selector) {
+                if (selector === '[data-pp-warning-close]' && attributes['data-pp-warning-close'] != null) {
+                  return this;
+                }
+                const action = selector.match(/^\[data-pp-warning-action\]$/);
+                if (action && attributes['data-pp-warning-action'] != null) return this;
+                return this.parentNode && this.parentNode.closest
+                  ? this.parentNode.closest(selector) : null;
+              },
+              getBoundingClientRect() { return {width: 220, height: 90}; },
+              remove() { this.removed = true; },
+            };
+          }
+
+          function makeWarningContent(state, label) {
+            const content = makeElement('section');
+            content.id = 'pp-warning-panel-content';
+            content.dataset = {warningState: state};
+            content.textContent = label || state;
+            return content;
+          }
+
+          function makeWarningAction(action) {
+            const button = makeElement('button');
+            button.setAttribute('data-pp-warning-action', action);
+            button.dataset = {ppWarningAction: action};
+            button.textContent = action === 'check_again' ? 'Check again' : 'Retry';
+            return button;
+          }
+
+          function makeWarningClose() {
+            const button = makeElement('button');
+            button.setAttribute('data-pp-warning-close', '');
+            return button;
+          }
+
+          function makeRows(day, isToday, triggers, controls, warnings) {
             const attributes = {};
             const rows = {
               dataset: {
                 day,
                 isToday: String(isToday),
+                status: '',
                 attention: '0',
                 responseKind: 'people-performance-rows',
                 asOf: '2:00 PM',
               },
               triggers: triggers || [],
               controls: controls || [],
+              warnings: warnings || [],
               viewports: [makeViewport('row')],
               setAttribute(name, value) { attributes[name] = String(value); },
               getAttribute(name) { return attributes[name]; },
@@ -360,6 +499,7 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
                 replacements.push(next);
                 document.rows = next;
                 document.controls = next.controls;
+                document.warnings = next.warnings;
                 document.viewports = [document.axisViewport, ...next.viewports];
               },
             };
@@ -374,29 +514,22 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             '2026-08-28', today, [first], [dateControl, attentionControl]
           );
           document.controls = document.rows.controls;
+          document.warnings = document.rows.warnings;
           document.viewports = [document.axisViewport, ...document.rows.viewports];
+
+          const warningPanel = makeElement('div');
+          warningPanel.id = 'pp-warning-popover';
+          warningPanel.hidden = true;
 
           document.body = {
             appendChild(node) { popover = node; },
           };
-          document.createElement = function () {
-            const attributes = {};
-            return {
-              hidden: true,
-              removed: false,
-              style: {},
-              textContent: '',
-              id: '',
-              className: '',
-              setAttribute(name, value) { attributes[name] = String(value); },
-              contains(node) { return node === this; },
-              getBoundingClientRect() { return {width: 180, height: 50}; },
-              remove() { this.removed = true; },
-            };
-          };
+          document.createElement = makeElement;
           document.getElementById = function (id) {
             if (id === 'people-performance-live') return this.rows;
             if (id === 'pp-live-status') return status;
+            if (id === 'pp-warning-popover') return warningPanel;
+            if (id === 'pp-action-status') return actionStatus;
             return null;
           };
           document.querySelector = function (selector) {
@@ -406,6 +539,11 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             const controlMatch = selector.match(/data-pp-control-key="([^"]+)"/);
             if (controlMatch) {
               return this.controls.find((item) => item.dataset.ppControlKey === controlMatch[1]) || null;
+            }
+            const warningMatch = selector.match(/\.pp-warning-trigger\[data-warning-key="([^"]+)"\]/);
+            if (warningMatch) {
+              const key = warningMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+              return this.warnings.find((item) => item.dataset.warningKey === key) || null;
             }
             const match = selector.match(/data-interval-key="([^"]+)"/);
             if (!match) return null;
@@ -444,6 +582,9 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             assign(value) { navigations.push(['assign', value]); },
             reload() { navigations.push(['reload']); },
           };
+          windowObject.matchMedia = function (query) {
+            return {matches: Boolean(environmentOptions.coarsePointer && query.includes('coarse'))};
+          };
           windowObject.DOMParser = class {
             parseFromString(token) {
               return {getElementById() { return parsed[token] || null; }};
@@ -454,6 +595,7 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             document,
             windowObject,
             status,
+            actionStatus,
             page,
             requests,
             timers,
@@ -467,22 +609,55 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             makeTrigger,
             makeControl,
             makeRows,
+            makeWarningTrigger,
+            makeWarningContent,
+            makeWarningAction,
+            makeWarningClose,
             first,
             dateControl,
             attentionControl,
             getPopover: () => popover,
+            warningPanel,
             getBoundsReads: () => boundsReads,
           };
         }
 
         function event(target) {
-          return {target, relatedTarget: null, preventDefault() {}};
+          return {
+            target,
+            relatedTarget: null,
+            defaultPrevented: false,
+            preventDefault() { this.defaultPrevented = true; },
+          };
+        }
+
+        function elementText(node) {
+          if (!node) return '';
+          return [node.textContent || '', ...(node.children || []).map(elementText)].join(' ');
+        }
+
+        function makeCountControl(kind, value, pressed) {
+          return {
+            disabled: false,
+            dataset: {ppCountFilter: kind, filterValue: value},
+            closest(selector) {
+              return selector === '[data-pp-count-filter]' ? this : null;
+            },
+            getAttribute(name) {
+              return name === 'aria-pressed' ? String(pressed) : null;
+            },
+          };
+        }
+
+        function expectLastNavigation(env, expected) {
+          const actual = env.navigations[env.navigations.length - 1];
+          if (JSON.stringify(actual) !== JSON.stringify(['assign', expected])) {
+            throw new Error('wrong count-filter navigation: ' + JSON.stringify(actual));
+          }
         }
 
         async function flush() {
-          await Promise.resolve();
-          await Promise.resolve();
-          await Promise.resolve();
+          for (let turn = 0; turn < 12; turn += 1) await Promise.resolve();
         }
 
         (async () => {
@@ -551,6 +726,486 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
           }
           for (const values of Object.values(detailEnv.windowObject._listeners)) {
             if (values.length) throw new Error('destroy left window listeners behind');
+          }
+
+          const filterEnv = makeEnvironment('1');
+          const filterController = makeController(filterEnv.document, filterEnv.windowObject);
+          filterController.init();
+          filterEnv.document.rows.dataset.status = '';
+          filterEnv.document.emit('click', event(makeCountControl('status', 'working', false)));
+          expectLastNavigation(
+            filterEnv, '/people-performance?day=2026-08-28&status=working'
+          );
+
+          filterEnv.document.rows.dataset.status = 'working';
+          filterEnv.document.rows.dataset.attention = '1';
+          filterEnv.document.emit('click', event(makeCountControl('status', 'working', true)));
+          expectLastNavigation(filterEnv, '/people-performance?day=2026-08-28&attention=1');
+
+          filterEnv.document.emit('click', event(makeCountControl('attention', '1', true)));
+          expectLastNavigation(filterEnv, '/people-performance?day=2026-08-28&status=working');
+
+          const filteredPoll = filterController.refreshRows();
+          if (
+            filterEnv.requests[0].url
+              !== '/people-performance/rows?day=2026-08-28&status=working&attention=1'
+          ) {
+            throw new Error('polling URL did not preserve both count filters');
+          }
+          const filteredRollover = filterEnv.makeRows('2026-08-28', '0', []);
+          filterEnv.parsed.filteredRollover = filteredRollover;
+          filterEnv.requests[0].pending.resolve(response({token: 'filteredRollover'}));
+          await filteredPoll;
+          expectLastNavigation(
+            filterEnv, '/people-performance?status=working&attention=1'
+          );
+          filterController.destroy();
+
+          // Warning previews work with pointer and keyboard focus, while coarse
+          // pointer hover is ignored. A click pins and loads marked detail.
+          const warningEnv = makeEnvironment('1');
+          const warningOne = warningEnv.makeWarningTrigger(
+            'odoo\\source"one', 'Odoo has not updated recently', 150
+          );
+          const warningTwo = warningEnv.makeWarningTrigger(
+            'tablets-two', 'Tablet data is delayed', 30
+          );
+          warningEnv.document.rows.warnings = [warningOne, warningTwo];
+          warningEnv.document.warnings = warningEnv.document.rows.warnings;
+          const warningController = makeController(warningEnv.document, warningEnv.windowObject);
+          warningController.init();
+
+          warningEnv.document.emit('pointerover', event(warningOne));
+          if (
+            warningEnv.warningPanel.hidden
+            || !elementText(warningEnv.warningPanel).includes('Odoo has not updated recently')
+          ) {
+            throw new Error('warning pointer preview did not show its summary');
+          }
+          warningEnv.document.emit('pointerout', {
+            target: warningOne, relatedTarget: warningEnv.warningPanel
+          });
+          if (warningEnv.warningPanel.hidden) {
+            throw new Error('warning preview closed while moving into the panel');
+          }
+          warningEnv.document.emit('pointerout', {target: warningOne, relatedTarget: {}});
+          if (!warningEnv.warningPanel.hidden) {
+            throw new Error('unpinned warning preview stayed open after pointer exit');
+          }
+          warningEnv.document.emit('focusin', event(warningOne));
+          if (warningEnv.warningPanel.hidden) throw new Error('focus did not preview warning');
+          warningEnv.document.emit('focusout', {target: warningOne, relatedTarget: {}});
+          if (!warningEnv.warningPanel.hidden) throw new Error('focus exit did not close preview');
+
+          warningEnv.document.emit('click', event(warningOne));
+          if (
+            warningOne.getAttribute('aria-expanded') !== 'true'
+            || warningEnv.warningPanel.getAttribute('aria-busy') !== 'true'
+            || warningEnv.requests[0].url
+              !== '/people-performance/warnings/odoo%5Csource%22one?day=2026-08-28'
+            || warningEnv.requests[0].options.cache !== 'no-store'
+          ) {
+            throw new Error('pinning a warning did not start an accessible no-store detail load');
+          }
+          warningEnv.document.emit('click', event(warningTwo));
+          if (
+            warningOne.getAttribute('aria-expanded') !== 'false'
+            || warningTwo.getAttribute('aria-expanded') !== 'true'
+            || !warningEnv.aborts[0].signal.aborted
+          ) {
+            throw new Error('opening another warning did not close and abort the first');
+          }
+          const freshWarningContent = warningEnv.makeWarningContent('open', 'Fresh tablet detail');
+          warningEnv.parsed.warningFresh = freshWarningContent;
+          warningEnv.requests[1].pending.resolve(detailResponse('warningFresh'));
+          await flush();
+          if (
+            warningEnv.warningPanel.children[0] !== freshWarningContent
+            || warningEnv.warningPanel.getAttribute('aria-busy') !== 'false'
+          ) {
+            throw new Error('marked warning detail was not adopted into the persistent panel');
+          }
+          const staleWarningContent = warningEnv.makeWarningContent('open', 'Stale Odoo detail');
+          warningEnv.parsed.warningStale = staleWarningContent;
+          warningEnv.requests[0].pending.resolve(detailResponse('warningStale'));
+          await flush();
+          if (warningEnv.warningPanel.children[0] !== freshWarningContent) {
+            throw new Error('stale warning detail overwrote the newer warning');
+          }
+
+          warningEnv.document.emit('keydown', {key: 'Escape'});
+          if (
+            !warningEnv.warningPanel.hidden
+            || warningTwo.getAttribute('aria-expanded') !== 'false'
+            || warningTwo.focusCount !== 1
+          ) {
+            throw new Error('warning Escape did not close and restore focus');
+          }
+          warningEnv.document.emit('click', event(warningTwo));
+          warningEnv.document.emit('click', event(warningTwo));
+          if (!warningEnv.warningPanel.hidden) {
+            throw new Error('clicking the active warning did not toggle it closed');
+          }
+          warningEnv.document.emit('click', event(warningTwo));
+          warningEnv.document.emit('pointerdown', event({closest() { return null; }}));
+          if (!warningEnv.warningPanel.hidden) throw new Error('outside click did not close warning');
+          const focusBeforeWarningClose = warningTwo.focusCount;
+          warningEnv.document.emit('click', event(warningTwo));
+          warningEnv.document.emit('click', event(warningEnv.makeWarningClose()));
+          if (
+            !warningEnv.warningPanel.hidden
+            || warningTwo.focusCount !== focusBeforeWarningClose + 1
+          ) {
+            throw new Error('warning close button did not close and restore focus');
+          }
+
+          const coarseEnv = makeEnvironment('1', {coarsePointer: true});
+          const coarseWarning = coarseEnv.makeWarningTrigger('coarse', 'Touch-only warning');
+          coarseEnv.document.rows.warnings = [coarseWarning];
+          coarseEnv.document.warnings = coarseEnv.document.rows.warnings;
+          const coarseController = makeController(coarseEnv.document, coarseEnv.windowObject);
+          coarseController.init();
+          coarseEnv.document.emit('pointerover', event(coarseWarning));
+          if (!coarseEnv.warningPanel.hidden) {
+            throw new Error('coarse pointer hover fetched or previewed warning details');
+          }
+          coarseEnv.document.emit('focusin', event(coarseWarning));
+          if (coarseEnv.warningPanel.hidden) {
+            throw new Error('coarse pointer environment lost keyboard warning access');
+          }
+          coarseController.destroy();
+
+          // Invalid detail responses render only the safe retry state. Retry can
+          // recover, and ordinary panel links remain normal navigation.
+          for (const invalidKind of ['missing', 'wrong', 'auth', 'redirect']) {
+            const invalidEnv = makeEnvironment('1');
+            const invalidWarning = invalidEnv.makeWarningTrigger(
+              invalidKind, 'Unsafe response test'
+            );
+            invalidEnv.document.rows.warnings = [invalidWarning];
+            invalidEnv.document.warnings = invalidEnv.document.rows.warnings;
+            const invalidController = makeController(invalidEnv.document, invalidEnv.windowObject);
+            invalidController.init();
+            invalidEnv.document.emit('click', event(invalidWarning));
+            invalidEnv.parsed['unsafe-' + invalidKind] = invalidEnv.makeWarningContent(
+              'open', 'UNSAFE BODY'
+            );
+            const options = {token: 'unsafe-' + invalidKind};
+            if (invalidKind === 'missing') options.header = null;
+            if (invalidKind === 'wrong') options.header = 'rows';
+            if (invalidKind === 'auth') Object.assign(options, {ok: false, status: 401});
+            if (invalidKind === 'redirect') Object.assign(options, {redirected: true});
+            invalidEnv.requests[0].pending.resolve(detailResponse(
+              'unsafe-' + invalidKind, options
+            ));
+            await flush();
+            const invalidText = elementText(invalidEnv.warningPanel);
+            if (
+              !invalidText.includes('Details could not be loaded.')
+              || invalidText.includes('UNSAFE BODY')
+            ) {
+              throw new Error(invalidKind + ' warning response was injected or lacked retry');
+            }
+            const retry = invalidEnv.warningPanel.children[0].children[1];
+            invalidEnv.document.emit('click', event(retry));
+            if (invalidEnv.requests.length !== 2) throw new Error('Retry did not re-fetch detail');
+            const recovered = invalidEnv.makeWarningContent('open', 'Recovered detail');
+            invalidEnv.parsed['recovered-' + invalidKind] = recovered;
+            invalidEnv.requests[1].pending.resolve(detailResponse('recovered-' + invalidKind));
+            await flush();
+            if (invalidEnv.warningPanel.children[0] !== recovered) {
+              throw new Error('Retry did not adopt recovered warning detail');
+            }
+            const link = invalidEnv.makeWarningAction('open_diagnostics');
+            invalidEnv.warningPanel.children[0].appendChild(link);
+            const linkClick = event(link);
+            invalidEnv.document.emit('click', linkClick);
+            if (linkClick.defaultPrevented || invalidEnv.warningPanel.hidden) {
+              throw new Error('ordinary warning action link did not navigate normally');
+            }
+            invalidController.destroy();
+          }
+
+          // Check again is single-flight, refreshes rows first, adopts the
+          // replacement trigger, and announces only the requested result.
+          const checkEnv = makeEnvironment('1');
+          const checkedWarning = checkEnv.makeWarningTrigger('check-key', 'Check this source');
+          checkEnv.document.rows.warnings = [checkedWarning];
+          checkEnv.document.warnings = checkEnv.document.rows.warnings;
+          const checkController = makeController(checkEnv.document, checkEnv.windowObject);
+          checkController.init();
+          checkedWarning.focus();
+          checkEnv.document.emit('click', event(checkedWarning));
+          checkEnv.parsed.initialCheck = checkEnv.makeWarningContent('open', 'Initial warning');
+          checkEnv.requests[0].pending.resolve(detailResponse('initialCheck'));
+          await flush();
+          const checkButton = checkEnv.makeWarningAction('check_again');
+          checkEnv.document.emit('click', event(checkButton));
+          checkEnv.document.emit('click', event(checkButton));
+          if (
+            checkEnv.requests.length !== 2
+            || !checkButton.disabled
+            || checkButton.textContent !== 'Checking…'
+          ) {
+            throw new Error('double Check again was not deduplicated');
+          }
+          checkEnv.windowObject.scrollY = 432;
+          checkEnv.document.axisViewport.scrollLeft = 67;
+          const replacementWarning = checkEnv.makeWarningTrigger(
+            'check-key', 'Replacement source warning'
+          );
+          const checkedRows = checkEnv.makeRows(
+            '2026-08-28', '1', [], [], [replacementWarning]
+          );
+          checkEnv.parsed.checkedRows = checkedRows;
+          checkEnv.requests[1].pending.resolve(response({token: 'checkedRows'}));
+          await flush();
+          if (checkEnv.requests.length !== 4 || !checkEnv.aborts[2].signal.aborted) {
+            throw new Error('manual check did not supersede background panel restoration');
+          }
+          const stillOpen = checkEnv.makeWarningContent('open', 'Still active detail');
+          checkEnv.parsed.stillOpen = stillOpen;
+          checkEnv.requests[3].pending.resolve(detailResponse('stillOpen'));
+          await flush();
+          if (
+            checkEnv.warningPanel.children[0] !== stillOpen
+            || replacementWarning.getAttribute('aria-expanded') !== 'true'
+            || replacementWarning.focusCount !== 1
+            || checkEnv.windowObject.scrollY !== 432
+            || checkEnv.document.axisViewport.scrollLeft !== 67
+            || checkEnv.actionStatus.textContent !== 'The warning is still active.'
+          ) {
+            throw new Error('manual warning recheck did not preserve state and announce remains');
+          }
+
+          const clearButton = checkEnv.makeWarningAction('check_again');
+          checkEnv.document.emit('click', event(clearButton));
+          const clearedRows = checkEnv.makeRows('2026-08-28', '1', [], [], []);
+          checkEnv.parsed.clearedRows = clearedRows;
+          checkEnv.requests[4].pending.resolve(response({token: 'clearedRows'}));
+          await flush();
+          const cleared = checkEnv.makeWarningContent('cleared', 'Source is healthy');
+          checkEnv.parsed.cleared = cleared;
+          checkEnv.requests[6].pending.resolve(detailResponse('cleared'));
+          await flush();
+          if (
+            checkEnv.warningPanel.hidden
+            || checkEnv.warningPanel.children[0] !== cleared
+            || checkEnv.actionStatus.textContent !== 'Issue cleared.'
+          ) {
+            throw new Error('cleared warning was dismissed locally or not announced');
+          }
+          checkController.destroy();
+
+          const failedCheckEnv = makeEnvironment('1');
+          const failedCheckWarning = failedCheckEnv.makeWarningTrigger('failed-check', 'Check fails');
+          failedCheckEnv.document.rows.warnings = [failedCheckWarning];
+          failedCheckEnv.document.warnings = failedCheckEnv.document.rows.warnings;
+          const failedCheckController = makeController(
+            failedCheckEnv.document, failedCheckEnv.windowObject
+          );
+          failedCheckController.init();
+          failedCheckEnv.document.emit('click', event(failedCheckWarning));
+          failedCheckEnv.parsed.failedInitial = failedCheckEnv.makeWarningContent('open', 'Open');
+          failedCheckEnv.requests[0].pending.resolve(detailResponse('failedInitial'));
+          await flush();
+          failedCheckEnv.document.emit(
+            'click', event(failedCheckEnv.makeWarningAction('check_again'))
+          );
+          failedCheckEnv.requests[1].pending.resolve(response({ok: false, status: 500}));
+          await flush();
+          if (
+            !elementText(failedCheckEnv.warningPanel).includes('The check could not finish.')
+            || failedCheckEnv.actionStatus.textContent !== 'The check could not finish.'
+          ) {
+            throw new Error('failed manual check did not render and announce its retry state');
+          }
+          failedCheckController.destroy();
+
+          // A check started for one warning must not overwrite a newer pinned
+          // choice after its row refresh eventually completes.
+          const staleCheckEnv = makeEnvironment('1');
+          const staleCheckOne = staleCheckEnv.makeWarningTrigger('stale-one', 'First warning');
+          const staleCheckTwo = staleCheckEnv.makeWarningTrigger('stale-two', 'Second warning');
+          staleCheckEnv.document.rows.warnings = [staleCheckOne, staleCheckTwo];
+          staleCheckEnv.document.warnings = staleCheckEnv.document.rows.warnings;
+          const staleCheckController = makeController(
+            staleCheckEnv.document, staleCheckEnv.windowObject
+          );
+          staleCheckController.init();
+          staleCheckEnv.document.emit('click', event(staleCheckOne));
+          staleCheckEnv.parsed.staleCheckInitial = staleCheckEnv.makeWarningContent(
+            'open', 'First detail'
+          );
+          staleCheckEnv.requests[0].pending.resolve(detailResponse('staleCheckInitial'));
+          await flush();
+          staleCheckEnv.document.emit(
+            'click', event(staleCheckEnv.makeWarningAction('check_again'))
+          );
+          staleCheckEnv.document.emit('click', event(staleCheckTwo));
+          staleCheckEnv.parsed.newChoice = staleCheckEnv.makeWarningContent(
+            'open', 'Second detail'
+          );
+          staleCheckEnv.requests[2].pending.resolve(detailResponse('newChoice'));
+          await flush();
+          const staleReplacementOne = staleCheckEnv.makeWarningTrigger(
+            'stale-one', 'First replacement'
+          );
+          const staleReplacementTwo = staleCheckEnv.makeWarningTrigger(
+            'stale-two', 'Second replacement'
+          );
+          staleCheckEnv.parsed.staleCheckRows = staleCheckEnv.makeRows(
+            '2026-08-28', '1', [], [], [staleReplacementOne, staleReplacementTwo]
+          );
+          staleCheckEnv.requests[1].pending.resolve(response({token: 'staleCheckRows'}));
+          await flush();
+          if (
+            staleCheckEnv.requests.length !== 4
+            || staleReplacementOne.getAttribute('aria-expanded') !== 'false'
+            || staleReplacementTwo.getAttribute('aria-expanded') !== 'true'
+          ) {
+            throw new Error('stale manual check overwrote the newer pinned warning');
+          }
+          staleCheckEnv.parsed.restoredChoice = staleCheckEnv.makeWarningContent(
+            'open', 'Restored second detail'
+          );
+          staleCheckEnv.requests[3].pending.resolve(detailResponse('restoredChoice'));
+          await flush();
+
+          staleCheckEnv.document.emit(
+            'click', event(staleCheckEnv.makeWarningAction('check_again'))
+          );
+          staleCheckEnv.document.emit('click', event(staleReplacementOne));
+          const newestChoice = staleCheckEnv.makeWarningContent('open', 'Newest first detail');
+          staleCheckEnv.parsed.newestChoice = newestChoice;
+          staleCheckEnv.requests[5].pending.resolve(detailResponse('newestChoice'));
+          await flush();
+          staleCheckEnv.requests[4].pending.resolve(response({ok: false, status: 500}));
+          await flush();
+          if (
+            staleCheckEnv.warningPanel.children[0] !== newestChoice
+            || staleCheckEnv.actionStatus.textContent
+          ) {
+            throw new Error('stale manual check failure overwrote the newer warning');
+          }
+          staleCheckController.destroy();
+
+          const destroyedCheckEnv = makeEnvironment('1');
+          const destroyedCheckWarning = destroyedCheckEnv.makeWarningTrigger(
+            'destroyed-check', 'Destroyed check'
+          );
+          destroyedCheckEnv.document.rows.warnings = [destroyedCheckWarning];
+          destroyedCheckEnv.document.warnings = destroyedCheckEnv.document.rows.warnings;
+          const destroyedCheckController = makeController(
+            destroyedCheckEnv.document, destroyedCheckEnv.windowObject
+          );
+          destroyedCheckController.init();
+          destroyedCheckEnv.document.emit('click', event(destroyedCheckWarning));
+          destroyedCheckEnv.parsed.destroyedCheckInitial = destroyedCheckEnv.makeWarningContent(
+            'open', 'Open detail'
+          );
+          destroyedCheckEnv.requests[0].pending.resolve(detailResponse('destroyedCheckInitial'));
+          await flush();
+          destroyedCheckEnv.document.emit(
+            'click', event(destroyedCheckEnv.makeWarningAction('check_again'))
+          );
+          destroyedCheckController.destroy();
+          destroyedCheckEnv.requests[1].pending.resolve(response({ok: false, status: 500}));
+          await flush();
+          if (!destroyedCheckEnv.warningPanel.hidden) {
+            throw new Error('a Check again result reopened its panel after destroy');
+          }
+
+          // A timer poll silently restores a pinned warning against the new
+          // trigger, including focus and scroll, then reloads marked detail.
+          const warningPollEnv = makeEnvironment('1');
+          const oldPollWarning = warningPollEnv.makeWarningTrigger('poll-warning', 'Old warning');
+          warningPollEnv.document.rows.warnings = [oldPollWarning];
+          warningPollEnv.document.warnings = warningPollEnv.document.rows.warnings;
+          const warningPollController = makeController(
+            warningPollEnv.document, warningPollEnv.windowObject
+          );
+          warningPollController.init();
+          oldPollWarning.focus();
+          warningPollEnv.document.emit('click', event(oldPollWarning));
+          warningPollEnv.parsed.pollInitial = warningPollEnv.makeWarningContent('open', 'Old detail');
+          warningPollEnv.requests[0].pending.resolve(detailResponse('pollInitial'));
+          await flush();
+          warningPollEnv.windowObject.scrollY = 701;
+          warningPollEnv.document.axisViewport.scrollLeft = 71;
+          const newPollWarning = warningPollEnv.makeWarningTrigger('poll-warning', 'New warning');
+          const timerPoll = warningPollEnv.timers[0].callback();
+          warningPollEnv.parsed.pollRows = warningPollEnv.makeRows(
+            '2026-08-28', '1', [], [], [newPollWarning]
+          );
+          warningPollEnv.requests[1].pending.resolve(response({token: 'pollRows'}));
+          if (await timerPoll !== true) throw new Error('warning timer poll did not refresh rows');
+          if (
+            warningPollEnv.requests.length !== 3
+            || warningPollEnv.warningPanel.hidden
+            || newPollWarning.getAttribute('aria-expanded') !== 'true'
+            || newPollWarning.focusCount !== 1
+            || warningPollEnv.windowObject.scrollY !== 701
+            || warningPollEnv.document.axisViewport.scrollLeft !== 71
+          ) {
+            throw new Error('timer poll did not restore pinned warning focus and scroll');
+          }
+          warningPollEnv.parsed.pollDetail = warningPollEnv.makeWarningContent(
+            'open', 'Fresh poll detail'
+          );
+          warningPollEnv.requests[2].pending.resolve(detailResponse('pollDetail'));
+          await flush();
+          if (warningPollEnv.actionStatus.textContent) {
+            throw new Error('background warning poll announced an unchanged result');
+          }
+
+          const supersedeEnv = makeEnvironment('1');
+          const supersedeWarning = supersedeEnv.makeWarningTrigger(
+            'supersede-warning', 'Supersede old poll'
+          );
+          supersedeEnv.document.rows.warnings = [supersedeWarning];
+          supersedeEnv.document.warnings = supersedeEnv.document.rows.warnings;
+          const supersedeController = makeController(
+            supersedeEnv.document, supersedeEnv.windowObject
+          );
+          supersedeController.init();
+          supersedeEnv.document.emit('click', event(supersedeWarning));
+          supersedeEnv.parsed.supersedeInitial = supersedeEnv.makeWarningContent(
+            'open', 'Initial detail'
+          );
+          supersedeEnv.requests[0].pending.resolve(detailResponse('supersedeInitial'));
+          await flush();
+          supersedeEnv.timers[0].callback();
+          supersedeEnv.document.emit(
+            'click', event(supersedeEnv.makeWarningAction('check_again'))
+          );
+          if (
+            supersedeEnv.requests.length !== 3
+            || !supersedeEnv.aborts[1].signal.aborted
+          ) {
+            throw new Error('manual Check again did not supersede the older row poll');
+          }
+          supersedeController.destroy();
+
+          // Destroy aborts simultaneous independent row and warning requests,
+          // but retains the server-owned warning panel host.
+          const warningDestroyEnv = makeEnvironment('1');
+          const destroyWarning = warningDestroyEnv.makeWarningTrigger('destroy-warning', 'Destroy');
+          warningDestroyEnv.document.rows.warnings = [destroyWarning];
+          warningDestroyEnv.document.warnings = warningDestroyEnv.document.rows.warnings;
+          const warningDestroyController = makeController(
+            warningDestroyEnv.document, warningDestroyEnv.windowObject
+          );
+          warningDestroyController.init();
+          warningDestroyController.refreshRows();
+          warningDestroyEnv.document.emit('click', event(destroyWarning));
+          warningDestroyController.destroy();
+          if (
+            !warningDestroyEnv.aborts[0].signal.aborted
+            || !warningDestroyEnv.aborts[1].signal.aborted
+            || warningDestroyEnv.warningPanel.removed
+          ) {
+            throw new Error('destroy did not abort both requests or removed the server warning host');
           }
 
           // Production intervals select, pin, and restore the exact minute while
