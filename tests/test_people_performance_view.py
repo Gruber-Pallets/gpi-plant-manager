@@ -20,6 +20,7 @@ from zira_dashboard.people_performance_view import (
     warning_detail_context,
     warning_summary_view,
 )
+from zira_dashboard.people_performance_warnings import production_metric_warning
 
 
 def _row_named(context: dict, name: str) -> dict:
@@ -29,6 +30,47 @@ def _row_named(context: dict, name: str) -> dict:
         for row in section["rows"]
         if row["person_name"] == name
     )
+
+
+def _production_warning(station_name: str):
+    return production_metric_warning(
+        station_name=station_name,
+        reason_code="calculation_failure",
+        checked_at_utc=datetime(2026, 9, 2, 14, 30, tzinfo=UTC),
+        day=DAY,
+    )
+
+
+def test_warning_groups_merge_only_production_meters_with_stable_counted_summary():
+    trim = _production_warning("Trim Saw 1")
+    hand_build = _production_warning("Hand Build #1")
+    forklift = unmatched_warning_fixture(call_count=135)
+
+    groups = people_performance_view.warning_groups((trim, forklift, hand_build))
+
+    assert len(groups) == 2
+    production = groups[0]
+    assert production.kind == "production_metric_unavailable"
+    assert production.label == "Production Meters Unavailable"
+    assert production.count == 2
+    assert [item.subject for item in production.members] == [
+        "Hand Build #1",
+        "Trim Saw 1",
+    ]
+    assert len(production.key) == 24
+    assert groups[1].key == forklift.key
+    assert groups[1].count is None
+
+
+def test_single_production_meter_still_uses_group_label_and_count_one():
+    groups = people_performance_view.warning_groups(
+        (_production_warning("Trim Saw 1"),)
+    )
+    summary = people_performance_view.warning_group_summary_view(groups[0])
+
+    assert summary["label"] == "Production Meters Unavailable"
+    assert summary["count"] == 1
+    assert summary["accessible_label"] == "Production Meters Unavailable: 1"
 
 
 def test_warning_summary_does_not_eagerly_expose_diagnostic_facts():

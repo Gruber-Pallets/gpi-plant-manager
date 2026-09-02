@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 import math
 
@@ -13,7 +14,7 @@ from .people_performance import (
     TimelineInterval,
     cumulative_production_hover_points,
 )
-from .people_performance_warnings import DashboardWarning
+from .people_performance_warnings import DashboardWarning, WarningKind, warning_key
 
 
 _SECTION_LABELS = {
@@ -401,12 +402,87 @@ def _filter_summary(
     return f"Showing {visible} of {denominator} {label}{attention}."
 
 
+@dataclass(frozen=True)
+class DashboardWarningGroup:
+    key: str
+    kind: WarningKind
+    label: str
+    summary: str
+    members: tuple[DashboardWarning, ...]
+    count: int | None = None
+
+
+def warning_groups(
+    warnings: tuple[DashboardWarning, ...],
+) -> tuple[DashboardWarningGroup, ...]:
+    production = tuple(
+        sorted(
+            (
+                item
+                for item in warnings
+                if item.kind == "production_metric_unavailable"
+            ),
+            key=lambda item: item.subject.casefold(),
+        )
+    )
+    production_group = (
+        DashboardWarningGroup(
+            key=warning_key(
+                "production_metric_unavailable", "production-meters"
+            ),
+            kind="production_metric_unavailable",
+            label="Production Meters Unavailable",
+            summary=(
+                f"{len(production)} production meter"
+                f"{' is' if len(production) == 1 else 's are'} unavailable."
+            ),
+            members=production,
+            count=len(production),
+        )
+        if production
+        else None
+    )
+    groups: list[DashboardWarningGroup] = []
+    inserted_production = False
+    for warning in warnings:
+        if warning.kind == "production_metric_unavailable":
+            if not inserted_production and production_group is not None:
+                groups.append(production_group)
+                inserted_production = True
+            continue
+        groups.append(
+            DashboardWarningGroup(
+                key=warning.key,
+                kind=warning.kind,
+                label=warning.label,
+                summary=warning.summary,
+                members=(warning,),
+            )
+        )
+    return tuple(groups)
+
+
 def warning_summary_view(warning: DashboardWarning) -> dict:
     return {
         "key": warning.key,
         "kind": warning.kind,
         "label": warning.label,
         "summary": warning.summary,
+    }
+
+
+def warning_group_summary_view(group: DashboardWarningGroup) -> dict:
+    return {
+        "key": group.key,
+        "kind": group.kind,
+        "label": group.label,
+        "summary": group.summary,
+        "count": group.count,
+        "accessible_label": (
+            f"{group.label}: {group.count}"
+            if group.count is not None
+            else group.label
+        ),
     }
 
 
@@ -502,7 +578,8 @@ def dashboard_context(
         "schedule_time_groups": schedule_time_groups,
         "schedule_track_width_rem": _schedule_track_width_rem(schedule_time_groups),
         "source_warnings": tuple(
-            warning_summary_view(item) for item in model.source_warnings
+            warning_group_summary_view(item)
+            for item in warning_groups(model.source_warnings)
         ),
         "working_now": working_now,
         "worked_earlier": worked_earlier,
@@ -525,4 +602,11 @@ def dashboard_context(
     }
 
 
-__all__ = ["dashboard_context", "warning_detail_context", "warning_summary_view"]
+__all__ = [
+    "DashboardWarningGroup",
+    "dashboard_context",
+    "warning_detail_context",
+    "warning_group_summary_view",
+    "warning_groups",
+    "warning_summary_view",
+]
