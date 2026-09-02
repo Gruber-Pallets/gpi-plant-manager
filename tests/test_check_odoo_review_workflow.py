@@ -884,6 +884,19 @@ def test_exact_native_200_is_a_known_acknowledgement(monkeypatch) -> None:
     bare_rpc_client()._post_acknowledgement("https://example.invalid/redacted", {})
 
 
+def test_exact_native_500_is_a_known_rejection_on_the_positive_path(monkeypatch) -> None:
+    class Response:
+        status_code = 500
+
+        def json(self) -> dict:
+            return {"status": "error"}
+
+    monkeypatch.setattr(checker.requests, "post", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(checker.SafeRuntimeError, match="known rejection"):
+        bare_rpc_client()._post_acknowledgement("https://example.invalid/redacted", {})
+
+
 def test_non_native_success_status_is_an_unknown_outcome(monkeypatch) -> None:
     class Response:
         status_code = 201
@@ -1000,6 +1013,21 @@ def test_exact_native_500_is_a_known_rejection(monkeypatch) -> None:
     monkeypatch.setattr(checker.requests, "post", lambda *_args, **_kwargs: Response())
 
     bare_rpc_client()._post_rejection("https://example.invalid/redacted", {})
+
+
+def test_exact_native_200_is_a_known_acknowledgement_on_the_negative_path(
+    monkeypatch,
+) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"status": "ok"}
+
+    monkeypatch.setattr(checker.requests, "post", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(checker.SafeRuntimeError, match="known acknowledgement"):
+        bare_rpc_client()._post_rejection("https://example.invalid/redacted", {})
 
 
 @pytest.mark.parametrize("status_code", [500, 502, 504])

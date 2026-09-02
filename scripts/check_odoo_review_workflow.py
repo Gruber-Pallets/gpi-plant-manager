@@ -107,6 +107,11 @@ class UnresolvedWebhookOutcome(SafeRuntimeError):
     """A webhook outcome remained unknown after its immediate identity readback."""
 
 
+class NativeWebhookOutcome(str, Enum):
+    ACKNOWLEDGED = "acknowledged"
+    REJECTED = "rejected"
+
+
 class SafeIssue(str, Enum):
     TYPE_SELECTION = "type selection is not exact V2"
     PROJECT_CARDINALITY = "review project must resolve exactly once"
@@ -783,31 +788,30 @@ class XmlRpcReviewClient:
             ):
                 raise SafeRuntimeError("duplicate review webhook binding did not match")
 
-    def _post_acknowledgement(self, webhook_url: str, payload: dict) -> None:
+    def _post_webhook(self, webhook_url: str, payload: dict) -> NativeWebhookOutcome:
         try:
             response = requests.post(webhook_url, json=payload, timeout=_RPC_TIMEOUT_SECONDS)
         except requests.RequestException:
             raise UnknownWebhookOutcome from None
-        if response.status_code != 200:
+        if response.status_code not in (200, 500):
             raise UnknownWebhookOutcome
         try:
-            acknowledgement = response.json()
+            body = response.json()
         except ValueError:
             raise UnknownWebhookOutcome from None
-        if type(acknowledgement) is not dict or acknowledgement != {"status": "ok"}:
-            raise UnknownWebhookOutcome
+        if response.status_code == 200 and type(body) is dict and body == {"status": "ok"}:
+            return NativeWebhookOutcome.ACKNOWLEDGED
+        if response.status_code == 500 and type(body) is dict and body == {"status": "error"}:
+            return NativeWebhookOutcome.REJECTED
+        raise UnknownWebhookOutcome
+
+    def _post_acknowledgement(self, webhook_url: str, payload: dict) -> None:
+        if self._post_webhook(webhook_url, payload) is NativeWebhookOutcome.REJECTED:
+            raise SafeRuntimeError("native webhook returned a known rejection")
 
     def _post_rejection(self, webhook_url: str, payload: dict) -> None:
-        try:
-            response = requests.post(webhook_url, json=payload, timeout=_RPC_TIMEOUT_SECONDS)
-        except requests.RequestException:
-            raise UnknownWebhookOutcome from None
-        try:
-            rejection = response.json()
-        except ValueError:
-            raise UnknownWebhookOutcome from None
-        if response.status_code != 500 or rejection != {"status": "error"}:
-            raise UnknownWebhookOutcome
+        if self._post_webhook(webhook_url, payload) is NativeWebhookOutcome.ACKNOWLEDGED:
+            raise SafeRuntimeError("native webhook returned a known acknowledgement")
 
     def _read_action_result(
         self,

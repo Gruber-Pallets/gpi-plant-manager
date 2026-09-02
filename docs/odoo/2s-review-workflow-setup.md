@@ -26,12 +26,15 @@ Accept only HTTP 200 with the exact JSON object `{"status":"ok"}` as an
 acknowledgement. For a deliberately invalid negative exercise, accept only the
 native HTTP 500 with exact JSON `{"status":"error"}` as a known Odoo rejection.
 Every other HTTP status or body—including 502/503/504 gateway responses and
-malformed JSON—is an unknown outcome, not a known rejection. A mismatched,
-missing, duplicate, or stale readback is failure or conflict; neither
-application invents success. After a timeout or unknown response, read the
-exact identity first. If positive-action readback proves the transition landed,
-return that authoritative state. Otherwise do not retry or clean up until the
-caller has handled the unresolved outcome.
+malformed JSON—is an unknown outcome, not a known rejection. This classification
+is shared by both call paths: a positive caller that receives the exact known
+rejection, or a negative caller that receives the exact known acknowledgement,
+fails with a definitive response mismatch rather than an unknown outcome. A
+mismatched, missing, duplicate, or stale readback is failure or conflict;
+neither application invents success. After a timeout or unknown response, read
+the exact identity first. If positive-action readback proves the transition
+landed, return that authoritative state. Otherwise do not retry or clean up
+until the caller has handled the unresolved outcome.
 
 ## Permanent contract
 
