@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Keep floor feedback moving
+
+- **Floor Issue and Floor Suggestion feedback now reaches the app owner with the right name.** These choices no longer stop early or get marked as a Bug.
+
 ### Keep feedback choices matched with Odoo
 
 - **Plant Manager now understands all four feedback choices used in Odoo.** Bug, New Feature, Floor Issue, and Floor Suggestion keep the same meaning in both places.

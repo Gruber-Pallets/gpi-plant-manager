@@ -183,9 +183,7 @@ def _deliver_task(
 
     try:
         assignee_uid = odoo_client.authenticate()
-        tag_id = odoo_client.ensure_feedback_tag(
-            "Feature request" if snapshot.task_type == "feature" else "Bug"
-        )
+        tag_id = odoo_client.ensure_feedback_tag(feedback_type(snapshot.task_type).label)
     except _RECOVERABLE_ODOO_ERRORS:
         _log.exception("could not prepare owner task for feedback %s", claim.feedback_id)
         return _retry(claim, clock)

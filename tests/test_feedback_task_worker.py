@@ -128,7 +128,7 @@ def test_process_claim_creates_feature_task_for_the_same_authenticated_owner(mon
         tag_id=4,
         deadline="2026-08-26",
     )
-    worker.odoo_client.ensure_feedback_tag.assert_called_once_with("Feature request")
+    worker.odoo_client.ensure_feedback_tag.assert_called_once_with("New Feature")
 
 
 @pytest.mark.parametrize(
@@ -142,6 +142,33 @@ def test_task_name_uses_canonical_physical_label(task_type, label):
     assert worker.task_name(snapshot(task_type=task_type)) == (
         f"[GPI-PM-FB-42] [{label}] Save fails"
     )
+
+
+@pytest.mark.parametrize(
+    ("task_type", "tag"),
+    [
+        ("floor_issue", "Floor Issue"),
+        ("floor_suggestion", "Floor Suggestion"),
+    ],
+)
+def test_process_claim_uses_canonical_physical_tag(monkeypatch, task_type, tag):
+    stub_delivery(monkeypatch, snapshot(task_type=task_type))
+    stub_odoo(monkeypatch)
+
+    assert worker.process_claim(CLAIM, now=NOW) == "delivered"
+
+    worker.odoo_client.ensure_feedback_tag.assert_called_once_with(tag)
+
+
+def test_process_claim_rejects_unknown_type_before_odoo_work(monkeypatch):
+    stub_delivery(monkeypatch, snapshot(task_type="other"))
+    stub_odoo(monkeypatch)
+
+    with pytest.raises(ValueError, match="unsupported feedback type"):
+        worker.process_claim(CLAIM, now=NOW)
+
+    worker.odoo_client.ensure_feedback_project.assert_not_called()
+    worker.odoo_client.ensure_feedback_tag.assert_not_called()
 
 
 def test_process_claim_adopts_one_matching_task_without_creating(monkeypatch):

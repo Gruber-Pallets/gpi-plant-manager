@@ -222,6 +222,19 @@ def test_load_snapshot_locks_only_feedback_not_the_optional_image_join(monkeypat
     assert "FOR SHARE OF f" in normalized_sql(cursor, 0)
 
 
+@pytest.mark.parametrize("task_type", ["floor_issue", "floor_suggestion"])
+def test_load_snapshot_accepts_each_canonical_physical_type(monkeypatch, task_type):
+    cursor = use_cursor(monkeypatch, [valid_snapshot_row(task_type=task_type)])
+
+    item = delivery.load_snapshot(42)
+
+    assert item.task_type == task_type
+    assert cursor.calls[0][1] == (
+        42,
+        ["bug", "feature", "floor_issue", "floor_suggestion"],
+    )
+
+
 def test_recorded_remote_ids_are_guarded_by_the_current_claim_token(monkeypatch):
     task_cursor = use_cursor(
         monkeypatch,

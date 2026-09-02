@@ -10,11 +10,11 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
 from uuid import UUID, uuid4
 
 from . import db
 from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
+from .feedback_types import FEEDBACK_TYPES, feedback_type
 
 
 _MAX_SIGNED_64 = 9_223_372_036_854_775_807
@@ -29,6 +29,7 @@ _BLOCK_REASONS = frozenset(
     }
 )
 _MISSING_SUMMARY = "Task delivery record is missing."
+_FEEDBACK_TYPE_VALUES = tuple(item.value for item in FEEDBACK_TYPES)
 
 
 class StateTransitionError(RuntimeError):
@@ -60,7 +61,7 @@ class TaskDeliveryClaim:
 @dataclass(frozen=True)
 class FeedbackTaskSnapshot:
     feedback_id: int
-    task_type: Literal["bug", "feature"]
+    task_type: str
     message: str
     submitter: str | None
     page_url: str | None
@@ -339,19 +340,19 @@ def load_snapshot(feedback_id: int) -> FeedbackTaskSnapshot:
               ON bi.feedback_id = f.id AND bi.role = 'before'
             WHERE f.id = %s
               AND f.lifecycle_origin = 'local'
-              AND f.task_type IN ('bug', 'feature')
+              AND f.task_type = ANY(%s)
             FOR SHARE OF f
             """,
-            (safe_feedback_id,),
+            (safe_feedback_id, list(_FEEDBACK_TYPE_VALUES)),
         )
         row = cursor.fetchone()
     if not isinstance(row, Mapping):
         raise SnapshotValidationError("local feedback snapshot is unavailable")
     try:
+        canonical_type = feedback_type(row.get("task_type"))
         if (
             row.get("feedback_id") != safe_feedback_id
             or row.get("lifecycle_origin") != "local"
-            or row.get("task_type") not in {"bug", "feature"}
             or type(row.get("message")) is not str
             or row.get("submitter") is not None and type(row.get("submitter")) is not str
             or row.get("page_url") is not None and type(row.get("page_url")) is not str
@@ -364,7 +365,7 @@ def load_snapshot(feedback_id: int) -> FeedbackTaskSnapshot:
         raise SnapshotValidationError("local feedback snapshot is malformed") from None
     return FeedbackTaskSnapshot(
         feedback_id=safe_feedback_id,
-        task_type=row["task_type"],
+        task_type=canonical_type.value,
         message=row["message"],
         submitter=row["submitter"],
         page_url=row["page_url"],
