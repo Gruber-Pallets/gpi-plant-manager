@@ -114,7 +114,7 @@ def stub_odoo(monkeypatch, *, task_ids=None, attachment_ids=None):
                 "project_id": 3,
                 "active": True,
                 "stage_id": 7,
-                "stage_name": "New",
+                "stage_name": "New", "state": "01_in_progress",
             }
         ),
     )
@@ -168,17 +168,17 @@ def test_completed_feedback_moves_exact_task_to_done_and_posts_one_note(monkeypa
     worker.odoo_client.read_feedback_task.side_effect = [
         {
             "id": 55, "name": worker.task_name(item), "project_id": 3,
-            "active": True, "stage_id": 7, "stage_name": "In Progress",
+            "active": True, "stage_id": 7, "stage_name": "In Progress", "state": "01_in_progress",
         },
         {
             "id": 55, "name": worker.task_name(item), "project_id": 3,
-            "active": True, "stage_id": 8, "stage_name": "Done",
+            "active": True, "stage_id": 8, "stage_name": "Done", "state": "1_done",
         },
     ]
 
     assert worker.process_claim(terminal_claim, now=NOW) == "delivered"
 
-    worker.odoo_client.update_task.assert_called_once_with(55, stage_id=8)
+    worker.odoo_client.update_task.assert_called_once_with(55, stage_id=8, state="1_done")
     worker.odoo_client.post_task_message.assert_called_once()
     worker.task_delivery.mark_delivered.assert_called_once_with(terminal_claim, now=NOW)
 
@@ -204,7 +204,7 @@ def test_terminal_feedback_blocks_a_mismatched_stored_task_without_writing(monke
         "project_id": 3,
         "active": True,
         "stage_id": 7,
-        "stage_name": "In Progress",
+        "stage_name": "In Progress", "state": "01_in_progress",
     }
 
     assert worker.process_claim(terminal_claim, now=NOW) == "blocked"
@@ -236,7 +236,7 @@ def test_terminal_note_timeout_recovers_marker_without_posting_twice(monkeypatch
         "project_id": 3,
         "active": True,
         "stage_id": 8,
-        "stage_name": "Done",
+        "stage_name": "Done", "state": "1_done",
     }
     worker.odoo_client.find_task_message_ids.side_effect = [[], [901], [901]]
     worker.odoo_client.post_task_message.side_effect = TimeoutError("unknown result")
@@ -663,3 +663,143 @@ def test_app_import_does_not_eagerly_import_owner_task_worker():
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def _terminal_claim(status: str) -> delivery.TaskDeliveryClaim:
+    return delivery.TaskDeliveryClaim(
+        feedback_id=42,
+        claim_token=CLAIM.claim_token,
+        task_id=55,
+        before_attachment_id=None,
+        expires_at=EXPIRES,
+        desired_version=3,
+        last_synced_version=2,
+        desired_status=status,
+    )
+
+
+def test_terminal_feedback_repairs_an_open_status_on_a_task_already_in_done(monkeypatch):
+    # Odoo never changes a task's Status when its stage moves, and the other GPI
+    # apps read Status, so a task parked in Done with Status In Progress still
+    # looks open to them. The worker writes exactly the field that is off.
+    item = snapshot(status="completed", projection_version=3, resolution_note="Fixed")
+    claim = _terminal_claim("completed")
+    stub_delivery(monkeypatch, item)
+    stub_odoo(monkeypatch)
+    worker.odoo_client.find_feedback_stage_ids.return_value = [8]
+    worker.odoo_client.find_task_message_ids.side_effect = [[901], [901]]
+    worker.odoo_client.read_feedback_task.side_effect = [
+        {
+            "id": 55, "name": worker.task_name(item), "project_id": 3,
+            "active": True, "stage_id": 8, "stage_name": "Done", "state": "01_in_progress",
+        },
+        {
+            "id": 55, "name": worker.task_name(item), "project_id": 3,
+            "active": True, "stage_id": 8, "stage_name": "Done", "state": "1_done",
+        },
+    ]
+
+    assert worker.process_claim(claim, now=NOW) == "delivered"
+
+    worker.odoo_client.update_task.assert_called_once_with(55, state="1_done")
+    worker.task_delivery.mark_delivered.assert_called_once_with(claim, now=NOW)
+
+
+def test_declined_feedback_closes_the_task_as_cancelled(monkeypatch):
+    item = snapshot(status="declined", projection_version=3, resolution_note="Not needed")
+    claim = _terminal_claim("declined")
+    stub_delivery(monkeypatch, item)
+    stub_odoo(monkeypatch)
+    worker.odoo_client.find_feedback_stage_ids.return_value = [8]
+    worker.odoo_client.find_task_message_ids.side_effect = [[], [901]]
+    worker.odoo_client.read_feedback_task.side_effect = [
+        {
+            "id": 55, "name": worker.task_name(item), "project_id": 3,
+            "active": True, "stage_id": 7, "stage_name": "In Progress", "state": "01_in_progress",
+        },
+        {
+            "id": 55, "name": worker.task_name(item), "project_id": 3,
+            "active": True, "stage_id": 8, "stage_name": "Done", "state": "1_canceled",
+        },
+    ]
+
+    assert worker.process_claim(claim, now=NOW) == "delivered"
+
+    worker.odoo_client.update_task.assert_called_once_with(55, stage_id=8, state="1_canceled")
+
+
+def test_terminal_feedback_retries_until_the_status_reads_back_closed(monkeypatch):
+    item = snapshot(status="completed", projection_version=3, resolution_note="Fixed")
+    claim = _terminal_claim("completed")
+    stub_delivery(monkeypatch, item)
+    stub_odoo(monkeypatch)
+    worker.odoo_client.find_feedback_stage_ids.return_value = [8]
+    worker.odoo_client.find_task_message_ids.side_effect = [[901], [901]]
+    worker.odoo_client.read_feedback_task.side_effect = None
+    worker.odoo_client.read_feedback_task.return_value = {
+        "id": 55, "name": worker.task_name(item), "project_id": 3,
+        "active": True, "stage_id": 8, "stage_name": "Done", "state": "01_in_progress",
+    }
+
+    assert worker.process_claim(claim, now=NOW) == "retried"
+
+    worker.task_delivery.mark_delivered.assert_not_called()
+
+
+def test_reopened_feedback_reopens_a_closed_task_status(monkeypatch):
+    # Moving back to In Progress must also clear a Done Status; a Waiting or
+    # Approved Status set by another app is left alone.
+    item = snapshot(status="in_progress", projection_version=2)
+    claim = delivery.TaskDeliveryClaim(
+        feedback_id=42,
+        claim_token=CLAIM.claim_token,
+        task_id=55,
+        before_attachment_id=None,
+        expires_at=EXPIRES,
+        desired_version=2,
+        last_synced_version=1,
+        desired_status="in_progress",
+    )
+    stub_delivery(monkeypatch, item)
+    stub_odoo(monkeypatch)
+    worker.odoo_client.find_feedback_stage_ids.return_value = [7]
+    worker.odoo_client.read_feedback_task.side_effect = [
+        {
+            "id": 55, "name": worker.task_name(item), "project_id": 3,
+            "active": True, "stage_id": 8, "stage_name": "Done", "state": "1_done",
+        },
+        {
+            "id": 55, "name": worker.task_name(item), "project_id": 3,
+            "active": True, "stage_id": 7, "stage_name": "In Progress", "state": "01_in_progress",
+        },
+    ]
+
+    assert worker.process_claim(claim, now=NOW) == "delivered"
+
+    worker.odoo_client.update_task.assert_called_once_with(55, stage_id=7, state="01_in_progress")
+
+
+def test_in_progress_feedback_leaves_a_waiting_status_alone(monkeypatch):
+    item = snapshot(status="in_progress", projection_version=2)
+    claim = delivery.TaskDeliveryClaim(
+        feedback_id=42,
+        claim_token=CLAIM.claim_token,
+        task_id=55,
+        before_attachment_id=None,
+        expires_at=EXPIRES,
+        desired_version=2,
+        last_synced_version=1,
+        desired_status="in_progress",
+    )
+    stub_delivery(monkeypatch, item)
+    stub_odoo(monkeypatch)
+    worker.odoo_client.find_feedback_stage_ids.return_value = [7]
+    worker.odoo_client.read_feedback_task.side_effect = None
+    worker.odoo_client.read_feedback_task.return_value = {
+        "id": 55, "name": worker.task_name(item), "project_id": 3,
+        "active": True, "stage_id": 7, "stage_name": "In Progress", "state": "04_waiting_normal",
+    }
+
+    assert worker.process_claim(claim, now=NOW) == "delivered"
+
+    worker.odoo_client.update_task.assert_not_called()

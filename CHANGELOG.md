@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Finished feedback now shows as finished in every GPI app
+
+- **When feedback is finished or declined, its owner task is now marked Done in Odoo too, not only moved to the Done column.** Odoo keeps the column and the Done mark separate, and the Sales Manager and OS Manager apps read the Done mark. Two finished requests (FB-42 and FB-44) were still showing as open there because of this. Starting work again also clears the Done mark, and a Waiting or Approved mark someone set in another app is left alone.
+
 ### Finish older feedback tasks too
 
 - **Older feature tasks can now finish with their feedback cards.** Plant Manager safely recognizes the old task label, so those tasks do not stay open by mistake.

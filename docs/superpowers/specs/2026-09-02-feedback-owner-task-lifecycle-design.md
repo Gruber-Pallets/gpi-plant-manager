@@ -33,12 +33,18 @@ guesses, creates a replacement task, or mutates an unrelated task.
 
 ## State mapping
 
-| Local feedback | Odoo Improvement | Odoo task | Task note |
-|---|---|---|---|
-| `requested` | Requested | New | None |
-| `in_progress` | In-Progress | In Progress | None |
-| `completed` | Completed | Done | Required resolution note |
-| `declined` | Declined | Done | Required note labeled as declined |
+| Local feedback | Odoo Improvement | Odoo task stage | Odoo task Status (`state`) | Task note |
+|---|---|---|---|---|
+| `requested` | Requested | New | any open Status | None |
+| `in_progress` | In-Progress | In Progress | any open Status | None |
+| `completed` | Completed | Done | `1_done` (Done) | Required resolution note |
+| `declined` | Declined | Done | `1_canceled` (Cancelled) | Required note labeled as declined |
+
+The task's Status is written alongside the stage because Odoo never changes
+`state` when a task moves stages, and Sales Manager and OS Manager decide
+open-versus-closed from `state`. A terminal feedback requires the exact closed
+Status; an open feedback only requires an open one, so a Waiting or Approved
+Status set from another app is left alone. Readback verifies the Status too.
 
 Task stages are resolved within the task's project by exact configured names.
 The worker accepts exactly one destination stage and verifies the task project,

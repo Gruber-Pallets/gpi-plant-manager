@@ -432,6 +432,7 @@ def test_read_feedback_task_returns_verified_identity_and_stage(monkeypatch):
             "project_id": [3, "Plant Manager"],
             "active": True,
             "stage_id": [8, "Done"],
+            "state": "1_done",
         }
     ])
 
@@ -442,9 +443,10 @@ def test_read_feedback_task_returns_verified_identity_and_stage(monkeypatch):
         "active": True,
         "stage_id": 8,
         "stage_name": "Done",
+        "state": "1_done",
     }
     assert calls[0][0:2] == ("project.task", "search_read")
-    assert calls[0][3]["fields"] == ["id", "name", "project_id", "active", "stage_id"]
+    assert calls[0][3]["fields"] == ["id", "name", "project_id", "active", "stage_id", "state"]
     assert calls[0][3]["limit"] == 2
 
 
@@ -454,6 +456,11 @@ def test_read_feedback_task_returns_verified_identity_and_stage(monkeypatch):
         {"id": 55, "name": "x", "project_id": [3, "Plant Manager"], "active": True, "stage_id": False},
         {"id": 55, "name": "x", "project_id": [3, "Plant Manager"], "active": True, "stage_id": [True, "Done"]},
         {"id": 56, "name": "x", "project_id": [3, "Plant Manager"], "active": True, "stage_id": [8, "Done"]},
+        {"id": 55, "name": "x", "project_id": [3, "Plant Manager"], "active": True, "stage_id": [8, "Done"]},
+        {
+            "id": 55, "name": "x", "project_id": [3, "Plant Manager"], "active": True,
+            "stage_id": [8, "Done"], "state": False,
+        },
     ],
 )
 def test_read_feedback_task_rejects_malformed_identity_or_stage(monkeypatch, row):

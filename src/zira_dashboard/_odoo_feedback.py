@@ -268,13 +268,17 @@ def find_feedback_stage_ids(
 def read_feedback_task(
     execute_fn: Callable[..., Any], task_id: int
 ) -> dict[str, Any] | None:
-    """Read one exact task identity plus its current stage."""
+    """Read one exact task identity plus its current stage and Status.
+
+    Odoo's ``state`` ("Status") is separate from the stage and never changes when
+    the stage does; the other GPI apps read it, so the worker keeps it in step.
+    """
     safe_task_id = _positive_id(task_id, label="task")
     rows = execute_fn(
         "project.task",
         "search_read",
         [("id", "=", safe_task_id)],
-        fields=["id", "name", "project_id", "active", "stage_id"],
+        fields=["id", "name", "project_id", "active", "stage_id", "state"],
         limit=2,
         context={"active_test": False},
     )
@@ -297,6 +301,7 @@ def read_feedback_task(
         or not isinstance(stage, (list, tuple))
         or len(stage) < 2
         or not isinstance(stage[1], str)
+        or not isinstance(row.get("state"), str)
     ):
         raise OdooTaskPayloadError("Odoo task readback payload was malformed")
     return {
@@ -306,6 +311,7 @@ def read_feedback_task(
         "active": row["active"],
         "stage_id": _positive_id(stage[0], label="task stage"),
         "stage_name": stage[1],
+        "state": row["state"],
     }
 
 

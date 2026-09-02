@@ -47,6 +47,19 @@ _TASK_STAGE_BY_STATUS = {
     "declined": "Done",
 }
 
+# project.task.state is Odoo's own "Status", separate from the stage: moving a task
+# to the folded Done stage leaves it at In Progress, and the other GPI apps (Sales
+# Manager, OS Manager) decide open-vs-closed from it. So a finished request closes
+# the Status too, in the words those apps show — Done for completed, Cancelled
+# (their "Declined") for declined.
+_TASK_STATE_BY_STATUS = {
+    "requested": "01_in_progress",
+    "in_progress": "01_in_progress",
+    "completed": "1_done",
+    "declined": "1_canceled",
+}
+_CLOSED_TASK_STATES = frozenset({"1_done", "1_canceled"})
+
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
@@ -127,6 +140,25 @@ def task_stage_for(status: str) -> str:
         return _TASK_STAGE_BY_STATUS[status]
     except (KeyError, TypeError):
         raise ValueError("unsupported feedback lifecycle status") from None
+
+
+def task_state_for(status: str) -> str:
+    try:
+        return _TASK_STATE_BY_STATUS[status]
+    except (KeyError, TypeError):
+        raise ValueError("unsupported feedback lifecycle status") from None
+
+
+def task_state_matches(status: str, remote_state: object) -> bool:
+    """Whether the task's Odoo Status already agrees with the local lifecycle.
+
+    A finished request needs the exact closed Status. An open request only needs
+    an open one: a Waiting or Approved Status another app set is its business.
+    """
+    target = task_state_for(status)
+    if target in _CLOSED_TASK_STATES:
+        return remote_state == target
+    return isinstance(remote_state, str) and remote_state not in _CLOSED_TASK_STATES
 
 
 def terminal_note_marker(feedback_id: int, version: int) -> str:
@@ -347,10 +379,15 @@ def _reconcile_task_lifecycle(
         return _block(claim, _TASK_IDENTITY_REASON, clock)
 
     stage_id = stage_ids[0]
+    fields: dict[str, object] = {}
     if remote.get("stage_id") != stage_id or remote.get("stage_name") != target_stage:
+        fields["stage_id"] = stage_id
+    if not task_state_matches(snapshot.status, remote.get("state")):
+        fields["state"] = task_state_for(snapshot.status)
+    if fields:
         claim = task_delivery.renew_claim(claim, now=clock())
         try:
-            odoo_client.update_task(claim.task_id, stage_id=stage_id)
+            odoo_client.update_task(claim.task_id, **fields)
         except _RECOVERABLE_ODOO_ERRORS:
             return _retry(claim, clock)
 
@@ -394,6 +431,7 @@ def _reconcile_task_lifecycle(
         )
         or verified.get("stage_id") != stage_id
         or verified.get("stage_name") != target_stage
+        or not task_state_matches(snapshot.status, verified.get("state"))
         or marker is not None and not message_ids
     ):
         return _retry(claim, clock)
