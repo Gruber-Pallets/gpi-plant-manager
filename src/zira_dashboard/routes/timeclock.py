@@ -725,6 +725,13 @@ def timeclock_notifications(request: Request, token: str):
     for n in notes:
         n["span"] = employee_notifications.span_label(n)
         n["holiday_event_name"] = employee_notifications.holiday_cancellation_event_name(n)
+        if n.get("kind") == "anniversary_pto_reminder":
+            anniversary = n["anniversary_date"]
+            amount = n["balance_amount"]
+            n["anniversary_label"] = f"{anniversary.strftime('%B')} {anniversary.day}"
+            n["balance_label"] = (
+                f"{format(amount.normalize(), 'f')} {n['balance_unit']}"
+            )
     return templates.TemplateResponse(
         request,
         "timeclock_notifications.html",

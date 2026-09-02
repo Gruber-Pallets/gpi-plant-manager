@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
+
 from fastapi.testclient import TestClient
 
 from zira_dashboard import employee_celebrations, employee_notifications
@@ -58,8 +61,6 @@ def test_start_goes_to_dashboard_when_none(monkeypatch):
 
 
 def test_notifications_screen_lists_cards(monkeypatch):
-    from datetime import date
-
     monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
     monkeypatch.setattr(
         employee_notifications,
@@ -89,6 +90,55 @@ def test_notifications_screen_lists_cards(monkeypatch):
     assert "was denied" in resp.text  # denied body
     assert "Jul 1 – Jul 3" in resp.text  # span rendered into the body
     assert f"/timeclock/notifications/ack/{token}" in resp.text
+
+
+def test_anniversary_pto_notice_blocks_dashboard_and_renders_snapshot(monkeypatch):
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda _pid: PERSON)
+    monkeypatch.setattr(
+        employee_notifications,
+        "list_unacknowledged",
+        lambda _oid: [{
+            "id": 4,
+            "kind": "anniversary_pto_reminder",
+            "anniversary_date": date(2026, 10, 2),
+            "balance_amount": Decimal("2.5"),
+            "balance_unit": "days",
+        }],
+    )
+
+    response = client.get(f"/timeclock/notifications/{timeclock._mint_token(1)}")
+
+    assert response.status_code == 200
+    assert "Your work anniversary is coming up" in response.text
+    assert "October 2" in response.text
+    assert "2.5 days of unused Paid Time Off" in response.text
+    assert "I acknowledge" in response.text
+    assert "/timeclock/dashboard/" not in response.text
+
+
+def test_anniversary_pto_notice_is_spanish_first_and_supports_hours(monkeypatch):
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda _pid: PERSON_ES)
+    monkeypatch.setattr(
+        employee_notifications,
+        "list_unacknowledged",
+        lambda _oid: [{
+            "id": 4,
+            "kind": "anniversary_pto_reminder",
+            "anniversary_date": date(2026, 10, 2),
+            "balance_amount": Decimal("6"),
+            "balance_unit": "hours",
+        }],
+    )
+
+    response = client.get(f"/timeclock/notifications/{timeclock._mint_token(2)}")
+
+    assert "Se acerca tu aniversario de trabajo" in response.text
+    assert response.text.index("Se acerca tu aniversario de trabajo") < response.text.index(
+        "Your work anniversary is coming up"
+    )
+    assert "6 hours" in response.text
+    assert "Confirmo que lo leí" in response.text
+    assert response.text.index("Confirmo que lo leí") < response.text.index("I acknowledge")
 
 
 def test_notifications_screen_renders_saturday_cancellation(monkeypatch):

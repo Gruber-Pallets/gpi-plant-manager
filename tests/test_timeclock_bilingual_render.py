@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import date
+from decimal import Decimal
 
 from jinja2 import Environment, FileSystemLoader
 import pytest
@@ -127,3 +129,24 @@ def test_celebration_template_is_spanish_primary_for_level_three():
     )
 
     assert html.index("¡Feliz cumpleaños") < html.index("Happy Birthday")
+
+
+def test_anniversary_pto_notification_template_is_bilingual():
+    html = _env().get_template("timeclock_notifications.html").render(
+        person={"name": "Maria Garcia", "spanish_level": 3},
+        token="t",
+        notifications=[{
+            "kind": "anniversary_pto_reminder",
+            "anniversary_label": "October 2",
+            "balance_label": "2.5 days",
+            "anniversary_date": date(2026, 10, 2),
+            "balance_amount": Decimal("2.5"),
+        }],
+        timeclock_language="es_primary",
+    )
+
+    assert html.index("Se acerca tu aniversario de trabajo") < html.index(
+        "Your work anniversary is coming up"
+    )
+    assert "2.5 days" in html
+    assert html.index("Confirmo que lo leí") < html.index("I acknowledge")

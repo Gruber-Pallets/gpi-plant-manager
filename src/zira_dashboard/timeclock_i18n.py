@@ -51,6 +51,13 @@ TRANSLATIONS: dict[str, str] = {
     "Returning home…": "Regresando al inicio…",
     # --- sign-in notifications interstitial ---
     "Got it": "Entendido",
+    "I acknowledge": "Confirmo que lo leí",
+    "Your work anniversary is coming up": "Se acerca tu aniversario de trabajo",
+    "Your work anniversary is {anniversary}. You have {balance} of unused Paid Time Off. Please plan to use your time or talk with your supervisor if you have questions.": (
+        "Tu aniversario de trabajo es el {anniversary}. Tienes {balance} de tiempo "
+        "libre pagado sin usar. Planea usar tu tiempo o habla con tu supervisor si "
+        "tienes preguntas."
+    ),
     "Time off approved": "Tiempo libre aprobado",
     "Time off denied": "Tiempo libre rechazado",
     "Time off cancelled": "Tiempo libre cancelado",

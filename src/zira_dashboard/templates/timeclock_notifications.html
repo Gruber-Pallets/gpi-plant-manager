@@ -11,6 +11,9 @@
       {% elif n.kind == 'time_off_denied' %}
         {% set card_title = t("Time off denied") %}
         {% set card_body = t("Your time off request for {span} was denied. ❌ See a supervisor if you have questions.", span=n.span) %}
+      {% elif n.kind == 'anniversary_pto_reminder' %}
+        {% set card_title = t("Your work anniversary is coming up") %}
+        {% set card_body = t("Your work anniversary is {anniversary}. You have {balance} of unused Paid Time Off. Please plan to use your time or talk with your supervisor if you have questions.", anniversary=n.anniversary_label, balance=n.balance_label) %}
       {% elif n.kind == 'saturday_work_cancelled' %}
         {% if n.holiday_event_name %}
         {% set card_title = t("Holiday work cancelled") %}
@@ -38,7 +41,7 @@
         style="margin-top: 2.5rem;">
     <button type="submit" class="k-btn"
       style="font-size: 1.75rem; padding: 1rem 3rem;">
-      {{ t("Got it") }}
+      {{ t("I acknowledge") }}
     </button>
   </form>
 </div>
