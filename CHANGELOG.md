@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Finish the feedback and shared-list plan
+
+- **The step-by-step plan for feedback is ready.** It covers all four choices, safe start and finish steps, Odoo checks, and a careful retry for feedback that stopped early. Nothing in the app has changed yet.
+
 ### Plan all four feedback choices
 
 - **A design is ready to add Bug, New Feature, Floor Issue, and Floor Suggestion to Plant Manager.** It also plans a safe way to retry feedback that stopped before reaching the shared list. Nothing in the app has changed yet.

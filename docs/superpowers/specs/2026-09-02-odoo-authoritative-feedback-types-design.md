@@ -3,8 +3,9 @@
 ## Goal
 
 Make Plant Manager offer every feedback type allowed by Odoo's 2s Improvements
-reference table, keep the two systems on the same exact contract, and safely
-recover feedback 44 after the contract is repaired.
+reference table, keep the two systems on the same exact contract, provide a
+safe local start/finish workflow, and recover feedback 44 after the contract is
+repaired.
 
 ## Authority and Type Mapping
 
@@ -51,6 +52,37 @@ The mirror contract will require the exact four authoritative Odoo stored
 values. A missing or unexpected Type option continues to fail closed before an
 Odoo write. Database, company, fields, relations, status values, and Source
 checks remain unchanged.
+
+## Plant Manager Lifecycle Commands
+
+Add local-only `scripts/process_feedback.py` and
+`scripts/resolve_feedback.py` commands so an agent can use the same
+`feedback_store.transition()` path as the authenticated admin UI. The commands
+never write Odoo directly; the existing mirror remains the only Odoo writer.
+
+Both commands accept exactly one authoritative identifier:
+
+- `--feedback-id <positive id>`; or
+- `--source-id GPI-PM-FB-<positive id>`.
+
+The Odoo Project Task ID is not a Plant Manager feedback ID and must never be
+used as one. Both commands default to a read-only preview and require `--yes`
+before changing local state.
+
+The start command moves `requested` to `in_progress` as soon as scoped work
+begins, including planning. An already-in-progress row is a successful no-op.
+Completed and declined rows remain terminal and are never reopened.
+
+The finish command moves only `in_progress` to `completed`, requires a short
+resolution note, and defaults the closer to `dale@gruberpallets.com`; `--by`
+can identify a different real closer. It runs only after the implementation is
+complete, required validation passes, and commits are pushed to `origin/main`.
+Requested rows are not allowed to skip the start step, and terminal rows remain
+unchanged.
+
+Repository instructions will name these commands as the normal start/finish
+workflow. They will continue to require exact matching, fail closed, forbid new
+or guessed Odoo rows, and require Odoo readback before completion is reported.
 
 ## Safe Recovery for Pre-Attempt Quarantine
 
@@ -113,6 +145,11 @@ No direct Odoo row creation or edit is permitted during recovery.
   idempotent refusal, and preservation of versions and associations.
 - CLI safety tests prove the new command requires a feedback ID, reviewer, and
   fresh read-only contract confirmation.
+- Lifecycle command tests cover exact identifiers, source-ID parsing, dry-run,
+  `--yes`, already-in-progress behavior, terminal refusal, required notes, and
+  Dale's default closer identity.
+- Static tests prove the lifecycle commands use the local feedback store and do
+  not import a generic Odoo write client.
 - Existing task-delivery, mirror, lifecycle, image, and feedback-panel suites
   remain green.
 
@@ -122,3 +159,5 @@ No direct Odoo row creation or edit is permitted during recovery.
 - Relaxing the exact database, company, Source, field, status, or Type contract.
 - Automatically clearing any ambiguous or attempt-backed quarantine.
 - Editing, deleting, merging, or archiving Odoo improvement rows.
+- Adding a status block to another application's copied prompt.
+- Changing Sales Manager or OS Manager lifecycle commands or repository rules.
