@@ -124,6 +124,7 @@ def my_feedback(request: Request) -> JSONResponse:
 
     items = []
     for row in rows:
+        canonical_type = feedback_type_or_legacy_bug(row.get("task_type"))
         message = (row.get("message") or "").strip()
         title = message.splitlines()[0] if message else "(no description)"
         if len(title) > _TITLE_MAX:
@@ -135,7 +136,8 @@ def my_feedback(request: Request) -> JSONResponse:
             )
             status = _LEGACY_STATUS[legacy_bucket]
         items.append({
-            "type": feedback_type_or_legacy_bug(row.get("task_type")).value,
+            "type": canonical_type.value,
+            "type_label": canonical_type.label,
             "title": title,
             "created_at": str(row.get("created_at") or ""),
             "page_url": row.get("page_url"),

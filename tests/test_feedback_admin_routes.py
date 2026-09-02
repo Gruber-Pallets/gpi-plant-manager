@@ -271,6 +271,29 @@ def test_admin_list_maps_task_delivery_to_fixed_safe_template_fields(monkeypatch
     assert all("untrusted database reason" not in str(item) for item in items)
 
 
+def test_admin_list_adds_canonical_type_labels_including_legacy_bug(monkeypatch):
+    rows = [
+        {
+            "task_type": task_type,
+            "task_delivery_state": "pending",
+            "task_delivery_error": None,
+            "task_delivery_block_reason": None,
+        }
+        for task_type in ("bug", "feature", "floor_issue", "floor_suggestion", None)
+    ]
+    monkeypatch.setattr(feedback_store.db, "query", lambda _sql, _params: rows)
+
+    items = feedback_store.for_admin()
+
+    assert [item["type_label"] for item in items] == [
+        "Bug",
+        "New Feature",
+        "Floor Issue",
+        "Floor Suggestion",
+        "Bug",
+    ]
+
+
 def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
     monkeypatch.setenv("SUPER_ADMIN_UPNS", "dale@gruberpallets.com")
     monkeypatch.setitem(
@@ -290,6 +313,7 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
             "submitter": "person@example.com",
             "page_url": "/recycling?x=<bad>",
             "task_type": "bug",
+            "type_label": "Bug",
             "message": "Broken <script>alert(1)</script>",
             "status": "requested",
             "finished_at": None,
@@ -310,6 +334,7 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
             "submitter": None,
             "page_url": None,
             "task_type": "feature",
+            "type_label": "New Feature",
             "message": "Add a tool",
             "status": "in_progress",
             "finished_at": None,
@@ -330,6 +355,7 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
             "submitter": "done@example.com",
             "page_url": None,
             "task_type": "bug",
+            "type_label": "Bug",
             "message": "Finished",
             "status": "completed",
             "finished_at": "2026-08-20 13:00",
@@ -350,6 +376,7 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
             "submitter": "no@example.com",
             "page_url": None,
             "task_type": "feature",
+            "type_label": "New Feature",
             "message": "No",
             "status": "declined",
             "finished_at": "2026-08-20 15:00",
@@ -383,6 +410,8 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
     assert "Assigned to app owner" in response.text
     assert "Needs attention" in response.text
     assert "Odoo task delivery needs attention and will retry." in response.text
+    assert "Bug" in response.text
+    assert "New Feature" in response.text
     assert response.text.count('action="/admin/feedback/1/status"') == 3
     assert response.text.count('action="/admin/feedback/2/status"') == 2
     assert 'action="/admin/feedback/3/status"' not in response.text
@@ -392,6 +421,8 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
 
     source = Path("src/zira_dashboard/templates/admin_feedback.html").read_text()
     assert "|safe" not in source
+    assert "{{ item.type_label }}" in source
+    assert "if item.task_type" not in source
 
     feedback_js = Path("src/zira_dashboard/static/feedback.js").read_text()
     assert "Thanks — saved and sending it to the app owner." in feedback_js

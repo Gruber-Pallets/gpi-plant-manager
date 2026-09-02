@@ -66,6 +66,56 @@ def test_shared_feedback_component_keeps_modal_contract():
     assert "/static/feedback.js" in html
 
 
+def test_feedback_panel_has_four_reference_types_and_two_steps():
+    html = FEEDBACK_TEMPLATE.read_text(encoding="utf-8")
+    for value in ("bug", "feature", "floor_issue", "floor_suggestion"):
+        assert f'data-type="{value}"' in html
+    for label in ("Bug", "New Feature", "Floor Issue", "Floor Suggestion"):
+        assert label in html
+    assert 'id="fb-type-step"' in html
+    assert 'id="fb-detail-step"' in html
+    assert 'id="fb-back"' in html
+
+
+def test_feedback_assets_define_four_choice_step_behavior_and_styles():
+    css = FEEDBACK_CSS.read_text(encoding="utf-8")
+    js = FEEDBACK_JS.read_text(encoding="utf-8")
+
+    assert (
+        "var ALLOWED_TYPES = ['bug', 'feature', 'floor_issue', 'floor_suggestion'];"
+        in js
+    )
+    for value, placeholder in (
+        ("bug", "What broke, and what did you expect?"),
+        ("feature", "What would you like to see, and why?"),
+        ("floor_issue", "What is wrong out on the floor?"),
+        ("floor_suggestion", "What should the team improve out on the floor?"),
+    ):
+        assert f"{value}: '{placeholder}'" in js
+    assert "if (ALLOWED_TYPES.indexOf(type) === -1) return;" in js
+    assert "typeStep.hidden = true;" in js
+    assert "detailStep.hidden = false;" in js
+    assert "desc.focus();" in js
+    assert "back.addEventListener('click'" in js
+    assert "typeStep.hidden = false;" in js
+    assert "detailStep.hidden = true;" in js
+    assert "chosen.focus();" in js
+    assert "setType('bug');" in js
+    assert "showTypeStep();" in js
+    assert "it.type_label || 'Unknown'" in js
+    assert "it.type === 'feature'" not in js
+
+    for selector in (
+        ".fb-type-card",
+        ".fb-type-icon",
+        ".fb-type-subtitle",
+        ".fb-type-btn.is-active",
+        ".fb-type-btn:focus-visible",
+    ):
+        assert selector in css
+    assert "@media (max-width:" in css
+
+
 def test_footer_css_has_whatsnew_trigger_and_card_styles():
     css = CSS.read_text(encoding="utf-8")
 

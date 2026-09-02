@@ -28,7 +28,7 @@
             <div class="feedback-card__summary">
               <div>
                 <span class="status-pill">{{ status_labels.get(item.status, item.status or 'Unknown') }}</span>
-                <span class="type-pill">{{ 'Feature' if item.task_type == 'feature' else 'Bug' }}</span>
+                <span class="type-pill">{{ item.type_label }}</span>
               </div>
               <span class="muted">#{{ item.id }} · {{ item.created_at }}</span>
             </div>

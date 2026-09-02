@@ -5,24 +5,60 @@
       <h3>Send feedback</h3>
       <button type="button" id="fb-close" class="fb-close" aria-label="Close">Close</button>
     </div>
-    <div class="fb-type" role="group" aria-label="Feedback type">
-      <button type="button" class="fb-type-btn is-active" data-type="bug" aria-pressed="true">Bug</button>
-      <button type="button" class="fb-type-btn" data-type="feature" aria-pressed="false">Feature request</button>
+    <div id="fb-type-step">
+      <p class="fb-step-label">What kind of feedback do you have?</p>
+      <div class="fb-type" role="group" aria-label="Feedback type">
+        <button type="button" class="fb-type-btn fb-type-card is-active" data-type="bug" aria-pressed="true">
+          <span class="fb-type-icon" aria-hidden="true">!</span>
+          <span class="fb-type-copy">
+            <span class="fb-type-title">Bug</span>
+            <span class="fb-type-subtitle">Something in this app is broken</span>
+          </span>
+          <span class="fb-type-arrow" aria-hidden="true">→</span>
+        </button>
+        <button type="button" class="fb-type-btn fb-type-card" data-type="feature" aria-pressed="false">
+          <span class="fb-type-icon" aria-hidden="true">+</span>
+          <span class="fb-type-copy">
+            <span class="fb-type-title">New Feature</span>
+            <span class="fb-type-subtitle">An idea to make this app better</span>
+          </span>
+          <span class="fb-type-arrow" aria-hidden="true">→</span>
+        </button>
+        <button type="button" class="fb-type-btn fb-type-card" data-type="floor_issue" aria-pressed="false">
+          <span class="fb-type-icon" aria-hidden="true">⌂</span>
+          <span class="fb-type-copy">
+            <span class="fb-type-title">Floor Issue</span>
+            <span class="fb-type-subtitle">Something wrong out on the floor</span>
+          </span>
+          <span class="fb-type-arrow" aria-hidden="true">→</span>
+        </button>
+        <button type="button" class="fb-type-btn fb-type-card" data-type="floor_suggestion" aria-pressed="false">
+          <span class="fb-type-icon" aria-hidden="true">★</span>
+          <span class="fb-type-copy">
+            <span class="fb-type-title">Floor Suggestion</span>
+            <span class="fb-type-subtitle">An idea for the team to consider</span>
+          </span>
+          <span class="fb-type-arrow" aria-hidden="true">→</span>
+        </button>
+      </div>
     </div>
-    <label class="fb-label" for="fb-desc">Description</label>
-    <textarea id="fb-desc" class="fb-desc" rows="5"
-              placeholder="What broke, and what did you expect?"></textarea>
-    <div class="fb-attachments" id="fb-attachments"></div>
-    <div class="fb-actions-row">
-      <button type="button" id="fb-upload-btn" class="fb-upload">Add screenshot</button>
-      <input type="file" id="fb-file-input" class="fb-file-input"
-             accept="image/jpeg,image/png,image/webp" hidden>
-      <span class="fb-hint">or paste one screenshot</span>
-    </div>
-    <div class="fb-footer">
-      <span id="fb-status" class="fb-status" role="status" aria-live="polite" hidden></span>
-      <button type="button" id="fb-cancel" class="fb-cancel">Cancel</button>
-      <button type="button" id="fb-submit" class="fb-submit">Send feedback</button>
+    <div id="fb-detail-step" hidden>
+      <button type="button" id="fb-back" class="fb-back">← Back</button>
+      <label class="fb-label" for="fb-desc">Description</label>
+      <textarea id="fb-desc" class="fb-desc" rows="5"
+                placeholder="What broke, and what did you expect?"></textarea>
+      <div class="fb-attachments" id="fb-attachments"></div>
+      <div class="fb-actions-row">
+        <button type="button" id="fb-upload-btn" class="fb-upload">Add screenshot</button>
+        <input type="file" id="fb-file-input" class="fb-file-input"
+               accept="image/jpeg,image/png,image/webp" hidden>
+        <span class="fb-hint">or paste one screenshot</span>
+      </div>
+      <div class="fb-footer">
+        <span id="fb-status" class="fb-status" role="status" aria-live="polite" hidden></span>
+        <button type="button" id="fb-cancel" class="fb-cancel">Cancel</button>
+        <button type="button" id="fb-submit" class="fb-submit">Send feedback</button>
+      </div>
     </div>
   </div>
 </div>

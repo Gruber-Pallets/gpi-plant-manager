@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Pick the right kind of feedback
+
+- **The feedback box now shows four clear choices before you write.** You can report an app bug, ask for a new feature, report a floor issue, or share a floor suggestion.
+
 ### Keep floor feedback moving
 
 - **Floor Issue and Floor Suggestion feedback now reaches the app owner with the right name.** These choices no longer stop early or get marked as a Bug.

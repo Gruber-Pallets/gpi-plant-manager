@@ -12,7 +12,7 @@ from typing import Mapping
 
 from . import db, feedback_task_delivery
 from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
-from .feedback_types import feedback_type
+from .feedback_types import feedback_type, feedback_type_or_legacy_bug
 
 
 _MAX_SIGNED_64 = 9_223_372_036_854_775_807
@@ -381,6 +381,7 @@ def for_admin(limit: int = 200) -> list[dict]:
         (_clamp_limit(limit, default=200),),
     )
     for row in rows:
+        row["type_label"] = feedback_type_or_legacy_bug(row.get("task_type")).label
         row["task_delivery_label"], row["task_delivery_note"] = (
             feedback_task_delivery.admin_status_for(row)
         )

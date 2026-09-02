@@ -225,6 +225,41 @@ def test_post_feedback_drops_unsafe_page_url(monkeypatch):
     assert captured["page_url"] is None
 
 
+def test_my_feedback_returns_canonical_type_labels_including_legacy_bug(monkeypatch):
+    rows = [
+        {
+            "task_type": task_type,
+            "message": f"Message {index}",
+            "created_at": "2026-09-02 12:00:00",
+            "page_url": None,
+            "status": "requested",
+        }
+        for index, task_type in enumerate(
+            ("bug", "feature", "floor_issue", "floor_suggestion", None),
+            start=1,
+        )
+    ]
+    monkeypatch.setattr(feedback_store, "for_submitter", lambda _submitter: rows)
+
+    response = client.get("/api/feedback/mine")
+
+    assert response.status_code == 200
+    assert [item["type"] for item in response.json()["items"]] == [
+        "bug",
+        "feature",
+        "floor_issue",
+        "floor_suggestion",
+        "bug",
+    ]
+    assert [item["type_label"] for item in response.json()["items"]] == [
+        "Bug",
+        "New Feature",
+        "Floor Issue",
+        "Floor Suggestion",
+        "Bug",
+    ]
+
+
 def test_admin_feedback_route_requires_super_admin():
     response = client.get("/admin/feedback")
     assert response.status_code == 403

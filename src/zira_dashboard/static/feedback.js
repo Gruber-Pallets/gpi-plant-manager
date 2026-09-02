@@ -30,9 +30,12 @@
 
 // ---------- Feedback modal (Send) + View Feedback list ----------
 (function () {
+  var ALLOWED_TYPES = ['bug', 'feature', 'floor_issue', 'floor_suggestion'];
   var PLACEHOLDERS = {
     bug: 'What broke, and what did you expect?',
     feature: 'What would you like to see, and why?',
+    floor_issue: 'What is wrong out on the floor?',
+    floor_suggestion: 'What should the team improve out on the floor?'
   };
   var screenshot = null;   // {file, name, url}
   var currentType = 'bug';
@@ -99,13 +102,15 @@
     var desc = $('fb-desc');
     if (desc) { desc.value = ''; desc.placeholder = PLACEHOLDERS.bug; }
     setType('bug');
+    showTypeStep();
     renderScreenshot();
     var status = $('fb-status');
     if (status) { status.hidden = true; status.textContent = ''; }
   }
 
   function setType(type) {
-    currentType = (type === 'feature') ? 'feature' : 'bug';
+    if (ALLOWED_TYPES.indexOf(type) === -1) return;
+    currentType = type;
     Array.prototype.forEach.call(document.querySelectorAll('.fb-type-btn'), function (btn) {
       var active = btn.getAttribute('data-type') === currentType;
       btn.classList.toggle('is-active', active);
@@ -113,6 +118,27 @@
     });
     var desc = $('fb-desc');
     if (desc) desc.placeholder = PLACEHOLDERS[currentType];
+    showDetailStep();
+  }
+
+  function showDetailStep() {
+    var typeStep = $('fb-type-step');
+    var detailStep = $('fb-detail-step');
+    if (typeStep) typeStep.hidden = true;
+    if (detailStep) detailStep.hidden = false;
+    var desc = $('fb-desc');
+    if (desc) desc.focus();
+  }
+
+  function showTypeStep() {
+    var typeStep = $('fb-type-step');
+    var detailStep = $('fb-detail-step');
+    if (typeStep) typeStep.hidden = false;
+    if (detailStep) detailStep.hidden = true;
+    var chosen = document.querySelector(
+      '.fb-type-btn[data-type="' + currentType + '"]'
+    );
+    if (chosen) chosen.focus();
   }
 
   function setScreenshot(file) {
@@ -218,7 +244,7 @@
       title.textContent = it.title;
       var meta = document.createElement('div');
       meta.className = 'fb-view-meta';
-      var typeLabel = it.type === 'feature' ? 'Feature request' : 'Bug';
+      var typeLabel = it.type_label || 'Unknown';
       meta.textContent = typeLabel + ' · ' + (it.created_at || '').slice(0, 10);
       main.appendChild(title); main.appendChild(meta);
       var pill = document.createElement('span');
@@ -258,8 +284,8 @@
     Array.prototype.forEach.call(openButtons, function (openBtn) {
       openBtn.addEventListener('click', function () {
         resetSendForm();
-        var d = $('fb-desc');
-        openModal($('fb-modal'), openBtn, d);
+        var selectedType = document.querySelector('.fb-type-btn.is-active');
+        openModal($('fb-modal'), openBtn, selectedType);
       });
     });
     if (viewBtn) viewBtn.addEventListener('click', openView);
@@ -276,6 +302,8 @@
     Array.prototype.forEach.call(document.querySelectorAll('.fb-type-btn'), function (btn) {
       btn.addEventListener('click', function () { setType(btn.getAttribute('data-type')); });
     });
+    var back = $('fb-back');
+    if (back) back.addEventListener('click', showTypeStep);
 
     var uploadBtn = $('fb-upload-btn'), fileInput = $('fb-file-input');
     if (uploadBtn && fileInput) {
