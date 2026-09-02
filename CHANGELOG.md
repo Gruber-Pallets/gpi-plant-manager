@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-09-02
+
+### Keep the People page bar clear
+
+- **Warnings now have their own row in the People page bar.** The totals and controls stay above them, and everything wraps to fit without a sideways scroll bar.
+
 ## 2026-09-01
 
 ### Finish the two-row People bar plan
