@@ -250,6 +250,22 @@ Matching values cannot auto-clear ambiguity. They do not prove whether a timed
 out mutation succeeded. Never infer success, overwrite a remote association,
 delete an attempt, or mark synchronized from current remote values.
 
+### Pre-attempt contract quarantine release
+
+Use this only when feedback stopped on a target or field contract mismatch
+before any Odoo attempt was created. Each production read-only preflight and
+each local release needs Dale's separate approval. The two confirmation flags
+record that both approvals were given:
+
+```sh
+.venv/bin/python -m scripts.feedback_odoo_rollout quarantine-release-pre-attempt --feedback-id "$APPROVED_FEEDBACK_ID" --reviewer "$REVIEWER_NAME" --confirm-read-only --confirm-local-release
+```
+
+The command performs a fresh full read-only preflight, then releases only the
+exact eligible local quarantine and records who reviewed it. It never changes
+Odoo. The normal worker performs the later Odoo change. A repeated release or
+a release from any other state fails safely.
+
 ## 15. Rollback by closing either gate
 
 Rollback means close either exact write gate and restart or redeploy. Closing

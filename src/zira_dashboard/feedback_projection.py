@@ -447,7 +447,7 @@ def build_projection(
     if note is not None:
         if type(note) is not str:
             raise ValueError("resolution note must be a string")
-        fields["x_studio_notes"] = f"<p>{html.escape(note, quote=True)}</p>"
+        fields["x_studio_notes"] = f"<p>{html.escape(note, quote=False)}</p>"
 
     binaries: dict[str, BinaryEvidence] = {}
     for role, image in images.items():
@@ -505,14 +505,19 @@ def _mismatch(field_name: str) -> ReadbackMismatch:
     return ReadbackMismatch(f"readback mismatch for {field_name}")
 
 
-def verify_readback(projection: Projection, remote: Mapping[str, object]) -> None:
-    """Verify every dispatched scalar, relation, and complete binary exactly."""
+def readback_mismatched_fields(
+    projection: Projection,
+    remote: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Return only allowlisted field names whose complete readback differs."""
     if type(projection) is not Projection or not isinstance(remote, Mapping):
         raise ReadbackMismatch("readback response was malformed")
 
+    mismatches: set[str] = set()
     for field_name, expected in projection.fields.items():
         if field_name not in remote:
-            raise _mismatch(field_name)
+            mismatches.add(field_name)
+            continue
         actual = remote[field_name]
         if field_name in _EMPLOYEE_FIELDS:
             if (
@@ -524,19 +529,29 @@ def verify_readback(projection: Projection, remote: Mapping[str, object]) -> Non
                 or type(expected) is not int
                 or actual[0] != expected
             ):
-                raise _mismatch(field_name)
+                mismatches.add(field_name)
         elif type(actual) is not type(expected) or actual != expected:
-            raise _mismatch(field_name)
+            mismatches.add(field_name)
 
     for field_name, evidence in projection.binaries.items():
         if field_name not in remote or type(remote[field_name]) is not str:
-            raise _mismatch(field_name)
+            mismatches.add(field_name)
+            continue
         try:
             decoded = base64.b64decode(remote[field_name], validate=True)
         except (binascii.Error, ValueError):
-            raise _mismatch(field_name) from None
+            mismatches.add(field_name)
+            continue
         if (
             len(decoded) != evidence.byte_length
             or hashlib.sha256(decoded).hexdigest() != evidence.sha256
         ):
-            raise _mismatch(field_name)
+            mismatches.add(field_name)
+    return tuple(sorted(mismatches))
+
+
+def verify_readback(projection: Projection, remote: Mapping[str, object]) -> None:
+    """Verify every dispatched scalar, relation, and complete binary exactly."""
+    mismatches = readback_mismatched_fields(projection, remote)
+    if mismatches:
+        raise _mismatch(mismatches[0])

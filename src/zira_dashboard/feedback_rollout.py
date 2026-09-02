@@ -6,18 +6,21 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Mapping
+from uuid import UUID
 
 from . import feedback_store
 from . import feedback_sync_store as sync_store
-from .feedback_sync import _saved_dates_match_contract
+from .feedback_sync import _projection_from_attempt, _saved_dates_match_contract
 from .feedback_projection import (
     BinaryEvidence,
     Projection,
     build_projection,
+    readback_mismatched_fields,
     resolve_employee_id,
     source_id_for,
     verify_readback,
 )
+from .feedback_types import FEEDBACK_TYPES
 from .odoo_improvements import (
     SOURCE_VALUE,
     TARGET_FIELDS,
@@ -54,9 +57,7 @@ _SELECTION_DIAGNOSTICS = frozenset(
         "x_studio_status:In-Progress",
         "x_studio_status:Completed",
         "x_studio_status:Declined",
-        "x_studio_type:Digital",
-        "x_studio_type:Digital - New Feature",
-        "x_studio_type:Physical",
+        *(f"x_studio_type:{item.odoo_value}" for item in FEEDBACK_TYPES),
     }
 )
 
@@ -174,6 +175,33 @@ class PreflightReport:
         )
         if self.fields_ok is not expected_ok:
             raise ValueError("preflight fields flag does not match diagnostics")
+
+
+@dataclass(frozen=True)
+class ReadbackDiagnosticReport:
+    """Privacy-safe field-name diagnosis for one exact quarantined attempt."""
+
+    attempt_id: UUID
+    feedback_id: int
+    projection_version: int
+    remote_id: int
+    state: str
+    reason: str
+    mismatched_fields: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.attempt_id) is not UUID:
+            raise ValueError("diagnostic attempt id is malformed")
+        _positive_signed_64(self.feedback_id, "feedback id")
+        _positive_signed_64(self.projection_version, "projection version")
+        _positive_signed_64(self.remote_id, "remote id")
+        if self.state != "quarantined" or self.reason != "readback_mismatch":
+            raise ValueError("diagnostic authority is malformed")
+        _diagnostic_tuple(
+            self.mismatched_fields,
+            "readback mismatch",
+            allowed=frozenset(TARGET_FIELDS),
+        )
 
 
 @dataclass(frozen=True)
@@ -370,6 +398,49 @@ def preflight(client) -> PreflightReport:
     if not callable(inspect):
         raise ContractError("client does not support target inspection")
     return _preflight_from_inspection(inspect())
+
+
+def readback_diagnostic(*, attempt_id: UUID, client) -> ReadbackDiagnosticReport:
+    """Identify only mismatched field names for one exact quarantined attempt."""
+    if type(attempt_id) is not UUID:
+        raise ValueError("diagnostic attempt id is malformed")
+    preflight_report = preflight(client)
+    if not (
+        type(preflight_report) is PreflightReport
+        and preflight_report.database_uuid_matches is True
+        and preflight_report.company_matches is True
+        and preflight_report.fields_ok is True
+        and preflight_report.source_value_present is True
+    ):
+        raise ContractError("preflight did not approve readback diagnosis")
+    evidence = sync_store.load_quarantined_readback_evidence(attempt_id)
+    if type(evidence) is not sync_store.QuarantinedReadbackEvidence:
+        raise ContractError("quarantined readback evidence was malformed")
+    projection = _projection_from_attempt(evidence.attempt)
+    read_fields = sorted(set(projection.fields) | set(projection.binaries))
+    remote = client.read_improvement(
+        evidence.remote_id,
+        read_fields,
+        full_binary=True,
+    )
+    mismatched_fields = readback_mismatched_fields(projection, remote)
+    refreshed = sync_store.load_quarantined_readback_evidence(attempt_id)
+    if (
+        type(refreshed) is not sync_store.QuarantinedReadbackEvidence
+        or refreshed != evidence
+    ):
+        raise sync_store.StateTransitionError(
+            "quarantined readback authority changed during diagnosis"
+        )
+    return ReadbackDiagnosticReport(
+        attempt_id=evidence.attempt_id,
+        feedback_id=evidence.feedback_id,
+        projection_version=evidence.projection_version,
+        remote_id=evidence.remote_id,
+        state=evidence.state,
+        reason=evidence.reason,
+        mismatched_fields=mismatched_fields,
+    )
 
 
 def _validated_rollout_rows(value: object, *, after_id: int, limit: int) -> list[dict]:
@@ -886,6 +957,7 @@ __all__ = [
     "LegacyApplyReport",
     "LegacyMigrationReport",
     "PreflightReport",
+    "ReadbackDiagnosticReport",
     "apply_legacy_batch",
     "canary_report",
     "dry_run_batch",
@@ -893,5 +965,6 @@ __all__ = [
     "migrate_legacy_batch",
     "preflight",
     "propose_legacy_status",
+    "readback_diagnostic",
     "reconciliation_counts",
 ]

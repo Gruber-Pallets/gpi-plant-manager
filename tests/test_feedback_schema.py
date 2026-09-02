@@ -50,6 +50,22 @@ def test_feedback_schema_has_durable_odoo_outbox_and_immutable_manifest():
     assert "CREATE TABLE IF NOT EXISTS feedback_odoo_backfill_state" in ddl
 
 
+def test_feedback_schema_has_exact_append_only_pre_attempt_release_audit():
+    ddl = " ".join(SCHEMA_DDL.split())
+    assert (
+        "CREATE TABLE IF NOT EXISTS feedback_odoo_pre_attempt_releases ( "
+        "id BIGSERIAL PRIMARY KEY, "
+        "feedback_id BIGINT NOT NULL REFERENCES feedback(id), "
+        "projection_version BIGINT NOT NULL CHECK (projection_version > 0), "
+        "quarantine_reason TEXT NOT NULL CHECK ( quarantine_reason = "
+        "'target_identity_or_contract_mismatch' ), "
+        "quarantined_at TIMESTAMPTZ NOT NULL, "
+        "reviewer TEXT NOT NULL CHECK (btrim(reviewer) <> ''), "
+        "created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+        "UNIQUE (feedback_id, projection_version, quarantined_at) );"
+    ) in ddl
+
+
 def test_schema_has_owner_task_delivery_outbox():
     ddl = " ".join(SCHEMA_DDL.split())
     assert "CREATE TABLE IF NOT EXISTS feedback_task_delivery" in ddl

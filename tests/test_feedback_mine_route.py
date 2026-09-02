@@ -50,6 +50,7 @@ def test_mine_maps_batched_legacy_odoo_statuses_to_local_names(monkeypatch):
     assert body["status_available"] is True
     assert body["items"][0] == {
         "type": "bug",
+        "type_label": "Bug",
         "title": "Totals wrong",
         "created_at": "2026-06-24 10:00",
         "page_url": "/p",

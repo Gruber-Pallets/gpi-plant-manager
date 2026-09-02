@@ -16,6 +16,22 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **The People page totals can now filter the list.** Warning buttons explain what went wrong and show a safe next step. You can also match unknown forklift drivers to the right active employee in Settings, and every change is recorded.
 
+### Show the exact missing feedback choice
+
+- **Plant Manager can now name either missing floor feedback choice during its Odoo check.** This makes setup problems easier to find while keeping the check safe.
+
+### Keep finished feedback moving
+
+- **Feedback notes with apostrophes or quote marks now match Odoo.** Plant Manager still protects the note from text that could change the page.
+
+### Find why shared feedback stopped
+
+- **Plant Manager can safely name which parts of a shared feedback item do not match Odoo.** It shows only field names and keeps feedback text and pictures private.
+
+### Safely retry feedback that stopped early
+
+- **Plant Manager can now safely retry feedback that stopped before it reached Odoo.** It checks the shared list first and keeps a note of who approved the retry.
+
 ### Finish the People status button plan
 
 - **The step-by-step plan for useful People page buttons is ready.** It covers list filters, clear warning details, safe checks, and recorded forklift matches. Nothing in the app has changed yet.
