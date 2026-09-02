@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Plan useful People page status buttons
+
+- **A design is ready to make the People page totals and warnings useful.** Totals will filter the list, and warnings will explain the problem and show the next safe step. Nothing in the app has changed yet.
+
 ### Finish the feedback and shared-list plan
 
 - **The step-by-step plan for feedback is ready.** It covers all four choices, safe start and finish steps, Odoo checks, and a careful retry for feedback that stopped early. Nothing in the app has changed yet.
