@@ -86,13 +86,6 @@
   font: inherit;
 }
 
-.pp-controls .pp-check {
-  display: flex;
-  align-items: center;
-  gap: .35rem;
-  min-height: 2rem;
-}
-
 .pp-controls button,
 .pp-controls a {
   display: inline-flex;
@@ -108,7 +101,7 @@
 }
 
 .pp-source-warnings span,
-.pp-counts span {
+.pp-counts button {
   flex: 0 0 auto;
   padding: .25rem .48rem;
   border: 1px solid var(--border);
@@ -117,6 +110,28 @@
   color: var(--muted);
   font-size: .8rem;
   white-space: nowrap;
+}
+
+.pp-counts button {
+  min-height: 44px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.pp-counts button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  color: var(--fg);
+}
+
+.pp-counts button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.pp-counts button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: 2px;
 }
 
 .pp-counts strong {

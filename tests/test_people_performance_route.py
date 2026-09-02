@@ -83,6 +83,34 @@ def test_future_day_is_rejected(client, dashboard_loader):
     assert dashboard_loader == []
 
 
+@pytest.mark.parametrize(
+    "path", ("/people-performance", "/people-performance/rows")
+)
+def test_status_and_attention_query_reaches_presenter(path, client, dashboard_loader):
+    response = client.get(
+        f"{path}?day={DAY.isoformat()}&status=working&attention=1"
+    )
+
+    assert response.status_code == 200
+    assert 'data-status="working"' in response.text
+    assert 'data-attention="1"' in response.text
+    assert "Showing 4 of 5 working now who need attention." in response.text
+    assert len(dashboard_loader) == 1
+
+
+@pytest.mark.parametrize(
+    "path", ("/people-performance", "/people-performance/rows")
+)
+def test_unknown_status_is_rejected_before_loading_dashboard(
+    path, client, dashboard_loader
+):
+    response = client.get(f"{path}?day={DAY.isoformat()}&status=other")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Unknown People status filter"}
+    assert dashboard_loader == []
+
+
 def test_rows_partial_has_identity_contract_and_is_never_response_cached(client, dashboard_loader):
     url = f"/people-performance/rows?day={DAY.isoformat()}&attention=1"
 

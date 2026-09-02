@@ -38,16 +38,27 @@ def _selected_day(raw: date | None, *, today: date) -> date:
     return selected
 
 
+def _selected_status(raw: str | None) -> str | None:
+    if raw in (None, "", "working", "earlier"):
+        return raw or None
+    raise HTTPException(status_code=400, detail="Unknown People status filter")
+
+
 def _context(
     day: date,
     *,
+    status_filter: str | None,
     attention: bool,
     now_utc: datetime,
     today: date,
 ) -> dict:
     model = load_dashboard(day, zira_client, now_utc=now_utc)
     return {
-        **dashboard_context(model, attention_only=attention),
+        **dashboard_context(
+            model,
+            status_filter=status_filter,
+            attention_only=attention,
+        ),
         "active": "people",
         "today": today.isoformat(),
         "rows_url": "/people-performance/rows",
@@ -59,15 +70,18 @@ def _context(
 def people_performance(
     request: Request,
     day: date | None = Query(default=None),
+    status: str | None = Query(default=None),
     attention: bool = Query(default=False),
 ):
     now_utc, today = _request_clock()
     selected = _selected_day(day, today=today)
+    selected_status = _selected_status(status)
     response = templates.TemplateResponse(
         request,
         "people_performance.html",
         _context(
             selected,
+            status_filter=selected_status,
             attention=attention,
             now_utc=now_utc,
             today=today,
@@ -84,15 +98,18 @@ def people_performance(
 def people_performance_rows(
     request: Request,
     day: date | None = Query(default=None),
+    status: str | None = Query(default=None),
     attention: bool = Query(default=False),
 ):
     now_utc, today = _request_clock()
     selected = _selected_day(day, today=today)
+    selected_status = _selected_status(status)
     response = templates.TemplateResponse(
         request,
         "_people_performance_rows.html",
         _context(
             selected,
+            status_filter=selected_status,
             attention=attention,
             now_utc=now_utc,
             today=today,

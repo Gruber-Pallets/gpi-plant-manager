@@ -133,12 +133,91 @@ def test_page_uses_one_compact_live_manager_strip(rendered_html):
     assert "Forklift data unavailable" in rendered_html
     assert "DashboardWarning" not in rendered_html
     assert 'name="day"' in rendered_html
-    assert 'name="attention"' in rendered_html
+    assert 'name="attention"' not in rendered_html
+    assert rendered_html.count('data-pp-count-filter=') == 3
+    assert 'data-pp-count-filter="status" data-filter-value="working"' in rendered_html
+    assert 'data-pp-count-filter="status" data-filter-value="earlier"' in rendered_html
+    assert 'data-pp-count-filter="attention" data-filter-value="1"' in rendered_html
     assert 'data-pp-control-key="day"' in rendered_html
     assert 'data-pp-control-key="attention"' in rendered_html
     assert 'data-pp-auto-submit' in rendered_html
     assert '>Apply<' not in rendered_html
     assert '>Today<' not in rendered_html
+
+
+def test_count_controls_expose_filter_state_and_empty_descriptions(rendered_html):
+    counts = rendered_html.split('<div class="pp-counts"', 1)[1].split("</div>", 1)[0]
+
+    assert 'data-status=""' in rendered_html
+    assert 'data-attention="0"' in rendered_html
+    assert counts.count('aria-pressed="false"') == 3
+    assert 'id="pp-working-empty"' in rendered_html
+    assert 'id="pp-earlier-empty"' in rendered_html
+    assert 'id="pp-attention-empty"' in rendered_html
+    assert "There are no working people to show." in rendered_html
+    assert "There are no people who worked earlier to show." in rendered_html
+    assert "There are no people who need attention to show." in rendered_html
+
+
+def test_active_filters_are_selected_and_preserved_by_the_date_form(client, monkeypatch):
+    monkeypatch.setattr(
+        route,
+        "load_dashboard",
+        lambda day, client, now_utc=None: replace(
+            busy_dashboard_model(), day=day, is_today=day == DAY
+        ),
+    )
+
+    response = client.get(
+        f"/people-performance?day={DAY.isoformat()}&status=working&attention=1"
+    )
+
+    assert response.status_code == 200
+    assert 'data-status="working"' in response.text
+    assert 'data-attention="1"' in response.text
+    assert '<input type="hidden" name="status" value="working">' in response.text
+    assert '<input type="hidden" name="attention" value="1">' in response.text
+    assert 'type="checkbox"' not in response.text
+    counts = response.text.split('<div class="pp-counts"', 1)[1].split("</div>", 1)[0]
+    assert counts.count('aria-pressed="true"') == 2
+    assert response.text.count('class="pp-filter-selected"') == 2
+    assert "Showing 4 of 5 working now who need attention." in response.text
+
+
+def test_filtered_empty_state_replaces_generic_section_messages(client, monkeypatch):
+    monkeypatch.setattr(
+        route,
+        "load_dashboard",
+        lambda day, client, now_utc=None: replace(
+            busy_dashboard_model(), day=day, is_today=day == DAY
+        ),
+    )
+
+    response = client.get(
+        f"/people-performance?day={DAY.isoformat()}&status=earlier&attention=1"
+    )
+
+    assert response.status_code == 200
+    assert '<p class="pp-filter-summary" role="status">Showing 0 of 1 worked earlier who need attention.</p>' in response.text
+    assert '<div class="pp-filter-empty">' in response.text
+    assert "No people match these filters." in response.text
+    assert f'href="/people-performance?day={DAY.isoformat()}"' in response.text
+    assert "No people in this group." not in response.text
+
+
+def test_count_button_styles_cover_touch_focus_selected_and_disabled_states():
+    css = (ROOT / "src/zira_dashboard/static/people-performance.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".pp-counts button {" in css
+    assert "min-height: 44px" in css
+    assert "cursor: pointer" in css
+    assert ".pp-counts button[aria-pressed=\"true\"]" in css
+    assert ".pp-counts button:disabled" in css
+    assert "cursor: not-allowed" in css
+    assert ".pp-counts button:focus-visible" in css
+    assert "outline-offset: 2px" in css
 
 
 def test_manager_strip_omits_warning_region_when_sources_are_healthy(client, monkeypatch):

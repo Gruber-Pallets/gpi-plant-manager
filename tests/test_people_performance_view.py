@@ -185,6 +185,42 @@ def test_attention_filter_keeps_every_reason_state_inside_fixed_sections():
     } <= reasons
 
 
+@pytest.mark.parametrize(
+    ("status_filter", "attention_only", "expected_names"),
+    (
+        (None, False, {"Amy Behind", "Zed Ahead", "Ben Driver", "Cal Missing", "Sam Stale", "Mia Mixed"}),
+        ("working", False, {"Amy Behind", "Zed Ahead", "Ben Driver", "Cal Missing", "Sam Stale"}),
+        ("earlier", False, {"Mia Mixed"}),
+        ("working", True, {"Amy Behind", "Ben Driver", "Cal Missing", "Sam Stale"}),
+        ("earlier", True, set()),
+    ),
+)
+def test_status_and_attention_filters_compose(
+    status_filter, attention_only, expected_names
+):
+    context = dashboard_context(
+        busy_dashboard_model(),
+        status_filter=status_filter,
+        attention_only=attention_only,
+    )
+    names = {
+        row["person_name"]
+        for section in context["sections"]
+        for row in section["rows"]
+    }
+    assert names == expected_names
+    assert context["working_now"] == 5
+    assert context["worked_earlier"] == 1
+    assert context["total_people"] == 6
+    assert context["visible_people"] == len(expected_names)
+    if status_filter == "earlier" and attention_only:
+        assert context["filtered_empty"] is True
+        assert (
+            context["filter_summary"]
+            == "Showing 0 of 1 worked earlier who need attention."
+        )
+
+
 def test_production_accessible_name_includes_status_uptime_and_downtime():
     context = dashboard_context(busy_dashboard_model())
     interval = _row_named(context, "Amy Behind")["intervals"][0]

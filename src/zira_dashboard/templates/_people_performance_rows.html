@@ -2,17 +2,39 @@
      data-response-kind="people-performance-rows"
      data-day="{{ day }}"
      data-is-today="{{ 1 if is_today else 0 }}"
+     data-status="{{ status_filter or '' }}"
      data-attention="{{ 1 if attention_only else 0 }}"
      data-as-of="{{ as_of }}"
      data-as-of-iso="{{ as_of_iso }}"
      style="--pp-track-width:{{ schedule_track_width_rem }}rem">
   <form class="pp-manager-strip" action="/people-performance" method="get" aria-label="People dashboard controls">
     <div class="pp-manager-primary">
-      <div class="pp-counts" aria-label="Day totals">
-        <span><strong>{{ working_now }}</strong> working now</span>
-        <span><strong>{{ worked_earlier }}</strong> worked earlier</span>
-        <span><strong>{{ needs_attention }}</strong> need attention</span>
+      <div class="pp-counts" aria-label="Filter people by day totals">
+        <button type="button" data-pp-count-filter="status" data-filter-value="working"
+                data-pp-control-key="working"
+                aria-pressed="{{ 'true' if status_filter == 'working' else 'false' }}"
+                {% if working_now == 0 %}disabled aria-describedby="pp-working-empty"{% endif %}>
+          {% if status_filter == 'working' %}<span class="pp-filter-selected" aria-hidden="true">✓</span><span class="sr-only">Selected filter.</span>{% endif %}
+          <strong>{{ working_now }}</strong> working now
+        </button>
+        <button type="button" data-pp-count-filter="status" data-filter-value="earlier"
+                data-pp-control-key="earlier"
+                aria-pressed="{{ 'true' if status_filter == 'earlier' else 'false' }}"
+                {% if worked_earlier == 0 %}disabled aria-describedby="pp-earlier-empty"{% endif %}>
+          {% if status_filter == 'earlier' %}<span class="pp-filter-selected" aria-hidden="true">✓</span><span class="sr-only">Selected filter.</span>{% endif %}
+          <strong>{{ worked_earlier }}</strong> worked earlier
+        </button>
+        <button type="button" data-pp-count-filter="attention" data-filter-value="1"
+                data-pp-control-key="attention"
+                aria-pressed="{{ 'true' if attention_only else 'false' }}"
+                {% if needs_attention == 0 %}disabled aria-describedby="pp-attention-empty"{% endif %}>
+          {% if attention_only %}<span class="pp-filter-selected" aria-hidden="true">✓</span><span class="sr-only">Selected filter.</span>{% endif %}
+          <strong>{{ needs_attention }}</strong> need attention
+        </button>
       </div>
+      <span id="pp-working-empty" class="sr-only">There are no working people to show.</span>
+      <span id="pp-earlier-empty" class="sr-only">There are no people who worked earlier to show.</span>
+      <span id="pp-attention-empty" class="sr-only">There are no people who need attention to show.</span>
       <div class="pp-manager-actions">
         <p class="pp-updated" id="pp-live-status" aria-live="polite">Updated {{ as_of }}</p>
         <div class="pp-controls">
@@ -20,10 +42,8 @@
             <span class="sr-only">Date</span>
             <input data-pp-auto-submit data-pp-control-key="day" type="date" name="day" value="{{ day }}" max="{{ today }}">
           </label>
-          <label class="pp-check">
-            <input data-pp-auto-submit data-pp-control-key="attention" type="checkbox" name="attention" value="1"{% if attention_only %} checked{% endif %}>
-            Needs attention
-          </label>
+          {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+          {% if attention_only %}<input type="hidden" name="attention" value="1">{% endif %}
           {% if not is_today %}<a data-pp-control-key="today" href="/people-performance">Today</a>{% endif %}
         </div>
       </div>
@@ -35,6 +55,13 @@
     {% endif %}
   </form>
   <div id="people-performance-rows">
+    {% if filter_summary %}<p class="pp-filter-summary" role="status">{{ filter_summary }}</p>{% endif %}
+    {% if filtered_empty %}
+    <div class="pp-filter-empty">
+      <p>No people match these filters.</p>
+      <a href="/people-performance?day={{ day }}">Clear filters</a>
+    </div>
+    {% else %}
     {% for section in sections %}
     <section class="pp-section" data-section="{{ section.key }}">
       <header class="pp-section-header">
@@ -166,5 +193,6 @@
       {% endfor %}
     </section>
     {% endfor %}
+    {% endif %}
   </div>
 </div>

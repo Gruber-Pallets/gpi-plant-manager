@@ -379,8 +379,36 @@ def _row_view(
     }
 
 
-def dashboard_context(model: DashboardModel, *, attention_only: bool = False) -> dict:
+def _filter_summary(
+    *,
+    status_filter: str | None,
+    attention_only: bool,
+    visible: int,
+    total: int,
+    working: int,
+    earlier: int,
+) -> str:
+    if status_filter is None and not attention_only:
+        return ""
+    if status_filter == "working":
+        denominator, label = working, "working now"
+    elif status_filter == "earlier":
+        denominator, label = earlier, "worked earlier"
+    else:
+        denominator, label = total, "people"
+    attention = " who need attention" if attention_only else ""
+    return f"Showing {visible} of {denominator} {label}{attention}."
+
+
+def dashboard_context(
+    model: DashboardModel,
+    *,
+    status_filter: str | None = None,
+    attention_only: bool = False,
+) -> dict:
     """Convert a validated dashboard model into deterministic template values."""
+    if status_filter not in (None, "working", "earlier"):
+        raise ValueError("unknown People status filter")
     names = {item.location_name for row in model.rows for item in row.intervals}
     location_classes = {
         name: _LOCATION_CLASSES[
@@ -388,7 +416,16 @@ def dashboard_context(model: DashboardModel, *, attention_only: bool = False) ->
         ]
         for name in names
     }
-    rows = tuple(row for row in model.rows if not attention_only or row.attention_reasons)
+    status_rows = tuple(
+        row
+        for row in model.rows
+        if status_filter is None
+        or (status_filter == "working" and row.is_active)
+        or (status_filter == "earlier" and not row.is_active)
+    )
+    rows = tuple(
+        row for row in status_rows if not attention_only or row.attention_reasons
+    )
     sections = tuple(
         {
             "key": key,
@@ -402,6 +439,10 @@ def dashboard_context(model: DashboardModel, *, attention_only: bool = False) ->
 
     schedule_markers = _schedule_markers(model)
     schedule_time_groups = _schedule_time_groups(schedule_markers)
+    total_people = len(model.rows)
+    visible_people = len(rows)
+    working_now = sum(row.is_active for row in model.rows)
+    worked_earlier = sum(not row.is_active for row in model.rows)
 
     return {
         "day": model.day.isoformat(),
@@ -413,10 +454,24 @@ def dashboard_context(model: DashboardModel, *, attention_only: bool = False) ->
         "schedule_time_groups": schedule_time_groups,
         "schedule_track_width_rem": _schedule_track_width_rem(schedule_time_groups),
         "source_warnings": model.source_warnings,
-        "working_now": sum(row.is_active for row in model.rows),
-        "worked_earlier": sum(not row.is_active for row in model.rows),
+        "working_now": working_now,
+        "worked_earlier": worked_earlier,
         "needs_attention": sum(bool(row.attention_reasons) for row in model.rows),
+        "status_filter": status_filter,
         "attention_only": attention_only,
+        "total_people": total_people,
+        "visible_people": visible_people,
+        "filtered_empty": bool(
+            (status_filter is not None or attention_only) and not visible_people
+        ),
+        "filter_summary": _filter_summary(
+            status_filter=status_filter,
+            attention_only=attention_only,
+            visible=visible_people,
+            total=total_people,
+            working=working_now,
+            earlier=worked_earlier,
+        ),
     }
 
 
