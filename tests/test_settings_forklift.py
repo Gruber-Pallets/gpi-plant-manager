@@ -1,6 +1,8 @@
 """Forklift settings route: the pure override-parsing helper (auto vs set,
 clamps) and the settings-page template render (sliders + both numbers). Both run
 everywhere (no DB, no network)."""
+import pytest
+
 from zira_dashboard.routes import settings as settings_route
 
 
@@ -206,6 +208,9 @@ def test_forklift_settings_renders_focused_identity_forms_without_raw_calls():
             "source_name": "Sam",
             "employee_odoo_id": 708,
             "employee_name": "Sam Rivera",
+            "employee_eligible": True,
+            "employee_status": "active",
+            "employee_status_label": "Active employee",
             "version": 4,
             "updated_at": "Sep 1, 10:30 AM",
             "updated_by_upn": "manager@example.com",
@@ -239,6 +244,9 @@ def test_forklift_settings_renders_focused_identity_forms_without_raw_calls():
     assert 'name="identity_day" value="2026-09-02"' in rendered
     assert 'max="2026-09-02"' in rendered
     assert "raw-event-must-not-render" not in rendered
+    current_matches = rendered.split("Current matches", 1)[1]
+    assert '<option value="">Choose an active employee</option>' in current_matches
+    assert '<option value="" selected>' not in current_matches
 
 
 def test_forklift_identity_styles_keep_controls_accessible_and_responsive():
@@ -253,6 +261,63 @@ def test_forklift_identity_styles_keep_controls_accessible_and_responsive():
     assert "min-height: 44px" in css
     assert ":focus-visible" in css
     assert "@media (max-width: 760px)" in css
+
+
+@pytest.mark.parametrize(
+    ("employee_name", "status_label"),
+    (
+        ("Former Person", "Inactive employee"),
+        ("Hidden Person", "Excluded from Plant Manager"),
+        ("Employee no longer available", "Employee no longer available"),
+    ),
+)
+def test_stale_current_mapping_requires_blank_active_employee_choice(
+    employee_name, status_label
+):
+    import re
+
+    from zira_dashboard.deps import templates
+
+    rendered = templates.get_template("_settings_forklift_identities.html").render(
+        forklift_identities={
+            "day": "2026-09-02",
+            "unresolved": (),
+            "mappings": ({
+                "external_driver_id": "driver-stale",
+                "source_name": "Stored source name",
+                "employee_odoo_id": 799,
+                "employee_name": employee_name,
+                "employee_eligible": False,
+                "employee_status_label": status_label,
+                "version": 6,
+                "updated_at": "Sep 1, 10:30 AM",
+                "updated_by_upn": "manager@example.com",
+            },),
+            "employee_options": (
+                {"employee_odoo_id": 707, "employee_name": "Active Choice"},
+            ),
+        },
+        today="2026-09-02",
+        identity_error="",
+        identity_saved=False,
+    )
+    current_matches = rendered.split("Current matches", 1)[1]
+    select = re.search(
+        r'<select name="employee_odoo_id" required>(.*?)</select>',
+        current_matches,
+        re.DOTALL,
+    )
+
+    assert select
+    assert re.search(
+        r'<option value=""\s+selected>Choose an active employee</option>',
+        select.group(1),
+    )
+    assert not re.search(r'<option value="707"[^>]*selected', select.group(1))
+    assert employee_name in current_matches
+    assert status_label in current_matches
+    assert 'name="expected_version" value="6"' in current_matches
+    assert 'name="action" value="remove"' in current_matches
 
 
 def test_forklift_panel_has_capacity_sliders_not_target():

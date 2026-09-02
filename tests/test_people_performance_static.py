@@ -1269,6 +1269,64 @@ def test_controller_runtime_handles_details_races_navigation_and_teardown():
             throw new Error('background warning poll announced an unchanged result');
           }
 
+          // If polling removes the focused warning trigger, the truthful
+          // cleared panel receives focus at its close control. Escape and the
+          // close control remain safe even though the old trigger is gone.
+          const clearedFocusEnv = makeEnvironment('1');
+          const clearedFocusWarning = clearedFocusEnv.makeWarningTrigger(
+            'cleared-focus-warning', 'Warning that clears'
+          );
+          clearedFocusEnv.document.rows.warnings = [clearedFocusWarning];
+          clearedFocusEnv.document.warnings = clearedFocusEnv.document.rows.warnings;
+          const clearedFocusController = makeController(
+            clearedFocusEnv.document, clearedFocusEnv.windowObject
+          );
+          clearedFocusController.init();
+          clearedFocusWarning.focus();
+          clearedFocusEnv.document.emit('click', event(clearedFocusWarning));
+          clearedFocusEnv.parsed.clearedFocusInitial
+            = clearedFocusEnv.makeWarningContent('open', 'Open detail');
+          clearedFocusEnv.requests[0].pending.resolve(
+            detailResponse('clearedFocusInitial')
+          );
+          await flush();
+          const clearedFocusPoll = clearedFocusEnv.timers[0].callback();
+          clearedFocusEnv.parsed.clearedFocusRows = clearedFocusEnv.makeRows(
+            '2026-08-28', '1', [], [], []
+          );
+          clearedFocusEnv.requests[1].pending.resolve(
+            response({token: 'clearedFocusRows'})
+          );
+          if (await clearedFocusPoll !== true) {
+            throw new Error('focused warning clear poll did not refresh rows');
+          }
+          const clearedFocusClose = clearedFocusEnv.makeWarningClose();
+          clearedFocusEnv.parsed.clearedFocusDetail
+            = clearedFocusEnv.makeWarningContent(
+              'cleared', 'Source is healthy', [clearedFocusClose]
+            );
+          clearedFocusEnv.requests[2].pending.resolve(
+            detailResponse('clearedFocusDetail')
+          );
+          await flush();
+          if (
+            clearedFocusEnv.warningPanel.hidden
+            || !clearedFocusClose.isConnected
+            || clearedFocusEnv.document.activeElement !== clearedFocusClose
+            || clearedFocusClose.focusCount !== 1
+          ) {
+            throw new Error('cleared panel did not receive focus after its trigger disappeared');
+          }
+          clearedFocusEnv.document.emit('keydown', {key: 'Escape'});
+          if (!clearedFocusEnv.warningPanel.hidden) {
+            throw new Error('Escape was unsafe after the cleared warning trigger disappeared');
+          }
+          clearedFocusEnv.document.emit('click', event(clearedFocusClose));
+          if (!clearedFocusEnv.warningPanel.hidden) {
+            throw new Error('close was unsafe after the cleared warning trigger disappeared');
+          }
+          clearedFocusController.destroy();
+
           // Panel controls are real attached focus targets. Detail replacement
           // restores the same control identity, or the new close control when
           // the prior action no longer exists.

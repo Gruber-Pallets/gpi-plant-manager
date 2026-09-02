@@ -15,7 +15,9 @@ class DriverIdentityMapping:
     external_driver_id: str
     source_name: str
     employee_odoo_id: int
-    employee_name: str
+    employee_name: str | None
+    employee_active: bool | None
+    employee_excluded: bool | None
     version: int
     created_at: datetime
     created_by_upn: str
@@ -46,12 +48,27 @@ def _positive_int(value: object, label: str) -> int:
     return parsed
 
 
+def _optional_text(value: object) -> str | None:
+    clean = str(value or "").strip()
+    return clean or None
+
+
 def _mapping(row: dict) -> DriverIdentityMapping:
     return DriverIdentityMapping(
         external_driver_id=row["external_driver_id"],
         source_name=row["source_name"],
         employee_odoo_id=int(row["employee_odoo_id"]),
         employee_name=row["employee_name"],
+        employee_active=(
+            bool(row["employee_active"])
+            if row.get("employee_active") is not None
+            else None
+        ),
+        employee_excluded=(
+            bool(row["employee_excluded"])
+            if row.get("employee_excluded") is not None
+            else None
+        ),
         version=int(row["version"]),
         created_at=row["created_at"],
         created_by_upn=row["created_by_upn"],
@@ -93,10 +110,12 @@ def _append_audit(
 def list_mappings() -> tuple[DriverIdentityMapping, ...]:
     rows = db.query(
         "SELECT m.external_driver_id, m.source_name, m.employee_odoo_id, "
-        "p.name AS employee_name, m.version, m.created_at, m.created_by_upn, "
+        "p.name AS employee_name, p.active AS employee_active, "
+        "p.excluded AS employee_excluded, m.version, m.created_at, m.created_by_upn, "
         "m.updated_at, m.updated_by_upn "
-        "FROM forklift_driver_identity_map m JOIN people p ON p.odoo_id=m.employee_odoo_id "
-        "ORDER BY lower(p.name), m.external_driver_id"
+        "FROM forklift_driver_identity_map m "
+        "LEFT JOIN people p ON p.odoo_id=m.employee_odoo_id "
+        "ORDER BY lower(COALESCE(p.name, m.source_name)), m.external_driver_id"
     )
     return tuple(_mapping(row) for row in rows)
 
@@ -124,6 +143,7 @@ def save_mapping(
     source = str(source_name or "").strip()[:200]
     employee_id = _positive_int(employee_odoo_id, "employee Odoo ID")
     actor = _required_text(actor_upn, "actor UPN")
+    actor_display_name = _optional_text(actor_name)
     try:
         with db.cursor() as cur:
             cur.execute(
@@ -180,9 +200,14 @@ def save_mapping(
                 before_source_name=(before["source_name"] if before else None),
                 after_source_name=source,
                 actor_upn=actor,
-                actor_name=actor_name,
+                actor_name=actor_display_name,
             )
-            return _mapping({**saved, "employee_name": person["name"]})
+            return _mapping({
+                **saved,
+                "employee_name": person["name"],
+                "employee_active": True,
+                "employee_excluded": False,
+            })
     except UniqueViolation as exc:
         raise MappingConflict(
             "That employee is already mapped to another forklift identity."
@@ -199,6 +224,7 @@ def remove_mapping(
     driver_id = _required_text(external_driver_id, "external driver ID")
     version = _positive_int(expected_version, "mapping version")
     actor = _required_text(actor_upn, "actor UPN")
+    actor_display_name = _optional_text(actor_name)
     with db.cursor() as cur:
         cur.execute(
             "SELECT * FROM forklift_driver_identity_map "
@@ -221,7 +247,7 @@ def remove_mapping(
             before_source_name=before["source_name"],
             after_source_name=None,
             actor_upn=actor,
-            actor_name=actor_name,
+            actor_name=actor_display_name,
         )
 
 

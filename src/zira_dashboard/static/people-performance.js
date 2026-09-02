@@ -139,6 +139,19 @@
     focusWithoutScrolling(focusTarget, true);
   }
 
+  function focusWarningPanelFallback() {
+    var panel = ensureWarningPanel();
+    if (!panel) return;
+    var focusTarget = panel.querySelector("[data-pp-warning-close]");
+    // A server response without a close control still has one stable keyboard
+    // destination: the persistent warning region itself.
+    if (!focusTarget && panel.focus) {
+      panel.setAttribute("tabindex", "-1");
+      focusTarget = panel;
+    }
+    focusWithoutScrolling(focusTarget, true);
+  }
+
   function renderWarningMessage(message, busy) {
     var panel = ensureWarningPanel();
     if (!panel) return;
@@ -689,11 +702,22 @@
         pinWarningReplacement(restoredWarning, state.warningKey, false);
         if (state.warningFocused) focusWithoutScrolling(restoredWarning, true);
       } else {
+        var displacedWarningFocus = state.warningFocused
+          ? document.activeElement
+          : null;
         warningTrigger = null;
         warningKey = state.warningKey;
         warningPinned = true;
         renderWarningMessage("Loading warning details…", true);
-        loadWarningDetail(state.warningKey, null, false);
+        loadWarningDetail(state.warningKey, null, false).then(function (loaded) {
+          if (
+            loaded
+            && state.warningFocused
+            && document.activeElement === displacedWarningFocus
+          ) {
+            focusWarningPanelFallback();
+          }
+        });
       }
     }
     syncHorizontalScroll(state.horizontalScroll, null);

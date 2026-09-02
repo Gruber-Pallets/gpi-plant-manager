@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 
 import pytest
 
@@ -79,6 +80,186 @@ def test_remove_mapping_rejects_invalid_version_without_database(expected_versio
 def test_audit_rows_rejects_blank_external_driver_id_without_database():
     with pytest.raises(ValueError, match="external driver ID is required"):
         audit_rows("  ")
+
+
+class _SaveCursor:
+    def __init__(self):
+        self.statements = []
+        self._result = None
+
+    def execute(self, sql, params):
+        normalized_sql = " ".join(sql.split())
+        self.statements.append((normalized_sql, params))
+        if normalized_sql.startswith("SELECT external_driver_id, source_name"):
+            self._result = None
+        elif normalized_sql.startswith("SELECT odoo_id, name FROM people"):
+            self._result = {"odoo_id": 700, "name": "Identity Test One"}
+        elif normalized_sql.startswith("SELECT external_driver_id FROM"):
+            self._result = None
+        elif normalized_sql.startswith("INSERT INTO forklift_driver_identity_map"):
+            now = datetime(2026, 9, 2, 14, 30, tzinfo=UTC)
+            self._result = {
+                "external_driver_id": params[0],
+                "source_name": params[1],
+                "employee_odoo_id": params[2],
+                "version": 1,
+                "created_at": now,
+                "created_by_upn": params[3],
+                "updated_at": now,
+                "updated_by_upn": params[4],
+            }
+        else:
+            self._result = None
+
+    def fetchone(self):
+        return self._result
+
+
+class _CursorContext:
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    def __enter__(self):
+        return self.cursor
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+class _RemoveCursor:
+    def __init__(self):
+        self.statements = []
+        self._result = None
+
+    def execute(self, sql, params):
+        normalized_sql = " ".join(sql.split())
+        self.statements.append((normalized_sql, params))
+        if normalized_sql.startswith("SELECT * FROM forklift_driver_identity_map"):
+            self._result = {
+                "external_driver_id": "driver-7",
+                "source_name": "Sam Rivera",
+                "employee_odoo_id": 700,
+                "version": 2,
+            }
+        else:
+            self._result = None
+
+    def fetchone(self):
+        return self._result
+
+
+def test_save_mapping_normalizes_driver_source_and_actor_values_without_database(
+    monkeypatch,
+):
+    cursor = _SaveCursor()
+    monkeypatch.setattr(db, "cursor", lambda: _CursorContext(cursor))
+
+    saved = save_mapping(
+        "  driver-7  ",
+        "  Sam Rivera  ",
+        700,
+        expected_version=None,
+        actor_upn="  manager@example.com  ",
+        actor_name="  Floor Manager  ",
+    )
+
+    assert saved.external_driver_id == "driver-7"
+    assert saved.source_name == "Sam Rivera"
+    assert saved.created_by_upn == "manager@example.com"
+    mapping_insert = next(
+        params
+        for sql, params in cursor.statements
+        if sql.startswith("INSERT INTO forklift_driver_identity_map")
+    )
+    audit_insert = next(
+        params
+        for sql, params in cursor.statements
+        if sql.startswith("INSERT INTO forklift_driver_identity_audit")
+    )
+    assert mapping_insert == (
+        "driver-7",
+        "Sam Rivera",
+        700,
+        "manager@example.com",
+        "manager@example.com",
+    )
+    assert audit_insert == (
+        "driver-7",
+        "create",
+        None,
+        700,
+        None,
+        "Sam Rivera",
+        "manager@example.com",
+        "Floor Manager",
+    )
+
+
+def test_remove_mapping_normalizes_driver_and_actor_values_without_database(
+    monkeypatch,
+):
+    cursor = _RemoveCursor()
+    monkeypatch.setattr(db, "cursor", lambda: _CursorContext(cursor))
+
+    remove_mapping(
+        "  driver-7  ",
+        expected_version=2,
+        actor_upn="  manager@example.com  ",
+        actor_name="  Floor Manager  ",
+    )
+
+    delete_params = next(
+        params
+        for sql, params in cursor.statements
+        if sql.startswith("DELETE FROM forklift_driver_identity_map")
+    )
+    audit_insert = next(
+        params
+        for sql, params in cursor.statements
+        if sql.startswith("INSERT INTO forklift_driver_identity_audit")
+    )
+    assert delete_params == ("driver-7",)
+    assert audit_insert == (
+        "driver-7",
+        "remove",
+        700,
+        None,
+        "Sam Rivera",
+        None,
+        "manager@example.com",
+        "Floor Manager",
+    )
+
+
+def test_list_mappings_keeps_a_mapping_when_its_employee_row_is_missing(monkeypatch):
+    now = datetime(2026, 9, 2, 14, 30, tzinfo=UTC)
+    captured = {}
+
+    def query(sql, params=None):
+        captured.update(sql=" ".join(sql.split()), params=params)
+        return [{
+            "external_driver_id": "driver-missing",
+            "source_name": "Former Driver",
+            "employee_odoo_id": 799,
+            "employee_name": None,
+            "employee_active": None,
+            "employee_excluded": None,
+            "version": 3,
+            "created_at": now,
+            "created_by_upn": "manager@example.com",
+            "updated_at": now,
+            "updated_by_upn": "manager@example.com",
+        }]
+
+    monkeypatch.setattr(db, "query", query)
+
+    mappings = list_mappings()
+
+    assert "LEFT JOIN people" in captured["sql"]
+    assert mappings[0].external_driver_id == "driver-missing"
+    assert mappings[0].employee_name is None
+    assert mappings[0].employee_active is None
+    assert mappings[0].employee_excluded is None
 
 
 @pytest.fixture

@@ -549,7 +549,7 @@ def settings_page(
         from .. import forklift_advisor, forklift_settings
         from .staffing import _next_working_day
         _fl = forklift_settings.current()
-        _target_day = _next_working_day(plant_today())
+        _target_day = _next_working_day(settings_today)
         forklift_ctx = {
             "enabled": _fl.enabled,
             "include_loading_jockeying": _fl.include_loading_jockeying,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -105,6 +105,85 @@ def test_identity_context_aggregates_unresolved_calls(monkeypatch):
     assert "Private workstation payload" not in repr(context)
 
 
+@pytest.mark.parametrize(
+    (
+        "employee_name",
+        "employee_active",
+        "employee_excluded",
+        "expected_status",
+        "expected_label",
+    ),
+    (
+        ("Former Person", False, False, "inactive", "Inactive employee"),
+        ("Hidden Person", True, True, "excluded", "Excluded from Plant Manager"),
+        (None, None, None, "missing", "Employee no longer available"),
+    ),
+)
+def test_identity_context_models_stale_mapping_without_duplicate_unresolved_record(
+    monkeypatch,
+    employee_name,
+    employee_active,
+    employee_excluded,
+    expected_status,
+    expected_label,
+):
+    from zira_dashboard import (
+        forklift_event_store,
+        forklift_identity_store,
+        forklift_store,
+        staffing,
+    )
+    import zira_dashboard.forklift_identity_view as forklift_identity_view
+
+    mapping = SimpleNamespace(
+        external_driver_id="driver-stale",
+        source_name="Stored source name",
+        employee_odoo_id=799,
+        employee_name=employee_name,
+        employee_active=employee_active,
+        employee_excluded=employee_excluded,
+        version=6,
+        updated_at=datetime(2026, 9, 1, 15, 30, tzinfo=UTC),
+        updated_by_upn="manager@example.com",
+    )
+    monkeypatch.setattr(
+        forklift_event_store,
+        "completion_events_for_range",
+        lambda start, end: (
+            _event("raw-stale-call", "driver-stale", "Competing Alias", 12, 10),
+        ),
+    )
+    monkeypatch.setattr(
+        staffing,
+        "load_roster",
+        lambda: [staffing.Person("Active Choice", active=True, employee_id=707)],
+    )
+    monkeypatch.setattr(forklift_identity_store, "list_mappings", lambda: (mapping,))
+    monkeypatch.setattr(
+        forklift_store,
+        "resolve_forklift_driver_ids",
+        lambda evidence, *, allowed_employee_ids: {},
+    )
+
+    context = forklift_identity_view.identity_context(DAY)
+
+    assert context["unresolved"] == ()
+    assert context["mappings"] == ({
+        "external_driver_id": "driver-stale",
+        "source_name": "Stored source name",
+        "employee_odoo_id": 799,
+        "employee_name": employee_name or "Employee no longer available",
+        "employee_eligible": False,
+        "employee_status": expected_status,
+        "employee_status_label": expected_label,
+        "version": 6,
+        "updated_at": "Sep 1, 10:30 AM",
+        "updated_by_upn": "manager@example.com",
+    },)
+    assert "raw-stale-call" not in repr(context)
+    assert "Competing Alias" not in repr(context)
+
+
 def _identity_context():
     return {
         "day": DAY.isoformat(),
@@ -113,6 +192,9 @@ def _identity_context():
             "source_name": "Sam",
             "employee_odoo_id": 708,
             "employee_name": "Sam Rivera",
+            "employee_eligible": True,
+            "employee_status": "active",
+            "employee_status_label": "Active employee",
             "version": 4,
             "updated_at": "Sep 1, 10:30 AM",
             "updated_by_upn": "manager@example.com",
@@ -225,6 +307,85 @@ def test_remove_identity_passes_posted_version_and_actor(identity_client, monkey
     assert response.json() == {"ok": True}
     assert removed_call == {
         "args": ("driver-old",),
+        "expected_version": 4,
+        "actor_upn": "manager@example.com",
+        "actor_name": "Floor Manager",
+    }
+
+
+@pytest.mark.parametrize(
+    ("employee_name", "employee_status", "employee_status_label"),
+    (
+        ("Former Person", "inactive", "Inactive employee"),
+        ("Hidden Person", "excluded", "Excluded from Plant Manager"),
+        (
+            "Employee no longer available",
+            "missing",
+            "Employee no longer available",
+        ),
+    ),
+)
+def test_stale_mapping_change_requires_and_preserves_an_explicit_new_choice(
+    identity_client,
+    monkeypatch,
+    employee_name,
+    employee_status,
+    employee_status_label,
+):
+    from zira_dashboard.routes import forklift_identities
+
+    stale_context = _identity_context()
+    stale_context["mappings"] = ({
+        **stale_context["mappings"][0],
+        "employee_odoo_id": 799,
+        "employee_name": employee_name,
+        "employee_eligible": False,
+        "employee_status": employee_status,
+        "employee_status_label": employee_status_label,
+    },)
+    stale_context["unresolved"] = ()
+    monkeypatch.setattr(
+        forklift_identities.forklift_identity_view,
+        "identity_context",
+        lambda day: stale_context,
+    )
+    saved_call = {}
+    monkeypatch.setattr(
+        forklift_identities.forklift_identity_store,
+        "save_mapping",
+        lambda *args, **kwargs: saved_call.update(args=args, **kwargs),
+    )
+
+    blank = identity_client.post(
+        "/settings/forklift-identities",
+        data={
+            "action": "save",
+            "external_driver_id": "driver-old",
+            "employee_odoo_id": "",
+            "expected_version": "4",
+            "day": DAY.isoformat(),
+        },
+        headers={**MANAGER_HEADERS, "accept": "application/json"},
+    )
+
+    assert blank.status_code == 422
+    assert saved_call == {}
+
+    chosen = identity_client.post(
+        "/settings/forklift-identities",
+        data={
+            "action": "save",
+            "external_driver_id": "driver-old",
+            "employee_odoo_id": "707",
+            "expected_version": "4",
+            "day": DAY.isoformat(),
+        },
+        headers={**MANAGER_HEADERS, "accept": "application/json"},
+    )
+
+    assert chosen.status_code == 200
+    assert saved_call == {
+        "args": ("driver-old", "Sam", 707),
         "expected_version": 4,
         "actor_upn": "manager@example.com",
         "actor_name": "Floor Manager",
@@ -570,3 +731,43 @@ def test_settings_identity_failure_isolated_from_demand_advisor(monkeypatch):
         "unavailable": "Forklift identities are unavailable right now. Try again later.",
     }
     assert "private source failure" not in response.text
+
+
+def test_settings_shares_one_captured_plant_day_across_forklift_subsections(
+    monkeypatch,
+):
+    from zira_dashboard import forklift_advisor, forklift_identity_view
+    from zira_dashboard.routes import settings
+    from zira_dashboard.routes.staffing import _next_working_day
+
+    client, captured = _stub_settings_page(monkeypatch)
+    plant_days = iter((DAY, DAY + timedelta(days=10)))
+    plant_today_calls = []
+    identity_days = []
+    demand_days = []
+
+    def changing_plant_today():
+        value = next(plant_days)
+        plant_today_calls.append(value)
+        return value
+
+    monkeypatch.setattr(settings, "plant_today", changing_plant_today)
+    monkeypatch.setattr(
+        forklift_identity_view,
+        "identity_context",
+        lambda day: identity_days.append(day) or _identity_context(),
+    )
+    monkeypatch.setattr(
+        forklift_advisor,
+        "demand_summary",
+        lambda day: demand_days.append(day)
+        or {"recommended": 4, "advisor_marker": "still-loaded"},
+    )
+
+    response = client.get("/settings?section=forklift")
+
+    assert response.status_code == 200
+    assert plant_today_calls == [DAY]
+    assert identity_days == [DAY]
+    assert demand_days == [_next_working_day(DAY)]
+    assert captured["context"]["today"] == DAY.isoformat()

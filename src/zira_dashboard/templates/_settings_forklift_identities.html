@@ -23,7 +23,7 @@
         <input type="hidden" name="day" value="{{ forklift_identities.day }}">
         <label>Active employee
           <select name="employee_odoo_id" required>
-            <option value="">Choose an employee</option>
+            <option value="">Choose an active employee</option>
             {% for person in forklift_identities.employee_options %}
             <option value="{{ person.employee_odoo_id }}">{{ person.employee_name }}</option>
             {% endfor %}
@@ -40,6 +40,8 @@
     <article class="forklift-identity-card">
       <h5><code>{{ row.external_driver_id }}</code></h5>
       <p>Last name seen: {{ row.source_name or 'Name unavailable' }}</p>
+      <p><strong>Current employee:</strong> {{ row.employee_name }}{% if not row.employee_eligible and row.employee_status_label != row.employee_name %} · {{ row.employee_status_label }}{% endif %}</p>
+      {% if not row.employee_eligible %}<p class="hint">This saved match cannot credit calls right now. Choose a new active employee or remove the match.</p>{% endif %}
       <p>Last changed {{ row.updated_at }} by {{ row.updated_by_upn }}</p>
       <form method="post" action="/settings/forklift-identities">
         <input type="hidden" name="action" value="save">
@@ -48,6 +50,7 @@
         <input type="hidden" name="day" value="{{ forklift_identities.day }}">
         <label>Active employee
           <select name="employee_odoo_id" required>
+            <option value=""{% if not row.employee_eligible %} selected{% endif %}>Choose an active employee</option>
             {% for person in forklift_identities.employee_options %}
             <option value="{{ person.employee_odoo_id }}" {% if person.employee_odoo_id == row.employee_odoo_id %}selected{% endif %}>{{ person.employee_name }}</option>
             {% endfor %}

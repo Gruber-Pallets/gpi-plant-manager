@@ -19,6 +19,18 @@ def _changed_label(value: datetime) -> str:
     return value.astimezone(shift_config.SITE_TZ).strftime("%b %-d, %-I:%M %p")
 
 
+def _mapping_employee_status(mapping, eligible_employee_ids: set[int]) -> tuple[str, str]:
+    if int(mapping.employee_odoo_id) in eligible_employee_ids:
+        return "active", "Active employee"
+    if getattr(mapping, "employee_excluded", None) is True:
+        return "excluded", "Excluded from Plant Manager"
+    if getattr(mapping, "employee_active", None) is False:
+        return "inactive", "Inactive employee"
+    if not str(getattr(mapping, "employee_name", "") or "").strip():
+        return "missing", "Employee no longer available"
+    return "unavailable", "Not eligible for forklift matching"
+
+
 def identity_context(day: date) -> dict:
     if type(day) is not date:
         raise TypeError("day must be a date")
@@ -36,6 +48,13 @@ def identity_context(day: date) -> dict:
         {"employee_odoo_id": int(person.employee_id), "employee_name": person.name}
         for person in sorted(people, key=lambda item: item.name.casefold())
     )
+    eligible_employee_ids = {
+        int(person.employee_id) for person in people
+    }
+    mappings = forklift_identity_store.list_mappings()
+    mapped_driver_ids = {
+        str(item.external_driver_id).strip() for item in mappings
+    }
     events_by_driver: dict[str, list] = {}
     names_by_driver: dict[str, list[str]] = {}
     for event in events:
@@ -44,11 +63,13 @@ def identity_context(day: date) -> dict:
         if event.driver_name and event.driver_name not in names:
             names.append(event.driver_name)
     evidence = {
-        driver_id: set(names) for driver_id, names in names_by_driver.items()
+        driver_id: set(names)
+        for driver_id, names in names_by_driver.items()
+        if driver_id not in mapped_driver_ids
     }
     resolved = forklift_store.resolve_forklift_driver_ids(
         evidence,
-        allowed_employee_ids={int(person.employee_id) for person in people},
+        allowed_employee_ids=eligible_employee_ids,
     )
     unresolved_rows = tuple(
         {
@@ -65,23 +86,29 @@ def identity_context(day: date) -> dict:
             "version": None,
         }
         for driver_id, driver_events in sorted(events_by_driver.items())
-        if driver_id not in resolved
+        if driver_id not in resolved and driver_id not in mapped_driver_ids
     )
-    mapping_rows = tuple(
-        {
+    mapping_rows = []
+    for item in mappings:
+        employee_status, employee_status_label = _mapping_employee_status(
+            item, eligible_employee_ids
+        )
+        employee_name = str(item.employee_name or "").strip()
+        mapping_rows.append({
             "external_driver_id": item.external_driver_id,
             "source_name": item.source_name,
             "employee_odoo_id": item.employee_odoo_id,
-            "employee_name": item.employee_name,
+            "employee_name": employee_name or "Employee no longer available",
+            "employee_eligible": employee_status == "active",
+            "employee_status": employee_status,
+            "employee_status_label": employee_status_label,
             "version": item.version,
             "updated_at": _changed_label(item.updated_at),
             "updated_by_upn": item.updated_by_upn,
-        }
-        for item in forklift_identity_store.list_mappings()
-    )
+        })
     return {
         "day": day.isoformat(),
-        "mappings": mapping_rows,
+        "mappings": tuple(mapping_rows),
         "unresolved": unresolved_rows,
         "employee_options": employee_rows,
     }
