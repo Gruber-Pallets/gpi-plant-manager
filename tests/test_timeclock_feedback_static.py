@@ -30,3 +30,18 @@ def test_timeclock_idle_redirect_pauses_while_feedback_is_open():
     assert "clearTimeout(timer);" in html
     assert "gpi:feedback-closed" in html
     assert "feedbackPaused = false;" in html
+
+
+def test_timeclock_feedback_asks_for_and_posts_one_employee_id():
+    feedback_html = Path("src/zira_dashboard/templates/_feedback.html").read_text(
+        encoding="utf-8"
+    )
+    feedback_js = Path("src/zira_dashboard/static/feedback.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Who is submitting this?" in feedback_html
+    assert 'id="fb-submitter"' in feedback_html
+    assert "window.location.pathname.indexOf('/timeclock') === 0" in feedback_js
+    assert "window.gpiFetch('/api/feedback/submitters')" in feedback_js
+    assert "form.append('submitter_employee_id', submitter.value)" in feedback_js

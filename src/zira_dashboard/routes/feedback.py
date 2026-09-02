@@ -28,6 +28,20 @@ _LEGACY_STATUS = {
 }
 
 
+@router.get("/api/feedback/submitters")
+def feedback_submitter_choices() -> JSONResponse:
+    people = feedback_submitters.active_choices()
+    return JSONResponse(
+        {
+            "ok": True,
+            "people": [
+                {"employee_id": person.employee_id, "name": person.name}
+                for person in people
+            ],
+        }
+    )
+
+
 def _title_from(kind: str, description: str) -> str:
     first = description.strip().splitlines()[0] if description.strip() else "feedback"
     if len(first) > _TITLE_MAX:

@@ -30,15 +30,8 @@
 
 // ---------- Feedback modal (Send) + View Feedback list ----------
 (function () {
-  var ALLOWED_TYPES = ['bug', 'feature', 'floor_issue', 'floor_suggestion'];
-  var PLACEHOLDERS = {
-    bug: 'What broke, and what did you expect?',
-    feature: 'What would you like to see, and why?',
-    floor_issue: 'What is wrong out on the floor?',
-    floor_suggestion: 'What should the team improve out on the floor?'
-  };
   var screenshot = null;   // {file, name, url}
-  var currentType = 'bug';
+  var currentType = '';
   var activeModal = null;
   var activeOpener = null;
 
@@ -46,7 +39,7 @@
 
   function focusableElements(el) {
     return Array.prototype.slice.call(el.querySelectorAll(
-      'button:not([disabled]):not([hidden]), [href], input:not([disabled]):not([hidden]), '
+      'button:not([disabled]):not([hidden]), [href]:not([hidden]), input:not([disabled]):not([hidden]), '
       + 'textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
     ));
   }
@@ -98,27 +91,59 @@
   function resetSendForm() {
     revokeScreenshotUrl();
     screenshot = null;
-    currentType = 'bug';
     var desc = $('fb-desc');
-    if (desc) { desc.value = ''; desc.placeholder = PLACEHOLDERS.bug; }
-    setType('bug');
-    showTypeStep();
+    if (desc) desc.value = '';
+    var defaultTypeButton = document.querySelector('.fb-type-btn');
+    if (defaultTypeButton) {
+      setType(defaultTypeButton.getAttribute('data-type'));
+    }
+    showTypeStep(false);
     renderScreenshot();
+    var externalFallback = $('fb-external-fallback');
+    if (externalFallback) externalFallback.hidden = true;
+    var submitter = $('fb-submitter');
+    if (submitter) submitter.selectedIndex = 0;
     var status = $('fb-status');
     if (status) { status.hidden = true; status.textContent = ''; }
   }
 
   function setType(type) {
-    if (ALLOWED_TYPES.indexOf(type) === -1) return;
+    var selectedButton = null;
+    var buttons = document.querySelectorAll('.fb-type-btn');
+    Array.prototype.forEach.call(buttons, function (btn) {
+      if (btn.getAttribute('data-type') === type) selectedButton = btn;
+    });
+    if (!selectedButton) return;
     currentType = type;
-    Array.prototype.forEach.call(document.querySelectorAll('.fb-type-btn'), function (btn) {
+    Array.prototype.forEach.call(buttons, function (btn) {
       var active = btn.getAttribute('data-type') === currentType;
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
     var desc = $('fb-desc');
-    if (desc) desc.placeholder = PLACEHOLDERS[currentType];
+    if (desc) desc.placeholder = selectedButton.getAttribute('data-placeholder') || '';
+    if (selectedButton.getAttribute('data-behavior') === 'external') {
+      openExternal(selectedButton);
+      return;
+    }
     showDetailStep();
+  }
+
+  function openExternal(button) {
+    var url = button.getAttribute('data-url');
+    if (!url) return;
+    var opened = window.open(url, "_blank", "noopener");
+    var externalFallback = $('fb-external-fallback');
+    if (opened === null) {
+      if (externalFallback) {
+        externalFallback.href = url;
+        externalFallback.hidden = false;
+        externalFallback.focus();
+      }
+      return;
+    }
+    closeModal($('fb-modal'));
+    resetSendForm();
   }
 
   function showDetailStep() {
@@ -130,15 +155,59 @@
     if (desc) desc.focus();
   }
 
-  function showTypeStep() {
+  function showTypeStep(restoreFocus) {
     var typeStep = $('fb-type-step');
     var detailStep = $('fb-detail-step');
     if (typeStep) typeStep.hidden = false;
     if (detailStep) detailStep.hidden = true;
+    if (restoreFocus === false) return;
     var chosen = document.querySelector(
       '.fb-type-btn[data-type="' + currentType + '"]'
     );
     if (chosen) chosen.focus();
+  }
+
+  function isTimeclockPath() {
+    return window.location.pathname.indexOf('/timeclock') === 0;
+  }
+
+  function setSubmitterMessage(message) {
+    var submitter = $('fb-submitter');
+    if (!submitter) return;
+    submitter.innerHTML = '';
+    var option = document.createElement('option');
+    option.value = '';
+    option.textContent = message;
+    submitter.appendChild(option);
+  }
+
+  function loadSubmitters() {
+    var field = $('fb-submitter-field');
+    var submitter = $('fb-submitter');
+    if (!field || !submitter) return;
+    field.hidden = !isTimeclockPath();
+    if (field.hidden) return;
+    submitter.disabled = true;
+    setSubmitterMessage('Loading names…');
+    window.gpiFetch('/api/feedback/submitters')
+      .then(function (r) { return r.json(); })
+      .then(function (resp) {
+        if (!resp || !resp.ok || !Array.isArray(resp.people)) {
+          throw new Error('names unavailable');
+        }
+        setSubmitterMessage('Choose your name');
+        resp.people.forEach(function (person) {
+          var option = document.createElement('option');
+          option.value = String(person.employee_id);
+          option.textContent = person.name;
+          submitter.appendChild(option);
+        });
+        submitter.disabled = false;
+      })
+      .catch(function () {
+        setSubmitterMessage('Names are unavailable. Try again.');
+        submitter.disabled = true;
+      });
   }
 
   function setScreenshot(file) {
@@ -187,8 +256,14 @@
     var desc = $('fb-desc');
     var status = $('fb-status');
     var submit = $('fb-submit');
+    var submitter = $('fb-submitter');
     var message = ((desc && desc.value) || '').trim();
     if (status) status.hidden = false;
+    if (isTimeclockPath() && (!submitter || !submitter.value)) {
+      if (status) status.textContent = 'Choose your name and try again.';
+      if (submitter && !submitter.disabled) submitter.focus();
+      return;
+    }
     if (!message) { if (status) status.textContent = 'Please enter a description.'; return; }
     if (submit) submit.disabled = true;
     if (status) status.textContent = 'Sending…';
@@ -197,6 +272,9 @@
     form.append('type', currentType);
     form.append('description', message);
     form.append('page_url', window.location.href);
+    if (isTimeclockPath()) {
+      form.append('submitter_employee_id', submitter.value);
+    }
     if (screenshot) form.append('screenshot', screenshot.file, screenshot.name);
 
     window.gpiFetch('/feedback', { method: 'POST', body: form })
@@ -284,6 +362,7 @@
     Array.prototype.forEach.call(openButtons, function (openBtn) {
       openBtn.addEventListener('click', function () {
         resetSendForm();
+        loadSubmitters();
         var selectedType = document.querySelector('.fb-type-btn.is-active');
         openModal($('fb-modal'), openBtn, selectedType);
       });

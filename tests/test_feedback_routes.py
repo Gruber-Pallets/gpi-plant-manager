@@ -65,6 +65,16 @@ def _fail_if_odoo_is_called(monkeypatch) -> None:
         monkeypatch.setattr(odoo_client, name, fail)
 
 
+def test_get_feedback_submitters_returns_active_timeclock_choices():
+    response = client.get("/api/feedback/submitters")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "people": [{"employee_id": 41, "name": "Ana"}],
+    }
+
+
 def test_post_feedback_saves_locally_without_calling_odoo(monkeypatch):
     captured = {}
     monkeypatch.setattr(

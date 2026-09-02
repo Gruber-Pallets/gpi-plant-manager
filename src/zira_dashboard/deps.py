@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from zira_probe.client import ZiraClient
 
 from .leaderboard import StationTotal
+from . import feedback_types
 from .plant_day import parse_day as _parse_plant_day
 from .stations import STATIONS
 
@@ -38,6 +39,9 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 from . import timeclock_i18n  # noqa: E402
 templates.env.globals["t"] = timeclock_i18n.t
 templates.env.globals["td"] = timeclock_i18n.td
+templates.env.globals["feedback_types_for_chooser"] = (
+    feedback_types.feedback_types_for_chooser
+)
 
 
 # Top-nav Inbox count: templates call {{ nav_inbox_summary() }} to server-render

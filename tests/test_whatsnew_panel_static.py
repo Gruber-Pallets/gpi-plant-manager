@@ -58,41 +58,33 @@ def test_shared_feedback_component_keeps_modal_contract():
     assert 'id="fb-modal"' in html
     assert 'id="fb-view-modal"' in html
     assert 'id="fb-desc"' in html
-    assert 'data-type="bug"' in html
-    assert 'data-type="feature"' in html
+    assert 'data-type="{{ item.value }}"' in html
+    assert "feedback_types_for_chooser()" in html
     assert 'id="fb-file-input"' in html
     assert 'id="fb-status" class="fb-status" role="status" aria-live="polite"' in html
     assert "/static/feedback.css" in html
     assert "/static/feedback.js" in html
 
 
-def test_feedback_panel_has_four_reference_types_and_two_steps():
+def test_feedback_panel_renders_catalog_types_in_two_steps():
     html = FEEDBACK_TEMPLATE.read_text(encoding="utf-8")
-    for value in ("bug", "feature", "floor_issue", "floor_suggestion"):
-        assert f'data-type="{value}"' in html
-    for label in ("Bug", "New Feature", "Floor Issue", "Floor Suggestion"):
-        assert label in html
+
+    assert "for item in group_types" in html
+    assert "{{ item.label }}" in html
+    assert "{{ item.description }}" in html
     assert 'id="fb-type-step"' in html
     assert 'id="fb-detail-step"' in html
     assert 'id="fb-back"' in html
 
 
-def test_feedback_assets_define_four_choice_step_behavior_and_styles():
+def test_feedback_assets_use_rendered_choice_metadata_and_step_styles():
     css = FEEDBACK_CSS.read_text(encoding="utf-8")
     js = FEEDBACK_JS.read_text(encoding="utf-8")
 
-    assert (
-        "var ALLOWED_TYPES = ['bug', 'feature', 'floor_issue', 'floor_suggestion'];"
-        in js
-    )
-    for value, placeholder in (
-        ("bug", "What broke, and what did you expect?"),
-        ("feature", "What would you like to see, and why?"),
-        ("floor_issue", "What is wrong out on the floor?"),
-        ("floor_suggestion", "What should the team improve out on the floor?"),
-    ):
-        assert f"{value}: '{placeholder}'" in js
-    assert "if (ALLOWED_TYPES.indexOf(type) === -1) return;" in js
+    assert "ALLOWED_TYPES" not in js
+    assert "PLACEHOLDERS" not in js
+    assert "getAttribute('data-type')" in js
+    assert "getAttribute('data-behavior')" in js
     assert "typeStep.hidden = true;" in js
     assert "detailStep.hidden = false;" in js
     assert "desc.focus();" in js
@@ -100,8 +92,8 @@ def test_feedback_assets_define_four_choice_step_behavior_and_styles():
     assert "typeStep.hidden = false;" in js
     assert "detailStep.hidden = true;" in js
     assert "chosen.focus();" in js
-    assert "setType('bug');" in js
-    assert "showTypeStep();" in js
+    assert "setType(defaultTypeButton.getAttribute('data-type'));" in js
+    assert "showTypeStep(false);" in js
     assert "it.type_label || 'Unknown'" in js
     assert "it.type === 'feature'" not in js
 

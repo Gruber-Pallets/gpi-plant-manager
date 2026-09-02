@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Make the light-bulb choices clear
+
+- **The light-bulb menu now shows all six clear choices. Repair opens the Maintenance request page, and floor reviews ask only for a description and optional picture.**
+
 ### Know who sent timeclock feedback
 
 - **Plant Manager can now tell which review button was pressed and can safely identify the person sending it from the timeclock.**

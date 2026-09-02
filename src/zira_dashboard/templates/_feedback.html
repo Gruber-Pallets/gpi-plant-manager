@@ -7,43 +7,52 @@
     </div>
     <div id="fb-type-step">
       <p class="fb-step-label">What kind of feedback do you have?</p>
-      <div class="fb-type" role="group" aria-label="Feedback type">
-        <button type="button" class="fb-type-btn fb-type-card is-active" data-type="bug" aria-pressed="true">
-          <span class="fb-type-icon" aria-hidden="true">!</span>
-          <span class="fb-type-copy">
-            <span class="fb-type-title">Bug</span>
-            <span class="fb-type-subtitle">Something in this app is broken</span>
-          </span>
-          <span class="fb-type-arrow" aria-hidden="true">→</span>
-        </button>
-        <button type="button" class="fb-type-btn fb-type-card" data-type="feature" aria-pressed="false">
-          <span class="fb-type-icon" aria-hidden="true">+</span>
-          <span class="fb-type-copy">
-            <span class="fb-type-title">New Feature</span>
-            <span class="fb-type-subtitle">An idea to make this app better</span>
-          </span>
-          <span class="fb-type-arrow" aria-hidden="true">→</span>
-        </button>
-        <button type="button" class="fb-type-btn fb-type-card" data-type="floor_issue" aria-pressed="false">
-          <span class="fb-type-icon" aria-hidden="true">⌂</span>
-          <span class="fb-type-copy">
-            <span class="fb-type-title">Floor Issue</span>
-            <span class="fb-type-subtitle">Something wrong out on the floor</span>
-          </span>
-          <span class="fb-type-arrow" aria-hidden="true">→</span>
-        </button>
-        <button type="button" class="fb-type-btn fb-type-card" data-type="floor_suggestion" aria-pressed="false">
-          <span class="fb-type-icon" aria-hidden="true">★</span>
-          <span class="fb-type-copy">
-            <span class="fb-type-title">Floor Suggestion</span>
-            <span class="fb-type-subtitle">An idea for the team to consider</span>
-          </span>
-          <span class="fb-type-arrow" aria-hidden="true">→</span>
-        </button>
-      </div>
+      {% set chooser_types = feedback_types_for_chooser() if feedback_types_for_chooser is defined else () %}
+      {% set default_type = chooser_types[0].value if chooser_types else '' %}
+      {% for group, heading in (
+        ('reporting', 'Reporting — the 2s board triages it'),
+        ('ready', 'Ready to create work — straight to the floor team')
+      ) %}
+        {% set group_types = chooser_types | selectattr('group', 'equalto', group) | list %}
+        {% if group_types %}
+        <section class="fb-type-group" aria-labelledby="fb-type-group-{{ group }}">
+          <h4 id="fb-type-group-{{ group }}" class="fb-type-group-title">{{ heading }}</h4>
+          <div class="fb-type" role="group" aria-labelledby="fb-type-group-{{ group }}">
+            {% for item in group_types %}
+            <button type="button"
+                    class="fb-type-btn fb-type-card{% if item.value == default_type %} is-active{% endif %}"
+                    data-type="{{ item.value }}" data-behavior="{{ item.behavior }}"
+                    data-placeholder="{{ item.description }}"{% if item.url %}
+                    data-url="{{ item.url }}"{% endif %}
+                    aria-pressed="{{ 'true' if item.value == default_type else 'false' }}">
+              <span class="fb-type-icon" aria-hidden="true">{{ item.label[0] }}</span>
+              <span class="fb-type-copy">
+                <span class="fb-type-title">{{ item.label }}</span>
+                <span class="fb-type-subtitle">{{ item.description }}</span>
+              </span>
+              <span class="fb-type-arrow" aria-hidden="true">→</span>
+            </button>
+            {% endfor %}
+          </div>
+        </section>
+        {% endif %}
+      {% endfor %}
+      {% set external_types = chooser_types | selectattr('behavior', 'equalto', 'external') | list %}
+      {% if external_types %}
+      <a id="fb-external-fallback" class="fb-external-fallback"
+         href="{{ external_types[0].url }}" target="_blank" rel="noopener" hidden>
+        Open the Maintenance request page
+      </a>
+      {% endif %}
     </div>
     <div id="fb-detail-step" hidden>
       <button type="button" id="fb-back" class="fb-back">← Back</button>
+      <div id="fb-submitter-field" class="fb-submitter-field" hidden>
+        <label class="fb-label" for="fb-submitter">Who is submitting this?</label>
+        <select id="fb-submitter" class="fb-submitter" disabled required>
+          <option value="">Loading names…</option>
+        </select>
+      </div>
       <label class="fb-label" for="fb-desc">Description</label>
       <textarea id="fb-desc" class="fb-desc" rows="5"
                 placeholder="What broke, and what did you expect?"></textarea>

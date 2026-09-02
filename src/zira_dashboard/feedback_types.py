@@ -44,6 +44,8 @@ class FeedbackType:
     odoo_value: str | None
     group: Literal["reporting", "ready"]
     behavior: Literal["coding", "review", "external"]
+    url: str | None = None
+    rollout_gated: bool = False
 
 
 FEEDBACK_TYPES = (
@@ -86,6 +88,8 @@ FEEDBACK_TYPES = (
         None,
         "ready",
         "external",
+        url=REPAIR_URL,
+        rollout_gated=True,
     ),
     FeedbackType(
         "two_s_improvement",
@@ -94,6 +98,7 @@ FEEDBACK_TYPES = (
         "2s Improvement",
         "ready",
         "review",
+        rollout_gated=True,
     ),
 )
 _BY_VALUE = {item.value: item for item in FEEDBACK_TYPES}
@@ -109,3 +114,10 @@ def feedback_type_or_legacy_bug(value: object) -> FeedbackType:
     if value is None:
         return _BY_VALUE["bug"]
     return feedback_type(value)
+
+
+def feedback_types_for_chooser() -> tuple[FeedbackType, ...]:
+    """Return only chooser entries that are safe for the current rollout."""
+    if REVIEW_WORKFLOW_ENABLED:
+        return FEEDBACK_TYPES
+    return tuple(item for item in FEEDBACK_TYPES if not item.rollout_gated)
