@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Finish the People page bar repair plan
+
+- **The step-by-step repair plan for the mixed-up People page bar is ready.** It covers fresh saved styles and checks that every row stays apart. Nothing in the app has changed yet.
+
 ### Plan a lasting fix for the People page bar
 
 - **A repair plan is ready for the mixed-up People page bar.** It will make saved page styles check for updates, so an old style cannot stay stuck after Plant Manager is updated. Nothing in the app has changed yet.
