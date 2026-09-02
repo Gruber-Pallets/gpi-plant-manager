@@ -131,6 +131,7 @@ def test_page_uses_one_compact_live_manager_strip(rendered_html):
     assert '<strong>1</strong> worked earlier' in rendered_html
     assert '<strong>4</strong> need attention' in rendered_html
     assert "Forklift data unavailable" in rendered_html
+    assert "DashboardWarning" not in rendered_html
     assert 'name="day"' in rendered_html
     assert 'name="attention"' in rendered_html
     assert 'data-pp-control-key="day"' in rendered_html

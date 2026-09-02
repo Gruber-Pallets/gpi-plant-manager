@@ -7,6 +7,10 @@ from zira_dashboard.people_performance import (
     ForkliftDayMetric,
     assemble_dashboard,
 )
+from zira_dashboard.people_performance_warnings import (
+    forklift_source_warning,
+    unmatched_forklift_warning,
+)
 from zira_dashboard.production_segments import CreditedUnitPoint, SegmentScore
 
 
@@ -105,6 +109,18 @@ def driver_metric(calls, on_time, late, *, score_value=82.0, timeline_available=
     )
 
 
+def unmatched_warning_fixture(call_count: int = 1):
+    return unmatched_forklift_warning(
+        call_count=call_count,
+        identities=(("driver-unknown", ("Unknown",), call_count),),
+        first_call_utc=START,
+        last_call_utc=END,
+        checked_at_utc=END,
+        last_success_at_utc=END,
+        day=DAY,
+    )
+
+
 def busy_dashboard_model():
     spans = (
         span(44, "Amy Behind", 0, 480, "Repair 1"),
@@ -154,6 +170,11 @@ def busy_dashboard_model():
             ),
         ),
         metered_wc_names={"Repair 1", "Repair 2"},
-        source_warnings=("Forklift data unavailable",),
+        source_warnings=(
+            forklift_source_warning(
+                checked_at_utc=END,
+                last_success_at_utc=END,
+            ),
+        ),
         is_today=True,
     )

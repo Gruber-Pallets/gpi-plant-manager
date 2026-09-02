@@ -28,6 +28,17 @@ from .people_performance import (
     ForkliftDayMetric,
     assemble_dashboard,
 )
+from .people_performance_warnings import (
+    DashboardWarning,
+    attendance_source_warning,
+    attendance_stale_warning,
+    forklift_identity_conflict_warning,
+    forklift_source_warning,
+    forklift_timeline_warning,
+    production_metric_warning,
+    production_source_warning,
+    unmatched_forklift_warning,
+)
 
 
 _log = logging.getLogger(__name__)
@@ -169,7 +180,7 @@ def _production_values(
     dict,
     set[str],
     set[str],
-    tuple[str, ...],
+    tuple[DashboardWarning, ...],
     bool,
 ]:
     metered_names = {station.name for station in source.catalog}
@@ -191,7 +202,7 @@ def _production_values(
             {},
             metered_names,
             known_no_goal_names,
-            ("Production data unavailable",),
+            (production_source_warning(checked_at_utc=cap),),
             False,
         )
     totals_by_name = {}
@@ -206,21 +217,30 @@ def _production_values(
             totals_by_name[name] = total
     scores = []
     downtime_by_wc: dict[str, tuple[tuple[datetime, datetime], ...]] = {}
-    warnings: list[str] = []
+    warnings: list[DashboardWarning] = []
     for station in source.catalog:
         total = totals_by_name.get(station.name)
-        available = (
-            station.name not in duplicate_total_names
-            and total is not None
-            and not bool(getattr(total, "truncated", True))
-            and station.name in goal_based_names
-        )
-        if available and (
-            total.station.meter_id != station.meter_id or total.station.name != station.name
-        ):
-            available = False
-        if not available:
-            warnings.append(f"Production metric unavailable: {station.name}")
+        if station.name in duplicate_total_names:
+            reason_code = "duplicate_data"
+        elif total is None:
+            reason_code = "missing_totals"
+        elif bool(getattr(total, "truncated", True)):
+            reason_code = "incomplete_data"
+        elif station.name not in goal_based_names:
+            reason_code = "missing_goal"
+        elif total.station.meter_id != station.meter_id or total.station.name != station.name:
+            reason_code = "metric_mismatch"
+        else:
+            reason_code = ""
+        if reason_code:
+            warnings.append(
+                production_metric_warning(
+                    station_name=station.name,
+                    reason_code=reason_code,
+                    checked_at_utc=cap,
+                    day=day,
+                )
+            )
             continue
         station_spans = tuple(span for span in spans if span.app_work_center_name == station.name)
         try:
@@ -237,7 +257,14 @@ def _production_values(
             )
         except Exception:  # noqa: BLE001 - malformed meter facts stay per-WC
             _log.warning("people production metric unavailable", extra={"wc": station.name})
-            warnings.append(f"Production metric unavailable: {station.name}")
+            warnings.append(
+                production_metric_warning(
+                    station_name=station.name,
+                    reason_code="calculation_failure",
+                    checked_at_utc=cap,
+                    day=day,
+                )
+            )
             continue
         scores.extend(station_scores)
         downtime_by_wc[station.name] = tuple(total.downtime_intervals)
@@ -286,6 +313,7 @@ def _driver_identity_evidence(source: _ForkliftSource) -> dict[str, set[str]]:
 def _forklift_values(
     *,
     source: _ForkliftSource,
+    day: date,
     spans,
     start: datetime,
     cap: datetime,
@@ -293,11 +321,24 @@ def _forklift_values(
 ) -> tuple[
     dict[int, tuple[ForkliftCompletionEvent, ...]],
     dict[int, ForkliftDayMetric],
-    tuple[str, ...],
+    tuple[DashboardWarning, ...],
     bool,
 ]:
+    last_success_at_utc = (
+        source.coverage.successful_at if source.coverage is not None else None
+    )
     if not _coverage_is_complete(source, is_today=is_today):
-        return {}, {}, ("Forklift data unavailable",), False
+        return (
+            {},
+            {},
+            (
+                forklift_source_warning(
+                    checked_at_utc=cap,
+                    last_success_at_utc=last_success_at_utc,
+                ),
+            ),
+            False,
+        )
     known_employee_ids = {span.employee_odoo_id for span in spans}
     evidence = _driver_identity_evidence(source)
     resolved = forklift_store.resolve_forklift_driver_ids(
@@ -402,17 +443,60 @@ def _forklift_values(
         )
         display_events_by_employee[employee_id] = shift_events if complete else ()
         timeline_incomplete = timeline_incomplete or not complete
-    unmatched = sum(
-        start <= event.created_at_utc < cap and event.driver_id not in resolved
+    unmatched_events = tuple(
+        event
         for event in source.events
+        if start <= event.created_at_utc < cap and event.driver_id not in resolved
     )
-    warnings = []
+    identity_counts = Counter(event.driver_id for event in unmatched_events)
+    identity_names = {
+        driver_id: tuple(
+            sorted(
+                {
+                    event.driver_name
+                    for event in unmatched_events
+                    if event.driver_id == driver_id
+                }
+            )
+        )
+        for driver_id in identity_counts
+    }
+    identities = tuple(
+        (driver_id, identity_names[driver_id], identity_counts[driver_id])
+        for driver_id in sorted(identity_counts)
+    )
+    warnings: list[DashboardWarning] = []
     if identity_conflict:
-        warnings.append("Forklift driver identity conflict")
-    if unmatched:
-        warnings.append(f"Unmatched forklift calls: {unmatched}")
+        warnings.append(
+            forklift_identity_conflict_warning(
+                identity_count=(
+                    len(unsafe_driver_ids)
+                    + sum(count > 1 for count in claimed.values())
+                ),
+                checked_at_utc=cap,
+                last_success_at_utc=last_success_at_utc,
+                day=day,
+            )
+        )
+    if unmatched_events:
+        warnings.append(
+            unmatched_forklift_warning(
+                call_count=len(unmatched_events),
+                identities=identities,
+                first_call_utc=min(event.created_at_utc for event in unmatched_events),
+                last_call_utc=max(event.created_at_utc for event in unmatched_events),
+                checked_at_utc=cap,
+                last_success_at_utc=last_success_at_utc,
+                day=day,
+            )
+        )
     if timeline_incomplete or duplicate_rows:
-        warnings.append("Forklift timeline incomplete")
+        warnings.append(
+            forklift_timeline_warning(
+                checked_at_utc=cap,
+                last_success_at_utc=last_success_at_utc,
+            )
+        )
     return (
         display_events_by_employee,
         metrics_by_employee,
@@ -460,7 +544,7 @@ def load_dashboard(
             forklift_day_metrics_by_employee_id={},
             breaks=breaks,
             metered_wc_names=set(),
-            source_warnings=("Attendance data unavailable",),
+            source_warnings=(attendance_source_warning(checked_at_utc=cap),),
             is_today=is_today,
             production_available=False,
             forklift_available=False,
@@ -470,9 +554,14 @@ def load_dashboard(
         if is_today
         else tuple(replace(span, is_open=False) for span in attendance.spans)
     )
-    source_warnings: list[str] = []
+    source_warnings: list[DashboardWarning] = []
     if is_today and attendance.freshness_blockers:
-        source_warnings.append("Attendance source stale")
+        source_warnings.append(
+            attendance_stale_warning(
+                blocker_count=len(attendance.freshness_blockers),
+                checked_at_utc=cap,
+            )
+        )
 
     try:
         production_source = production_future.result()
@@ -503,8 +592,9 @@ def load_dashboard(
         metered_wc_names = set()
         known_no_goal_wc_names = set()
         production_available = False
-        source_warnings.append("Production data unavailable")
+        source_warnings.append(production_source_warning(checked_at_utc=cap))
 
+    forklift_source = None
     try:
         forklift_source = forklift_future.result()
         (
@@ -514,6 +604,7 @@ def load_dashboard(
             forklift_available,
         ) = _forklift_values(
             source=forklift_source,
+            day=day,
             spans=spans,
             start=start,
             cap=cap,
@@ -525,7 +616,17 @@ def load_dashboard(
         forklift_events = {}
         forklift_metrics = {}
         forklift_available = False
-        source_warnings.append("Forklift data unavailable")
+        last_success_at_utc = (
+            forklift_source.coverage.successful_at
+            if forklift_source is not None and forklift_source.coverage is not None
+            else None
+        )
+        source_warnings.append(
+            forklift_source_warning(
+                checked_at_utc=cap,
+                last_success_at_utc=last_success_at_utc,
+            )
+        )
 
     return assemble_dashboard(
         day=day,

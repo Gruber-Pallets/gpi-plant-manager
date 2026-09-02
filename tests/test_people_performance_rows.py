@@ -1,8 +1,14 @@
 from dataclasses import replace
 from datetime import timedelta
 
+import pytest
+
 from zira_dashboard import people_performance
 from zira_dashboard.people_performance import BreakSpan, assemble_dashboard
+from zira_dashboard.people_performance_warnings import (
+    forklift_source_warning,
+    production_source_warning,
+)
 
 from tests.people_performance_fixtures import (
     DAY,
@@ -13,10 +19,12 @@ from tests.people_performance_fixtures import (
     event,
     score,
     span,
+    unmatched_warning_fixture,
 )
 
 
 def _assemble(*, spans, scores=(), events=None, day_metrics=None, **kwargs):
+    source_warnings = kwargs.pop("source_warnings", ())
     return assemble_dashboard(
         day=DAY,
         as_of_utc=END,
@@ -30,7 +38,7 @@ def _assemble(*, spans, scores=(), events=None, day_metrics=None, **kwargs):
         forklift_day_metrics_by_employee_id=day_metrics or {},
         breaks=kwargs.pop("breaks", ()),
         metered_wc_names=kwargs.pop("metered_wc_names", {"Repair 1", "Repair 2"}),
-        source_warnings=kwargs.pop("source_warnings", ()),
+        source_warnings=source_warnings,
         is_today=kwargs.pop("is_today", True),
         **kwargs,
     )
@@ -267,13 +275,13 @@ def test_display_name_key_is_never_used_to_attach_forklift_activity():
         ),
         events={"Alex Same": (event("Alex Same", 30, on_time=True),)},
         day_metrics={"Alex Same": driver_metric(1, 1, 0)},
-        source_warnings=("Unmatched forklift calls: 1",),
+        source_warnings=(unmatched_warning_fixture(),),
     )
     first, second = sorted(model.rows, key=lambda row: row.employee_odoo_id)
     assert first.summary[0] == ("Calls", "N/A")
     assert not first.intervals[0].forklift_buckets
     assert second.summary[0] == ("Calls", "N/A")
-    assert model.source_warnings == ("Unmatched forklift calls: 1",)
+    assert model.source_warnings == (unmatched_warning_fixture(),)
 
 
 def test_stale_mapped_span_keeps_identity_but_cannot_earn_metrics():
@@ -311,6 +319,11 @@ def test_stale_raw_label_without_verified_continuity_stays_in_other():
 
 
 def test_unavailable_sources_keep_rows_and_warning_order_without_false_zeroes():
+    production_warning = production_source_warning(checked_at_utc=END)
+    forklift_warning = forklift_source_warning(
+        checked_at_utc=END,
+        last_success_at_utc=END,
+    )
     model = _assemble(
         spans=(
             span(74, "Prod Down", 0, 480, "Repair 1"),
@@ -320,7 +333,7 @@ def test_unavailable_sources_keep_rows_and_warning_order_without_false_zeroes():
         downtime_by_wc={"Repair 1": ()},
         events={75: (event("Fork Down", 30, on_time=True),)},
         day_metrics={75: driver_metric(1, 1, 0)},
-        source_warnings=("Production data unavailable", "Forklift data unavailable"),
+        source_warnings=(production_warning, forklift_warning),
         production_available=False,
         forklift_available=False,
     )
@@ -338,9 +351,34 @@ def test_unavailable_sources_keep_rows_and_warning_order_without_false_zeroes():
         ("Score", "N/A"),
     )
     assert model.source_warnings == (
-        "Production data unavailable",
-        "Forklift data unavailable",
+        production_warning,
+        forklift_warning,
     )
+
+
+def test_source_warnings_keep_the_first_record_for_each_stable_key():
+    first = production_source_warning(checked_at_utc=END)
+    duplicate = replace(first, label="Presentation copy changed")
+    second = forklift_source_warning(
+        checked_at_utc=END,
+        last_success_at_utc=END,
+    )
+
+    model = _assemble(
+        spans=(),
+        source_warnings=(first, duplicate, second),
+    )
+
+    assert model.source_warnings == (first, second)
+
+
+def test_source_warnings_reject_legacy_strings():
+    legacy_warnings = ("Production data unavailable",)
+    with pytest.raises(
+        TypeError,
+        match="source_warnings must contain DashboardWarning values",
+    ):
+        _assemble(spans=(), source_warnings=legacy_warnings)
 
 
 def test_incomplete_driver_timeline_hides_summary_and_partial_bars():

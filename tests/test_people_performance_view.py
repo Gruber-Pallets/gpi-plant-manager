@@ -362,7 +362,7 @@ def test_presenter_fails_closed_when_hover_values_are_non_finite(monkeypatch):
         },
     )
 
-    context = dashboard_context(busy_dashboard_model())
+    context = dashboard_context(replace(busy_dashboard_model(), source_warnings=()))
     serialized = json.dumps(context)
 
     assert "Infinity" not in serialized

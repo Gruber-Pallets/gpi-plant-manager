@@ -22,6 +22,16 @@ CALENDAR_START = datetime.combine(
 CALENDAR_END = CALENDAR_START + timedelta(days=1)
 
 
+def _warning(model, kind, *, subject=None):
+    matches = tuple(
+        warning
+        for warning in tuple(model.source_warnings)
+        if warning.kind == kind and (subject is None or warning.subject == subject)
+    )
+    assert len(matches) == 1
+    return matches[0]
+
+
 def test_dashboard_window_ends_at_renamed_trailing_break_start(monkeypatch):
     midday = BreakSpan(
         START + timedelta(hours=2),
@@ -250,7 +260,12 @@ def test_ambiguous_or_unchanged_name_resolution_never_attaches_calls(monkeypatch
 
     assert model.rows[0].summary[0] == ("Calls", "N/A")
     assert model.rows[0].unattached_forklift_calls == 0
-    assert "Unmatched forklift calls: 1" in model.source_warnings
+    warning = _warning(model, "unmatched_forklift_calls")
+    assert warning.label == "Unmatched forklift calls: 1"
+    assert warning.reason_code == "identity_unmatched"
+    assert warning.checked_at_utc == NOW
+    assert warning.last_success_at_utc == CALENDAR_END
+    assert ("Distinct identities", "1") in warning.facts
 
 
 def test_two_external_driver_ids_resolving_to_one_employee_are_refused(monkeypatch):
@@ -274,8 +289,11 @@ def test_two_external_driver_ids_resolving_to_one_employee_are_refused(monkeypat
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
     assert model.rows[0].summary[0] == ("Calls", "N/A")
-    assert "Forklift driver identity conflict" in model.source_warnings
-    assert "Unmatched forklift calls: 2" in model.source_warnings
+    conflict = _warning(model, "forklift_identity_conflict")
+    assert conflict.reason_code == "identity_conflict"
+    assert ("Conflicting identities", "1") in conflict.facts
+    unmatched = _warning(model, "unmatched_forklift_calls")
+    assert unmatched.label == "Unmatched forklift calls: 2"
 
 
 def test_raw_event_without_driver_daily_row_is_unavailable(monkeypatch):
@@ -292,7 +310,8 @@ def test_raw_event_without_driver_daily_row_is_unavailable(monkeypatch):
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
     assert model.rows[0].summary[0] == ("Calls", "N/A")
-    assert "Forklift timeline incomplete" in model.source_warnings
+    warning = _warning(model, "forklift_timeline_incomplete")
+    assert warning.reason_code == "incomplete_data"
 
 
 def test_driver_daily_calls_without_raw_events_are_unavailable(monkeypatch):
@@ -309,7 +328,8 @@ def test_driver_daily_calls_without_raw_events_are_unavailable(monkeypatch):
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
     assert model.rows[0].summary[0] == ("Calls", "N/A")
-    assert "Forklift timeline incomplete" in model.source_warnings
+    warning = _warning(model, "forklift_timeline_incomplete")
+    assert warning.reason_code == "incomplete_data"
 
 
 def test_never_fetched_day_is_unavailable_not_a_false_zero(monkeypatch):
@@ -323,7 +343,26 @@ def test_never_fetched_day_is_unavailable_not_a_false_zero(monkeypatch):
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
     assert model.rows[0].summary[0] == ("Calls", "N/A")
-    assert "Forklift data unavailable" in model.source_warnings
+    warning = _warning(model, "forklift_data_unavailable")
+    assert warning.reason_code == "source_unavailable"
+    assert warning.checked_at_utc == NOW
+    assert warning.last_success_at_utc is None
+
+
+def test_incomplete_forklift_coverage_preserves_last_success_timestamp(monkeypatch):
+    last_success = NOW - timedelta(minutes=12)
+    install_sources(
+        monkeypatch,
+        spans=(TRENT_SPAN,),
+        coverage=_coverage(0, through=last_success),
+        calls_row={"day": DAY, "total_calls": 0},
+    )
+
+    model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
+
+    warning = _warning(model, "forklift_data_unavailable")
+    assert warning.checked_at_utc == NOW
+    assert warning.last_success_at_utc == last_success
 
 
 def test_explicit_covered_zero_is_a_real_zero(monkeypatch):
@@ -341,7 +380,10 @@ def test_explicit_covered_zero_is_a_real_zero(monkeypatch):
         ("On time", "N/A"),
         ("Handling", "0 min"),
     )
-    assert "Forklift data unavailable" not in model.source_warnings
+    assert all(
+        warning.kind != "forklift_data_unavailable"
+        for warning in tuple(model.source_warnings)
+    )
 
 
 def test_calls_after_shift_are_reconciled_but_not_displayed_or_scored(monkeypatch):
@@ -462,7 +504,10 @@ def test_today_accepts_coverage_within_the_ten_minute_warmer_cadence(monkeypatch
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
     assert model.rows[0].summary[0] == ("Calls", "1")
-    assert "Forklift data unavailable" not in model.source_warnings
+    assert all(
+        warning.kind != "forklift_data_unavailable"
+        for warning in tuple(model.source_warnings)
+    )
 
 
 def test_attendance_freshness_warning_uses_frozen_snapshot_without_readiness(monkeypatch):
@@ -475,7 +520,10 @@ def test_attendance_freshness_warning_uses_frozen_snapshot_without_readiness(mon
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
     assert len(model.rows) == 1
-    assert "Attendance source stale" in model.source_warnings
+    warning = _warning(model, "attendance_source_stale")
+    assert warning.reason_code == "stale_source"
+    assert warning.checked_at_utc == NOW
+    assert ("Freshness checks blocked", "1") in warning.facts
     assert not hasattr(data, "attendance_readiness")
 
 
@@ -493,7 +541,10 @@ def test_historical_day_ignores_current_mirror_freshness_and_is_never_active(mon
     assert model.rows[0].is_active is False
     assert all(interval.is_open is False for interval in model.rows[0].intervals)
     assert all(not interval.key.endswith(":open") for interval in model.rows[0].intervals)
-    assert "Attendance source stale" not in model.source_warnings
+    assert all(
+        warning.kind != "attendance_source_stale"
+        for warning in tuple(model.source_warnings)
+    )
 
 
 def test_attendance_failure_returns_empty_page_without_loading_other_sources(monkeypatch):
@@ -524,7 +575,9 @@ def test_attendance_failure_returns_empty_page_without_loading_other_sources(mon
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
     assert model.rows == ()
-    assert "Attendance data unavailable" in model.source_warnings
+    warning = _warning(model, "attendance_data_unavailable")
+    assert warning.reason_code == "source_unavailable"
+    assert warning.checked_at_utc == NOW
     assert "identity" not in calls
 
 
@@ -548,7 +601,13 @@ def test_one_bad_meter_is_unavailable_without_hiding_good_meter(monkeypatch):
     by_name = {row.person_name: row for row in model.rows}
     assert by_name["Good Meter"].intervals[0].metric_available is True
     assert by_name["Missing Meter"].intervals[0].metric_available is False
-    assert "Production metric unavailable: Repair 2" in model.source_warnings
+    warning = _warning(
+        model,
+        "production_metric_unavailable",
+        subject="Repair 2",
+    )
+    assert warning.reason_code == "missing_totals"
+    assert warning.checked_at_utc == NOW
 
 
 def test_nonpositive_goal_and_truncated_total_are_unavailable_per_meter(monkeypatch):
@@ -571,8 +630,18 @@ def test_nonpositive_goal_and_truncated_total_are_unavailable_per_meter(monkeypa
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
     assert all(row.intervals[0].metric_available is False for row in model.rows)
-    assert "Production metric unavailable: Repair 1" in model.source_warnings
-    assert "Production metric unavailable: Repair 2" in model.source_warnings
+    zero_goal_warning = _warning(
+        model,
+        "production_metric_unavailable",
+        subject="Repair 1",
+    )
+    assert zero_goal_warning.reason_code == "missing_goal"
+    truncated_warning = _warning(
+        model,
+        "production_metric_unavailable",
+        subject="Repair 2",
+    )
+    assert truncated_warning.reason_code == "incomplete_data"
 
 
 def test_known_no_goal_stations_sort_below_goal_based_metered_work(monkeypatch):
@@ -619,7 +688,68 @@ def test_duplicate_totals_make_only_that_meter_unavailable(monkeypatch):
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
     assert model.rows[0].intervals[0].metric_available is False
-    assert "Production metric unavailable: Repair 1" in model.source_warnings
+    warning = _warning(
+        model,
+        "production_metric_unavailable",
+        subject="Repair 1",
+    )
+    assert warning.reason_code == "duplicate_data"
+
+
+def test_meter_identity_mismatch_has_a_precise_safe_reason(monkeypatch):
+    repair = span(78, "Repair Worker", 0, 300, "Repair 1")
+    total = _total("Repair 1")
+    catalog_station = Station("different-meter", "Repair 1", "Repair", "Bay")
+    install_sources(
+        monkeypatch,
+        spans=(repair,),
+        totals=(total,),
+        catalog=(catalog_station,),
+    )
+    monkeypatch.setattr(data.settings_store, "station_target", lambda station: 10.0)
+
+    model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
+
+    warning = _warning(
+        model,
+        "production_metric_unavailable",
+        subject="Repair 1",
+    )
+    assert warning.reason_code == "metric_mismatch"
+    assert "different-meter" not in warning.summary
+    assert "meter-Repair 1" not in warning.summary
+
+
+def test_production_calculation_failure_does_not_expose_exception_copy(monkeypatch):
+    repair = span(79, "Repair Worker", 0, 300, "Repair 1")
+    total = _total("Repair 1")
+    install_sources(
+        monkeypatch,
+        spans=(repair,),
+        totals=(total,),
+        catalog=(total.station,),
+    )
+    monkeypatch.setattr(data.settings_store, "station_target", lambda station: 10.0)
+    monkeypatch.setattr(
+        data.production_history,
+        "production_scores_for_timeline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("sensitive upstream payload")
+        ),
+    )
+
+    model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
+
+    warning = _warning(
+        model,
+        "production_metric_unavailable",
+        subject="Repair 1",
+    )
+    assert warning.reason_code == "calculation_failure"
+    assert warning.summary == (
+        "Plant Manager could not safely calculate this production result."
+    )
+    assert "sensitive" not in warning.summary
 
 
 def test_each_available_meter_is_scored_only_against_its_own_spans(monkeypatch):
@@ -683,7 +813,9 @@ def test_production_reader_error_does_not_hide_attendance(monkeypatch):
 
     assert len(model.rows) == 1
     assert model.rows[0].intervals[0].metric_available is False
-    assert "Production data unavailable" in model.source_warnings
+    warning = _warning(model, "production_data_unavailable")
+    assert warning.reason_code == "source_unavailable"
+    assert warning.checked_at_utc == NOW
 
 
 def test_attribution_reader_error_does_not_assume_empty_exclusions(monkeypatch):
@@ -703,7 +835,8 @@ def test_attribution_reader_error_does_not_assume_empty_exclusions(monkeypatch):
 
     assert len(model.rows) == 1
     assert model.rows[0].intervals[0].metric_available is False
-    assert "Production data unavailable" in model.source_warnings
+    warning = _warning(model, "production_data_unavailable")
+    assert warning.reason_code == "source_unavailable"
 
 
 def test_bounds_normalizes_one_aware_cap_and_explicit_is_today(monkeypatch):

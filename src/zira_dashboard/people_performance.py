@@ -13,6 +13,7 @@ from typing import Literal, TypeAlias
 from . import shift_config
 from .attendance_timeline import LocationSpan
 from .forklift_ingest import ForkliftCompletionEvent
+from .people_performance_warnings import DashboardWarning
 from .production_segments import SegmentScore
 
 
@@ -116,7 +117,7 @@ class DashboardModel:
     window_end_utc: datetime
     rows: tuple[PersonRow, ...]
     breaks: tuple[BreakSpan, ...] = ()
-    source_warnings: tuple[str, ...] = ()
+    source_warnings: tuple[DashboardWarning, ...] = ()
 
 
 def _is_finite_number(value: object) -> bool:
@@ -1120,7 +1121,7 @@ def assemble_dashboard(
     forklift_day_metrics_by_employee_id: Mapping[int, ForkliftDayMetric],
     breaks: Sequence[BreakSpan],
     metered_wc_names: set[str],
-    source_warnings: Sequence[str],
+    source_warnings: Sequence[DashboardWarning],
     is_today: bool,
     known_no_goal_wc_names: set[str] | None = None,
     production_available: bool = True,
@@ -1216,6 +1217,12 @@ def assemble_dashboard(
             )
         rows.append(row)
 
+    deduplicated_warnings: dict[str, DashboardWarning] = {}
+    for warning in source_warnings:
+        if not isinstance(warning, DashboardWarning):
+            raise TypeError("source_warnings must contain DashboardWarning values")
+        deduplicated_warnings.setdefault(warning.key, warning)
+
     return DashboardModel(
         day=day,
         is_today=is_today,
@@ -1224,5 +1231,5 @@ def assemble_dashboard(
         window_end_utc=window_end_utc,
         rows=tuple(sorted(rows, key=lambda row: row.sort_key)),
         breaks=tuple(breaks),
-        source_warnings=tuple(dict.fromkeys(source_warnings)),
+        source_warnings=tuple(deduplicated_warnings.values()),
     )
