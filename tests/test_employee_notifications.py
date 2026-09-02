@@ -11,7 +11,7 @@ from zira_dashboard import employee_notifications as en
 
 @pytest.fixture
 def fake_db(monkeypatch):
-    captured: dict = {"queries": [], "executes": []}
+    captured: dict = {"queries": [], "executes": [], "cursor_executes": []}
 
     def fake_query(sql, params=None):
         captured["queries"].append((sql, params))
@@ -20,8 +20,20 @@ def fake_db(monkeypatch):
     def fake_execute(sql, params=None):
         captured["executes"].append((sql, params))
 
+    class FakeCursor:
+        def execute(self, sql, params=None):
+            captured["cursor_executes"].append((sql, params))
+
+        def fetchall(self):
+            return captured.get("query_result", [])
+
+    @contextmanager
+    def cursor():
+        yield FakeCursor()
+
     monkeypatch.setattr(en.db, "query", fake_query)
     monkeypatch.setattr(en.db, "execute", fake_execute)
+    monkeypatch.setattr(en.db, "cursor", cursor)
     return captured
 
 
@@ -118,10 +130,11 @@ def test_list_unacknowledged_filters_by_person_and_unacked(fake_db):
     fake_db["query_result"] = [{"id": 1, "title": "t", "body": "b"}]
     out = en.list_unacknowledged(5)
     assert out == [{"id": 1, "title": "t", "body": "b"}]
-    sql, params = fake_db["queries"][0]
+    sql, params = fake_db["cursor_executes"][0]
     assert "acknowledged_at IS NULL" in sql
     assert "ORDER BY created_at" in sql
     assert "saturday_day" in sql
+    assert "FOR UPDATE" in sql
     assert params == (5,)
 
 
@@ -130,7 +143,7 @@ def test_list_unacknowledged_records_first_presentation(fake_db):
 
     assert en.list_unacknowledged(5)[0]["id"] == 9
 
-    sql, params = fake_db["executes"][0]
+    sql, params = fake_db["cursor_executes"][1]
     assert "presented_at = COALESCE(presented_at, now())" in sql
     assert "person_odoo_id = %s" in sql
     assert params == ([9], 5)
@@ -201,13 +214,20 @@ def test_reconcile_removes_only_stale_unpresented_anniversary_notice(monkeypatch
     assert params == (7,)
 
 
-def test_acknowledge_all_is_person_scoped(fake_db):
-    en.acknowledge_all(5)
+def test_acknowledge_presented_is_id_person_and_presentation_scoped(fake_db):
+    en.acknowledge_presented(5, [9, 10, 9])
     sql, params = fake_db["executes"][0]
     assert "UPDATE employee_notifications SET acknowledged_at = now()" in sql
     assert "person_odoo_id = %s" in sql
+    assert "id = ANY(%s)" in sql
+    assert "presented_at IS NOT NULL" in sql
     assert "acknowledged_at IS NULL" in sql
-    assert params == (5,)
+    assert params == ([9, 10], 5)
+
+
+def test_acknowledge_presented_with_no_ids_does_not_write(fake_db):
+    en.acknowledge_presented(5, [])
+    assert fake_db["executes"] == []
 
 
 def _req(state, date_to=date(2026, 7, 3), **extra):

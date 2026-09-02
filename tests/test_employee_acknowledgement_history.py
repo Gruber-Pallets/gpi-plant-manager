@@ -40,6 +40,7 @@ def test_employee_history_endpoint_is_person_scoped(monkeypatch):
     response = client.get("/staffing/people/Carlos/acknowledgements")
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
     history.assert_called_once_with(5)
     assert "Anniversary PTO reminder" in response.text
     assert "2.5 days" in response.text
@@ -102,3 +103,12 @@ def test_employee_without_odoo_id_has_empty_history(monkeypatch):
     assert response.status_code == 200
     assert "No acknowledgement history yet." in response.text
     history.assert_not_called()
+
+
+def test_employee_landing_url_encodes_reserved_name_characters(monkeypatch):
+    monkeypatch.setattr(staffing, "load_roster", lambda: [_person("Ana & José")])
+
+    response = client.get("/staffing/people", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/staffing/people/Ana%20%26%20Jos%C3%A9"

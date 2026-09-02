@@ -4,7 +4,9 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi.testclient import TestClient
+import pytest
 
+from zira_dashboard import employee_notifications
 from zira_dashboard.app import app
 from zira_dashboard.routes import timeclock
 
@@ -18,6 +20,11 @@ PERSON = {
     "spanish_speaker": False,
 }
 LEAVE = {"id": 42, "odoo_leave_id": 900, "person_odoo_id": 5}
+
+
+@pytest.fixture(autouse=True)
+def _no_pending_employee_notifications(monkeypatch):
+    monkeypatch.setattr(employee_notifications, "has_unacknowledged", lambda _id: False)
 
 
 def _dashboard_dependencies(monkeypatch, *, scheduled_wc="Line 1"):

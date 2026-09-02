@@ -462,6 +462,20 @@ def _expired_redirect(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/timeclock?expired=1", status_code=303)
 
 
+def _unacknowledged_notification_redirect(
+    person: dict,
+    person_id: int,
+) -> RedirectResponse | None:
+    """Re-check the local notice gate before exposing or recording a punch."""
+    if (
+        employee_notifications.notifications_enabled()
+        and person.get("odoo_id")
+        and employee_notifications.has_unacknowledged(person["odoo_id"])
+    ):
+        return RedirectResponse(url=f"/timeclock/start/{person_id}", status_code=303)
+    return None
+
+
 def _published_schedule_assignments(day) -> tuple[bool, list[dict[str, object]]]:
     """Return the active official schedule or its preserved posted version."""
     schedule = staffing.load_schedule(day)
@@ -630,6 +644,9 @@ def timeclock_dashboard(request: Request, token: str):
     p = _person_by_id(person_id)
     if not p:
         return RedirectResponse(url="/timeclock", status_code=303)
+    notification_redirect = _unacknowledged_notification_redirect(p, person_id)
+    if notification_redirect is not None:
+        return notification_redirect
     # Fixed-wage staff have no punch screen — bounce to the time-off flow.
     # Covers the time-off landing's "Back" link, which points here.
     salaried = _time_off_redirect_if_salaried(p, person_id)
@@ -745,16 +762,20 @@ def timeclock_notifications(request: Request, token: str):
 
 
 @router.post("/timeclock/notifications/ack/{token}", response_class=HTMLResponse)
-def timeclock_notifications_ack(request: Request, token: str):
-    """Mark all of this person's notifications acknowledged, then re-check
-    the sign-in flow so a due celebration keeps its intended priority."""
+def timeclock_notifications_ack(
+    request: Request,
+    token: str,
+    notification_ids: list[int] = Form(default=[]),
+):
+    """Acknowledge the exact notices presented by this form, then re-check
+    the sign-in flow for anything newly due or otherwise still pending."""
     person_id = _verify_token(token)
     if person_id is None:
         return _expired_redirect(request)
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/timeclock", status_code=303)
-    employee_notifications.acknowledge_all(p["odoo_id"])
+    employee_notifications.acknowledge_presented(p["odoo_id"], notification_ids)
     return RedirectResponse(url=f"/timeclock/start/{person_id}", status_code=303)
 
 
@@ -857,6 +878,9 @@ def kiosk_clock_in(
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/timeclock", status_code=303)
+    notification_redirect = _unacknowledged_notification_redirect(p, person_id)
+    if notification_redirect is not None:
+        return notification_redirect
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried
@@ -914,6 +938,9 @@ def kiosk_clock_in_confirm_time_off_override(
     p = _person_by_id(person_id)
     if not p or not p.get("odoo_id"):
         return RedirectResponse(url="/timeclock", status_code=303)
+    notification_redirect = _unacknowledged_notification_redirect(p, person_id)
+    if notification_redirect is not None:
+        return notification_redirect
     salaried = _time_off_redirect_if_salaried(p, person_id)
     if salaried:
         return salaried

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -151,7 +152,7 @@ def staffing_people_landing():
         # Fallback: the matrix is the only place that handles an empty roster.
         return RedirectResponse(url="/staffing/skills", status_code=307)
     return RedirectResponse(
-        url=f"/staffing/people/{actives[0]}",
+        url=f"/staffing/people/{quote(actives[0], safe='')}",
         status_code=307,
     )
 
@@ -218,7 +219,7 @@ def employee_acknowledgement_history(request: Request, name: str):
                 person.employee_id,
             )
             available = False
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "_employee_acknowledgement_history.html",
         {
@@ -226,6 +227,8 @@ def employee_acknowledgement_history(request: Request, name: str):
             "notification_history": _history_context(rows),
         },
     )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @router.get("/staffing/people/{name}", response_class=HTMLResponse)

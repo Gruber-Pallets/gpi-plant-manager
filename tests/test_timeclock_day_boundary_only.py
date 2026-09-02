@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from zira_dashboard import timeclock_sync
+from zira_dashboard import employee_notifications, timeclock_sync
 from zira_dashboard.app import app
 from zira_dashboard.routes import timeclock
 
@@ -22,6 +22,11 @@ PERSON = {
     "spanish_level": 3,
 }
 PUNCH_AT = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _no_pending_employee_notifications(monkeypatch):
+    monkeypatch.setattr(employee_notifications, "has_unacknowledged", lambda _id: False)
 
 
 def _wire_person(monkeypatch, *, active: bool) -> None:

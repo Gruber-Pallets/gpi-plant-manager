@@ -39,6 +39,9 @@
   </div>
   <form method="post" action="/timeclock/notifications/ack/{{ token }}"
         style="margin-top: 2.5rem;">
+    {% for n in notifications %}
+      <input type="hidden" name="notification_ids" value="{{ n.id }}">
+    {% endfor %}
     <button type="submit" class="k-btn"
       style="font-size: 1.75rem; padding: 1rem 3rem;">
       {{ t("I acknowledge") }}

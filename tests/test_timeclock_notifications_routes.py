@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
+import pytest
 
 from zira_dashboard import employee_celebrations, employee_notifications
 from zira_dashboard.app import app
@@ -90,6 +92,8 @@ def test_notifications_screen_lists_cards(monkeypatch):
     assert "was denied" in resp.text  # denied body
     assert "Jul 1 – Jul 3" in resp.text  # span rendered into the body
     assert f"/timeclock/notifications/ack/{token}" in resp.text
+    assert 'name="notification_ids" value="1"' in resp.text
+    assert 'name="notification_ids" value="2"' in resp.text
 
 
 def test_anniversary_pto_notice_blocks_dashboard_and_renders_snapshot(monkeypatch):
@@ -288,15 +292,86 @@ def test_notifications_ack_restarts_sign_in_priority_flow(monkeypatch):
     monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
     seen = {}
     monkeypatch.setattr(
-        employee_notifications, "acknowledge_all", lambda oid: seen.setdefault("oid", oid)
+        employee_notifications,
+        "acknowledge_presented",
+        lambda oid, ids: seen.update({"oid": oid, "ids": ids}),
     )
     token = timeclock._mint_token(1)
 
-    resp = client.post(f"/timeclock/notifications/ack/{token}", follow_redirects=False)
+    resp = client.post(
+        f"/timeclock/notifications/ack/{token}",
+        data={"notification_ids": ["1", "2"]},
+        follow_redirects=False,
+    )
 
     assert resp.status_code == 303
     assert seen["oid"] == 5  # the signing-in person's odoo id
+    assert seen["ids"] == [1, 2]
     assert resp.headers["location"] == "/timeclock/start/1"
+
+
+def test_notifications_ack_does_not_clear_notice_inserted_after_get(monkeypatch):
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
+    acknowledged = MagicMock()
+    monkeypatch.setattr(employee_notifications, "acknowledge_presented", acknowledged)
+    token = timeclock._mint_token(1)
+
+    response = client.post(
+        f"/timeclock/notifications/ack/{token}",
+        data={"notification_ids": "4"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    acknowledged.assert_called_once_with(5, [4])
+
+
+def test_direct_ack_without_presented_ids_cannot_clear_notifications(monkeypatch):
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
+    acknowledged = MagicMock()
+    monkeypatch.setattr(employee_notifications, "acknowledge_presented", acknowledged)
+    token = timeclock._mint_token(1)
+
+    response = client.post(
+        f"/timeclock/notifications/ack/{token}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    acknowledged.assert_called_once_with(5, [])
+
+
+def test_dashboard_redirects_when_notification_is_still_unacknowledged(monkeypatch):
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
+    monkeypatch.setattr(employee_notifications, "notifications_enabled", lambda: True)
+    monkeypatch.setattr(employee_notifications, "has_unacknowledged", lambda oid: True)
+
+    response = client.get(
+        f"/timeclock/dashboard/{timeclock._mint_token(1)}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/timeclock/start/1"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/timeclock/clock-in/{token}", "/timeclock/clock-in/confirm/{token}"],
+)
+def test_clock_in_routes_cannot_bypass_unacknowledged_notice(monkeypatch, path):
+    monkeypatch.setattr(timeclock, "_person_by_id", lambda pid: PERSON)
+    monkeypatch.setattr(employee_notifications, "notifications_enabled", lambda: True)
+    monkeypatch.setattr(employee_notifications, "has_unacknowledged", lambda oid: True)
+    open_log = MagicMock()
+    monkeypatch.setattr(timeclock, "_open_log_row", open_log)
+    token = timeclock._mint_token(1)
+
+    response = client.post(path.format(token=token), follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/timeclock/start/1"
+    open_log.assert_not_called()
 
 
 def test_notifications_screen_rejects_bad_token():

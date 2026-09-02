@@ -324,23 +324,25 @@ def has_unacknowledged(person_odoo_id: int) -> bool:
 
 
 def list_unacknowledged(person_odoo_id: int) -> list[dict]:
-    rows = db.query(
-        "SELECT id, kind, title, body, leave_date_from, leave_date_to, saturday_day, "
-        "anniversary_date, balance_amount, balance_unit, created_at, presented_at "
-        "FROM employee_notifications "
-        "WHERE person_odoo_id = %s AND acknowledged_at IS NULL "
-        "ORDER BY created_at",
-        (person_odoo_id,),
-    )
-    ids = [row["id"] for row in rows]
-    if ids:
-        db.execute(
-            "UPDATE employee_notifications "
-            "SET presented_at = COALESCE(presented_at, now()) "
-            "WHERE id = ANY(%s) AND person_odoo_id = %s "
-            "AND acknowledged_at IS NULL",
-            (ids, person_odoo_id),
+    with db.cursor() as cursor:
+        cursor.execute(
+            "SELECT id, kind, title, body, leave_date_from, leave_date_to, "
+            "saturday_day, anniversary_date, balance_amount, balance_unit, "
+            "created_at, presented_at FROM employee_notifications "
+            "WHERE person_odoo_id = %s AND acknowledged_at IS NULL "
+            "ORDER BY created_at FOR UPDATE",
+            (person_odoo_id,),
         )
+        rows = cursor.fetchall()
+        ids = [row["id"] for row in rows]
+        if ids:
+            cursor.execute(
+                "UPDATE employee_notifications "
+                "SET presented_at = COALESCE(presented_at, now()) "
+                "WHERE id = ANY(%s) AND person_odoo_id = %s "
+                "AND acknowledged_at IS NULL",
+                (ids, person_odoo_id),
+            )
     return rows
 
 
@@ -355,12 +357,14 @@ def list_history(person_odoo_id: int) -> list[dict]:
     )
 
 
-def acknowledge_all(person_odoo_id: int) -> None:
-    """Mark every unacknowledged notification for this person as seen. The
-    single 'Got it' button clears the whole stack; person-scoped so a stale
-    token can only ever clear its own person's rows."""
+def acknowledge_presented(person_odoo_id: int, notification_ids: list[int]) -> None:
+    """Acknowledge only the exact notification snapshots shown by the form."""
+    ids = list(dict.fromkeys(notification_ids))
+    if not ids:
+        return
     db.execute(
         "UPDATE employee_notifications SET acknowledged_at = now() "
-        "WHERE person_odoo_id = %s AND acknowledged_at IS NULL",
-        (person_odoo_id,),
+        "WHERE id = ANY(%s) AND person_odoo_id = %s "
+        "AND presented_at IS NOT NULL AND acknowledged_at IS NULL",
+        (ids, person_odoo_id),
     )
