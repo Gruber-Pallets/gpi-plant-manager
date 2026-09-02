@@ -217,6 +217,13 @@ async def _tick_time_off_balance():
     await asyncio.to_thread(time_off_balances.refresh_stale, 600)
 
 
+async def _tick_anniversary_pto_reminders():
+    """Refresh upcoming anniversary PTO reminders outside the event loop."""
+    from . import anniversary_pto_reminders
+
+    await asyncio.to_thread(anniversary_pto_reminders.run)
+
+
 async def _tick_absence_pto_reconcile():
     """Resume and review due PTO requests linked to recorded absences."""
     from . import absence_pto_review
@@ -521,6 +528,7 @@ _WARMERS = [
     ("time-off sync", _tick_time_off_sync, 60),
     ("time-off poll", _tick_time_off_poll, 60),
     ("time-off balance", _tick_time_off_balance, 600),
+    ("anniversary PTO reminders", _tick_anniversary_pto_reminders, 21600),
     ("absence PTO reconcile", _tick_absence_pto_reconcile, 60),
     ("staffing pages", _tick_staffing_pages, 45),
     ("inbox warm", _tick_inbox, 20),
