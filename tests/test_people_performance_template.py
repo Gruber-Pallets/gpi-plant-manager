@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from tests.people_performance_fixtures import DAY, busy_dashboard_model
 from zira_dashboard.app import app
 from zira_dashboard.deps import templates
+from zira_dashboard.people_performance_warnings import production_metric_warning
 from zira_dashboard.routes import people_performance as route
 
 
@@ -117,14 +118,12 @@ def test_page_uses_one_compact_live_manager_strip(rendered_html):
     assert 'class="pp-manager-strip"' in rendered_html
     assert 'class="pp-manager-primary"' in rendered_html
     assert 'class="pp-manager-actions"' in rendered_html
-    assert rendered_html.index('class="pp-manager-primary"') < rendered_html.index(
-        'class="pp-source-warnings"'
-    )
-    primary = rendered_html.split('<div class="pp-manager-primary">', 1)[1].split(
-        '<aside class="pp-source-warnings"', 1
-    )[0]
-    assert primary.index('class="pp-counts"') < primary.index('class="pp-manager-actions"')
-    actions = primary.split('<div class="pp-manager-actions">', 1)[1]
+    primary_at = rendered_html.index('class="pp-manager-primary"')
+    counts_at = rendered_html.index('class="pp-counts"', primary_at)
+    warnings_at = rendered_html.index('class="pp-source-warnings"', primary_at)
+    actions_at = rendered_html.index('class="pp-manager-actions"', primary_at)
+    assert primary_at < counts_at < warnings_at < actions_at
+    actions = rendered_html.split('<div class="pp-manager-actions">', 1)[1]
     assert actions.index('class="pp-updated"') < actions.index('class="pp-controls"')
     assert 'id="pp-live-status"' in rendered_html
     assert '<strong>5</strong> working now' in rendered_html
@@ -169,9 +168,40 @@ def test_warning_strip_uses_safe_semantic_detail_triggers(rendered_html):
     assert f'data-warning-summary="{warning.summary}"' in warning_strip
     assert 'aria-expanded="false"' in warning_strip
     assert 'aria-controls="pp-warning-popover"' in warning_strip
-    assert '<span aria-hidden="true">!</span>' in warning_strip
+    assert '<span class="pp-warning-icon" aria-hidden="true">!</span>' in warning_strip
     assert "source_unavailable" not in warning_strip
     assert "data-warning-facts" not in warning_strip
+
+
+def test_production_warning_strip_shows_one_counted_group(client, monkeypatch):
+    warnings = tuple(
+        production_metric_warning(
+            station_name=station,
+            reason_code="calculation_failure",
+            checked_at_utc=datetime(2026, 9, 2, 14, 30, tzinfo=UTC),
+            day=DAY,
+        )
+        for station in ("Trim Saw 1", "Hand Build #1")
+    )
+    monkeypatch.setattr(
+        route,
+        "load_dashboard",
+        lambda day, client, now_utc=None: replace(
+            busy_dashboard_model(), source_warnings=warnings
+        ),
+    )
+
+    response = client.get(f"/people-performance?day={DAY.isoformat()}")
+    warning_strip = response.text.split(
+        '<aside class="pp-source-warnings"', 1
+    )[1].split("</aside>", 1)[0]
+
+    assert 'aria-label="Production Meters Unavailable: 2"' in warning_strip
+    assert '<span class="pp-warning-label">Production Meters Unavailable</span>' in warning_strip
+    assert '<span class="pp-warning-count" aria-hidden="true">2</span>' in warning_strip
+    assert warning_strip.count('data-warning-kind="production_metric_unavailable"') == 1
+    assert "Trim Saw 1" not in warning_strip
+    assert "Hand Build #1" not in warning_strip
 
 
 def test_warning_panel_host_stays_outside_the_polled_rows_partial(

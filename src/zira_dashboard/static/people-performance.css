@@ -139,7 +139,8 @@
 }
 
 .pp-source-warnings {
-  width: 100%;
+  flex: 0 1 auto;
+  width: auto;
   flex-wrap: wrap;
 }
 
@@ -164,9 +165,24 @@
   overflow-wrap: anywhere;
 }
 
-.pp-warning-trigger > span {
+.pp-warning-icon {
   margin-right: .35rem;
   font-weight: 900;
+}
+
+.pp-warning-count {
+  display: inline-grid;
+  min-width: 1.35rem;
+  min-height: 1.35rem;
+  margin-left: .4rem;
+  padding: 0 .25rem;
+  place-items: center;
+  border-radius: 999px;
+  background: #7c2d12;
+  color: #fff;
+  font-size: .75rem;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .pp-warning-trigger:focus-visible {

@@ -675,15 +675,18 @@ def _terminal_claim(status: str) -> delivery.TaskDeliveryClaim:
         desired_version=3,
         last_synced_version=2,
         desired_status=status,
+        desired_contract_version=2,
+        last_synced_contract_version=1,
     )
 
 
-def test_terminal_feedback_repairs_an_open_status_on_a_task_already_in_done(monkeypatch):
-    # Odoo never changes a task's Status when its stage moves, and the other GPI
-    # apps read Status, so a task parked in Done with Status In Progress still
-    # looks open to them. The worker writes exactly the field that is off.
+def test_contract_resync_repairs_done_stage_with_open_status(monkeypatch):
+    # Production feedback 43 exposed this shape: lifecycle and stage were done,
+    # while project.task.state still said In Progress.
     item = snapshot(status="completed", projection_version=3, resolution_note="Fixed")
     claim = _terminal_claim("completed")
+    assert claim.desired_contract_version == 2
+    assert claim.last_synced_contract_version == 1
     stub_delivery(monkeypatch, item)
     stub_odoo(monkeypatch)
     worker.odoo_client.find_feedback_stage_ids.return_value = [8]

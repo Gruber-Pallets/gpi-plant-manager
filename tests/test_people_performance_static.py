@@ -79,9 +79,15 @@ def test_manager_strip_is_sticky_and_manager_groups_wrap_without_scrollbars():
     assert primary and "flex-wrap: wrap" in primary.group(1)
     assert actions and "flex-wrap: wrap" in actions.group(1)
     assert warnings and "flex-wrap: wrap" in warnings.group(1)
+    assert "flex: 0 1 auto" in warnings.group(1)
+    assert "width: auto" in warnings.group(1)
     assert "overflow-x" not in warnings.group(1)
     assert horizontal and "overflow-x: auto" in horizontal.group(1)
     assert ".pp-page { overflow-x" not in css
+    warning_count = re.search(r"\.pp-warning-count\s*\{([^}]*)\}", css)
+    assert warning_count
+    assert "border-radius: 999px" in warning_count.group(1)
+    assert "place-items: center" in warning_count.group(1)
 
 
 def test_section_headers_share_row_columns_and_time_tracks():
