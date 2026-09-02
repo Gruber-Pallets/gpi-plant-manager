@@ -25,6 +25,19 @@ def test_unique_external_driver_name_resolves_to_odoo_employee_id(monkeypatch):
     ) == {"driver-Trent": 60}
 
 
+def test_unique_full_external_name_resolves_to_abbreviated_roster_name(monkeypatch):
+    monkeypatch.setattr(forklift_store, "name_map", lambda kind: {})
+    monkeypatch.setattr(
+        staffing,
+        "load_roster",
+        lambda: [_person("Iban P.", 17), _person("Louie S.", 61)],
+    )
+
+    assert forklift_store.resolve_forklift_driver_ids(
+        {"driver-Iban": {"Iban Penaloza"}}, allowed_employee_ids={17, 61}
+    ) == {"driver-Iban": 17}
+
+
 def test_unchanged_ambiguous_name_is_not_accepted_as_identity(monkeypatch):
     monkeypatch.setattr(forklift_store, "name_map", lambda kind: {})
     monkeypatch.setattr(

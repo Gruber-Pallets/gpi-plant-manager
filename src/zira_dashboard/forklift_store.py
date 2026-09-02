@@ -332,7 +332,8 @@ def resolve_forklift_driver_ids(
         source_name = next(iter(names))
         target_name = str(overrides.get(source_name, source_name)).strip()
         exact = by_full_name.get(target_name.casefold(), [])
-        candidates = exact if exact else by_first_name.get(target_name.casefold(), [])
+        first_name = target_name.split()[0].casefold() if target_name else ""
+        candidates = exact if exact else by_first_name.get(first_name, [])
         candidates = [
             person
             for person in candidates

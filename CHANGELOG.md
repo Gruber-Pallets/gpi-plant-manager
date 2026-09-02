@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Credit forklift calls to the right people
+
+- **Forklift names can now match the shorter names shown in Plant Manager.** Calls are credited when one active employee has that first name. Shared names still wait for a manager to choose the right person.
+
 ### Keep the People page buttons working after an update
 
 - **The People page now sends each button with the matching look and action.** Totals filter the people list, and warning buttons open their details even right after Plant Manager is updated.
