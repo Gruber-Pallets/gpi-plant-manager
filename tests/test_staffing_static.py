@@ -73,14 +73,29 @@ def test_staffing_hours_assets_support_responsive_and_keyboard_accessible_detail
     assert "summary.focus()" in js
 
 
-def test_printed_scheduler_hides_saturday_off_and_time_off_rails():
-    css = _print_css()
+def test_printed_scheduler_shows_full_day_off_summary_but_hides_interactive_rails():
+    html = _template()
+    screen_css = _style()
+    print_css = _print_css()
 
-    hidden_sections = css.split(".section.reserves,", 1)[1].split("{", 1)[0]
+    assert '{% if published_off_names %}<div class="print-off-summary">' in html
+    assert '{% for name in published_off_names %}{{ name }}{% if not loop.last %}, {% endif %}{% endfor %}' in html
+    assert ".print-off-summary { display: none; }" in screen_css
+    assert ".print-off-summary {" in print_css
 
+    hidden_sections = print_css.split(".section.reserves,", 1)[1].split("{", 1)[0]
     assert ".section.saturday-off," in hidden_sections
     assert ".section.timeoff," in hidden_sections
-    assert "display: none !important;" in css
+
+
+def test_printed_partial_time_off_stays_inline_without_clear_mark():
+    html = _template()
+    print_css = _print_css()
+
+    assert html.count('class="partial-clear-mark"') == 3
+    assert ".partial-clear-mark" in print_css
+    assert "display: none !important;" in print_css
+    assert "button.partial-hours-badge" in print_css
 
 
 def test_printed_staffing_warnings_expand_instead_of_clipping():

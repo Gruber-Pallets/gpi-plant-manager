@@ -1071,7 +1071,8 @@
   /* The print-header (big "Plant Scheduler" title + date) is hidden on
      screen. Its show-rule and the entire print stylesheet live in
      static/staffing-print.css (linked with media="print"). */
-  .print-header { display: none; }
+  .print-header,
+  .print-off-summary { display: none; }
 
 
   /* ---------- Assignments to Do (retro WC attributions) ---------- */

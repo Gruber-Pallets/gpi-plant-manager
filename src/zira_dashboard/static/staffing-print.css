@@ -89,6 +89,25 @@ p.hint {
   margin: 0;
 }
 
+.print-off-summary {
+  display: block;
+  margin: 0 0 0.3rem;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid #777;
+  font-size: 9pt;
+  color: black;
+}
+
+button.partial-hours-badge {
+  appearance: none;
+  background: transparent !important;
+  border: 0 !important;
+  color: black !important;
+  padding: 0 !important;
+  font: inherit;
+}
+.partial-clear-mark { display: none !important; }
+
 /* Keep short assigned-name pairs together when their natural wrapping permits. */
 .multi-dd .dd-summary-text > span[class^="lvl-"] {
   display: inline;
