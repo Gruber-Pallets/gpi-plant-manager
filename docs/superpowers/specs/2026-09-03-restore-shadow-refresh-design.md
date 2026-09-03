@@ -14,12 +14,17 @@ changed the app warmer back to the older `run_warmer_tick(...)` call.
 
 ## Decision
 
-Restore `src/zira_dashboard/attendance_readiness.py` from the known-good
-attendance rollout state at commit `15d86881`. That version matches the
-current local-only readiness and cutover fences, and uses the existing
-production Shadow setting keys. Restore only the corresponding
-`_tick_attendance_readiness()` call in `src/zira_dashboard/app.py`; preserve
-the later app changes outside that narrow adapter.
+Restore the coherent attendance-rollout surface from the known-good state at
+commit `15d86881`. A later merge replaced the readiness module, rollout policy,
+Settings wiring, Inbox bindings, CLI, and their tests with an older rollout.
+The repair is a selective three-way restoration: keep unrelated later feedback
+work, but restore the compatible Task 13 implementation across its owned files.
+
+The owned runtime files are `attendance_readiness.py`,
+`attendance_location_policy.py`, `attendance_exceptions.py`,
+`exception_inbox.py`, `inbox_reconcile.py`, `precompute.py`,
+`routes/settings.py`, the attendance-readiness adapter in `app.py`, and the
+readiness CLI. Restore the matching Task 13 tests as one coherent suite.
 
 Do not adapt the older module with a compatibility wrapper. That would leave
 older readiness rules and state formats in production. Do not force Live or
@@ -40,9 +45,10 @@ manufacture yesterday's Shadow observation.
 
 Add a regression test through `app._tick_attendance_readiness()` that creates
 a current Shadow epoch and proves the app/worker path stores a comparison using
-the current setting keys. Run the focused readiness/app tests, then the
-relevant attendance suite and full suite. After deployment, verify aggregate
-freshness, mirror health, and that Live remains unscheduled.
+the current setting keys. Restore and run the matching Task 13 readiness,
+policy, Settings, failure-mode, and end-to-end tests, then the wider attendance
+suite and full suite. After deployment, verify aggregate freshness, mirror
+health, and that Live remains unscheduled.
 
 ## Operational outcome
 
