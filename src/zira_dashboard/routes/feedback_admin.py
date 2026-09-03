@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
@@ -25,7 +26,10 @@ def admin_feedback(request: Request):
     return templates.TemplateResponse(
         request,
         "admin_feedback.html",
-        {"items": feedback_store.for_admin()},
+        {
+            "items": feedback_store.for_admin(),
+            "odoo_url": os.environ.get("ODOO_URL", "").rstrip("/"),
+        },
     )
 
 

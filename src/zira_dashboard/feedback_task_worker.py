@@ -225,7 +225,28 @@ def _has_exact_review_source_metadata(description: str, source_id: str) -> bool:
     parser = _ReviewMetadataParser()
     parser.feed(description)
     parser.close()
-    return sum(paragraph[: len(expected)] == expected for paragraph in parser.paragraphs) == 1
+    marker_shape = (
+        ("start", "strong"),
+        ("text", "Source:"),
+        ("end", "strong"),
+        None,
+        ("break", "br"),
+        ("start", "strong"),
+        ("text", "Source ID:"),
+        ("end", "strong"),
+        None,
+        ("break", "br"),
+    )
+    structured = []
+    for paragraph in parser.paragraphs:
+        for start in range(len(paragraph) - len(marker_shape) + 1):
+            window = paragraph[start : start + len(marker_shape)]
+            if all(
+                wanted is None or window[index] == wanted
+                for index, wanted in enumerate(marker_shape)
+            ):
+                structured.append(window)
+    return len(structured) == 1 and structured[0] == expected
 
 
 def task_stage_for(status: str) -> str:

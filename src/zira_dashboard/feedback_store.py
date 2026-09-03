@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from decimal import Decimal
 from types import MappingProxyType
 from typing import Mapping
+from uuid import UUID, uuid4
 
 from . import db, feedback_task_delivery
 from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
-from .feedback_types import feedback_type, feedback_type_or_legacy_bug
+from .feedback_types import FEEDBACK_TYPES, feedback_type, feedback_type_or_legacy_bug
 
 
 _MAX_SIGNED_64 = 9_223_372_036_854_775_807
@@ -22,6 +23,7 @@ _ATTEMPT_BINARY_ROLES = {
     "x_studio_image": "before",
     "x_studio_after_image": "after",
 }
+REVIEW_RECONCILE_LEASE = timedelta(minutes=10)
 
 
 class InvalidTransition(ValueError):
@@ -46,6 +48,68 @@ class RolloutSnapshot:
 
     feedback: Mapping[str, object]
     images: Mapping[str, NormalizedImage]
+
+
+@dataclass(frozen=True)
+class ReviewCandidate:
+    """Exact local identities needed to reconcile one Odoo-owned review."""
+
+    feedback_id: int
+    task_type: str
+    status: str
+    projection_version: int
+    odoo_task_id: int
+    odoo_improvement_id: int
+    finished_at: datetime | None = None
+    finished_by: str | None = None
+    resolution_note: str | None = None
+    sync_claim_owner: str | None = None
+    sync_claim_token: UUID | None = None
+    sync_claim_expires_at: datetime | None = None
+    sync_prior_state: str | None = None
+
+    def __post_init__(self) -> None:
+        _positive_signed_64(self.feedback_id, "feedback id")
+        _positive_signed_64(self.projection_version, "projection version")
+        _positive_signed_64(self.odoo_task_id, "task id")
+        _positive_signed_64(self.odoo_improvement_id, "remote id")
+        canonical_type = feedback_type(self.task_type)
+        if canonical_type.behavior != "review" or canonical_type.odoo_value is None:
+            raise ValueError("feedback type is not review managed")
+        if self.status not in _TRANSITIONS:
+            raise ValueError("feedback status is malformed")
+        claim_values = (
+            self.sync_claim_owner,
+            self.sync_claim_token,
+            self.sync_claim_expires_at,
+            self.sync_prior_state,
+        )
+        if any(value is not None for value in claim_values):
+            if (
+                type(self.sync_claim_owner) is not str
+                or not self.sync_claim_owner.strip()
+                or type(self.sync_claim_token) is not UUID
+                or self.sync_claim_expires_at is None
+                or self.sync_prior_state not in {"idle", "quarantined"}
+            ):
+                raise ValueError("review sync claim is malformed")
+            _aware_datetime(self.sync_claim_expires_at, "review sync claim expiry")
+
+
+@dataclass(frozen=True)
+class ReviewReconcileLease:
+    """One crash-recoverable authority for a complete review batch."""
+
+    owner: str
+    token: UUID
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        if type(self.owner) is not str or not self.owner.strip() or len(self.owner) > 128:
+            raise ValueError("review reconciliation lease owner is malformed")
+        if type(self.token) is not UUID:
+            raise ValueError("review reconciliation lease token is malformed")
+        _aware_datetime(self.expires_at, "review reconciliation lease expiry")
 
 
 _TRANSITIONS = {
@@ -427,6 +491,499 @@ def for_submitter(submitter: str | None, limit: int = 100) -> list[dict]:
     )
 
 
+def acquire_review_reconcile_lease(
+    *, owner: str, now: datetime
+) -> ReviewReconcileLease | None:
+    """Atomically acquire or reclaim the singleton review batch lease."""
+    current = _aware_datetime(now, "review reconciliation lease time")
+    if type(owner) is not str or not owner.strip() or len(owner) > 128:
+        raise ValueError("review reconciliation lease owner is malformed")
+    token = uuid4()
+    expires = current + REVIEW_RECONCILE_LEASE
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE feedback_odoo_backfill_state SET review_lease_owner = %s, "
+            "review_lease_token = %s, review_lease_expires_at = %s, updated_at = %s "
+            "WHERE id = 1 AND (review_lease_token IS NULL "
+            "OR review_lease_expires_at <= %s) "
+            "RETURNING review_lease_owner, review_lease_token, review_lease_expires_at",
+            (owner.strip(), token, expires, current, current),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    if not isinstance(row, Mapping):
+        raise ProjectionSnapshotUnavailable(
+            "review reconciliation lease response is malformed"
+        )
+    lease = ReviewReconcileLease(
+        owner=row.get("review_lease_owner"),
+        token=row.get("review_lease_token"),
+        expires_at=row.get("review_lease_expires_at"),
+    )
+    if lease.owner != owner.strip() or lease.token != token or lease.expires_at != expires:
+        raise ProjectionSnapshotUnavailable(
+            "review reconciliation lease response is malformed"
+        )
+    return lease
+
+
+def renew_review_reconcile_lease(
+    lease: ReviewReconcileLease, *, now: datetime
+) -> ReviewReconcileLease | None:
+    """Extend only an unexpired lease still owned by the exact token."""
+    if type(lease) is not ReviewReconcileLease:
+        raise ValueError("review reconciliation lease is malformed")
+    current = _aware_datetime(now, "review reconciliation renewal time")
+    expires = current + REVIEW_RECONCILE_LEASE
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE feedback_odoo_backfill_state SET review_lease_expires_at = %s, "
+            "updated_at = %s WHERE id = 1 AND review_lease_owner = %s "
+            "AND review_lease_token = %s AND review_lease_expires_at > %s "
+            "RETURNING review_lease_owner, review_lease_token, review_lease_expires_at",
+            (expires, current, lease.owner, lease.token, current),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    if not isinstance(row, Mapping):
+        raise ProjectionSnapshotUnavailable(
+            "review reconciliation renewal response is malformed"
+        )
+    renewed = ReviewReconcileLease(
+        owner=row.get("review_lease_owner"),
+        token=row.get("review_lease_token"),
+        expires_at=row.get("review_lease_expires_at"),
+    )
+    if renewed.owner != lease.owner or renewed.token != lease.token or renewed.expires_at != expires:
+        raise ProjectionSnapshotUnavailable(
+            "review reconciliation renewal response is malformed"
+        )
+    return renewed
+
+
+def release_review_reconcile_lease(
+    lease: ReviewReconcileLease, *, now: datetime
+) -> bool:
+    """Release only the singleton lease owned by the exact token."""
+    if type(lease) is not ReviewReconcileLease:
+        raise ValueError("review reconciliation lease is malformed")
+    current = _aware_datetime(now, "review reconciliation release time")
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE feedback_odoo_backfill_state SET review_lease_owner = NULL, "
+            "review_lease_token = NULL, review_lease_expires_at = NULL, updated_at = %s "
+            "WHERE id = 1 AND review_lease_owner = %s AND review_lease_token = %s "
+            "RETURNING id",
+            (current, lease.owner, lease.token),
+        )
+        row = cur.fetchone()
+    return isinstance(row, Mapping) and row.get("id") == 1
+
+
+def review_reconcile_candidates(limit: int) -> list[ReviewCandidate]:
+    """Return a durable rotating batch after both remote identities are known."""
+    if type(limit) is not int or not 1 <= limit <= 500:
+        raise ValueError("review reconciliation limit must be from 1 through 500")
+    review_types = [
+        item.value
+        for item in FEEDBACK_TYPES
+        if item.behavior == "review" and item.odoo_value is not None
+    ]
+    select = (
+        "SELECT f.id AS feedback_id, f.task_type, f.status, f.projection_version, "
+        "td.odoo_task_id, s.odoo_improvement_id, f.finished_at, f.finished_by, "
+        "f.resolution_note FROM feedback f "
+        "JOIN feedback_task_delivery td ON td.feedback_id = f.id "
+        "JOIN feedback_odoo_sync s ON s.feedback_id = f.id "
+        "WHERE f.lifecycle_origin = 'local' AND f.task_type = ANY(%s) "
+        "AND f.status IS NOT NULL AND td.odoo_task_id IS NOT NULL "
+        "AND s.odoo_improvement_id IS NOT NULL AND td.state = 'delivered' "
+        "AND td.claim_owner IS NULL AND td.claim_token IS NULL "
+        "AND td.claim_expires_at IS NULL AND s.state IN ('idle', 'quarantined') "
+        "AND s.claim_owner IS NULL AND s.claim_token IS NULL "
+        "AND s.claim_expires_at IS NULL AND s.active_attempt_id IS NULL "
+    )
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT last_review_feedback_id FROM feedback_odoo_backfill_state "
+                "WHERE id = 1 FOR UPDATE",
+                (),
+            )
+            state = cur.fetchone()
+            if not isinstance(state, Mapping):
+                raise ValueError("review reconciliation cursor is unavailable")
+            cursor_id = _nonnegative_signed_64(
+                state.get("last_review_feedback_id"), "review reconciliation cursor"
+            )
+            cur.execute(
+                f"{select}AND f.id > %s ORDER BY f.id LIMIT %s",
+                (review_types, cursor_id, limit),
+            )
+            rows = cur.fetchall()
+            if type(rows) is not list or len(rows) > limit:
+                raise ValueError("review reconciliation candidates are malformed")
+            if len(rows) < limit and cursor_id > 0:
+                remaining = limit - len(rows)
+                cur.execute(
+                    f"{select}AND f.id <= %s ORDER BY f.id LIMIT %s",
+                    (review_types, cursor_id, remaining),
+                )
+                wrapped = cur.fetchall()
+                if type(wrapped) is not list or len(wrapped) > remaining:
+                    raise ValueError("review reconciliation candidates are malformed")
+                rows.extend(wrapped)
+            candidates = [ReviewCandidate(**dict(row)) for row in rows]
+            ids = [item.feedback_id for item in candidates]
+            if len(ids) != len(set(ids)):
+                raise ValueError("review reconciliation candidates are malformed")
+            if candidates:
+                next_cursor = candidates[-1].feedback_id
+                cur.execute(
+                    "UPDATE feedback_odoo_backfill_state "
+                    "SET last_review_feedback_id = %s, updated_at = now() "
+                    "WHERE id = 1 AND last_review_feedback_id = %s "
+                    "RETURNING last_review_feedback_id",
+                    (next_cursor, cursor_id),
+                )
+                advanced = cur.fetchone()
+                if (
+                    not isinstance(advanced, Mapping)
+                    or advanced.get("last_review_feedback_id") != next_cursor
+                ):
+                    raise ValueError("review reconciliation cursor did not advance")
+            return candidates
+    except (TypeError, ValueError):
+        raise ProjectionSnapshotUnavailable(
+            "review reconciliation candidates are malformed"
+        ) from None
+
+
+def claim_review_candidate(
+    candidate: ReviewCandidate,
+    lease: ReviewReconcileLease,
+    *,
+    now: datetime,
+) -> ReviewCandidate | None:
+    """Claim the exact generic-sync row before any review reference RPC."""
+    if type(candidate) is not ReviewCandidate or candidate.sync_claim_token is not None:
+        raise ValueError("review candidate is malformed")
+    if type(lease) is not ReviewReconcileLease:
+        raise ValueError("review reconciliation lease is malformed")
+    current = _aware_datetime(now, "review candidate claim time")
+    if lease.expires_at <= current:
+        return None
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT feedback_id, odoo_improvement_id, state, claim_owner, claim_token, "
+            "claim_expires_at, active_attempt_id FROM feedback_odoo_sync "
+            "WHERE feedback_id = %s FOR UPDATE",
+            (candidate.feedback_id,),
+        )
+        row = cur.fetchone()
+        if (
+            not isinstance(row, Mapping)
+            or row.get("feedback_id") != candidate.feedback_id
+            or row.get("odoo_improvement_id") != candidate.odoo_improvement_id
+            or row.get("state") not in {"idle", "quarantined"}
+            or row.get("claim_owner") is not None
+            or row.get("claim_token") is not None
+            or row.get("claim_expires_at") is not None
+            or row.get("active_attempt_id") is not None
+        ):
+            return None
+        prior_state = row["state"]
+        cur.execute(
+            "UPDATE feedback_odoo_sync SET state = 'in_flight', claim_owner = %s, "
+            "claim_token = %s, claim_expires_at = %s, updated_at = %s "
+            "WHERE feedback_id = %s AND odoo_improvement_id = %s AND state = %s "
+            "AND claim_owner IS NULL AND claim_token IS NULL "
+            "AND claim_expires_at IS NULL AND active_attempt_id IS NULL "
+            "RETURNING feedback_id",
+            (
+                lease.owner,
+                lease.token,
+                lease.expires_at,
+                current,
+                candidate.feedback_id,
+                candidate.odoo_improvement_id,
+                prior_state,
+            ),
+        )
+        claimed = cur.fetchone()
+        if not isinstance(claimed, Mapping) or claimed.get("feedback_id") != candidate.feedback_id:
+            raise InvalidTransition("review candidate claim conflicted")
+    return replace(
+        candidate,
+        sync_claim_owner=lease.owner,
+        sync_claim_token=lease.token,
+        sync_claim_expires_at=lease.expires_at,
+        sync_prior_state=prior_state,
+    )
+
+
+def release_review_candidate(candidate: ReviewCandidate, *, now: datetime) -> bool:
+    """Release an exact review-owned generic-sync claim after a nonfinal outcome."""
+    if type(candidate) is not ReviewCandidate or candidate.sync_claim_token is None:
+        raise ValueError("claimed review candidate is malformed")
+    current = _aware_datetime(now, "review candidate release time")
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE feedback_odoo_sync SET state = %s, claim_owner = NULL, "
+            "claim_token = NULL, claim_expires_at = NULL, updated_at = %s "
+            "WHERE feedback_id = %s AND odoo_improvement_id = %s "
+            "AND state = 'in_flight' AND claim_owner = %s AND claim_token = %s "
+            "AND active_attempt_id IS NULL RETURNING feedback_id",
+            (
+                candidate.sync_prior_state,
+                current,
+                candidate.feedback_id,
+                candidate.odoo_improvement_id,
+                candidate.sync_claim_owner,
+                candidate.sync_claim_token,
+            ),
+        )
+        row = cur.fetchone()
+    return isinstance(row, Mapping) and row.get("feedback_id") == candidate.feedback_id
+
+
+_REVIEW_ATTENTION_CODES = frozenset(
+    {
+        "review_task_identity_mismatch",
+        "review_reference_identity_mismatch",
+        "review_reference_link_mismatch",
+        "review_lifecycle_mismatch",
+        "review_terminal_conflict",
+    }
+)
+
+
+def record_review_attention(
+    candidate: ReviewCandidate,
+    code: str,
+    *,
+    now: datetime,
+) -> None:
+    """Quarantine generic reference delivery with one fixed, non-sensitive code."""
+    if type(candidate) is not ReviewCandidate:
+        raise ValueError("review candidate is malformed")
+    if type(code) is not str or code not in _REVIEW_ATTENTION_CODES:
+        raise ValueError("review attention code is unsupported")
+    current = _aware_datetime(now, "review attention time")
+    claimed = candidate.sync_claim_token is not None
+    authority_sql = (
+        "AND state = 'in_flight' AND claim_owner = %s AND claim_token = %s "
+        "AND active_attempt_id IS NULL "
+        if claimed
+        else "AND state <> 'in_flight' AND claim_owner IS NULL "
+        "AND claim_token IS NULL AND claim_expires_at IS NULL "
+        "AND active_attempt_id IS NULL "
+    )
+    authority_params = (
+        (candidate.sync_claim_owner, candidate.sync_claim_token) if claimed else ()
+    )
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE feedback_odoo_sync SET state = 'quarantined', "
+            "claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL, "
+            "quarantine_reason = %s, quarantined_at = %s, updated_at = %s "
+            "WHERE feedback_id = %s AND odoo_improvement_id = %s "
+            f"{authority_sql}RETURNING feedback_id",
+            (
+                code,
+                current,
+                current,
+                candidate.feedback_id,
+                candidate.odoo_improvement_id,
+                *authority_params,
+            ),
+        )
+        row = cur.fetchone()
+        if not isinstance(row, Mapping) or row.get("feedback_id") != candidate.feedback_id:
+            raise InvalidTransition("review attention state conflicted with sync work")
+
+
+def adopt_review_lifecycle(
+    candidate: ReviewCandidate,
+    *,
+    status: str,
+    finished_at: datetime | None,
+    finished_by_employee_id: int | None,
+    resolution_note: str | None,
+    now: datetime,
+) -> bool:
+    """Atomically adopt verified Odoo review state without enqueueing either outbox."""
+    if type(candidate) is not ReviewCandidate:
+        raise ValueError("review candidate is malformed")
+    if status not in _TRANSITIONS:
+        raise ValueError("review lifecycle status is unsupported")
+    current_time = _aware_datetime(now, "review adoption time")
+    terminal = status in {"completed", "declined"}
+    if terminal:
+        terminal_time = _aware_datetime(finished_at, "review finish time")
+        employee_id = _positive_signed_64(
+            finished_by_employee_id, "review employee id"
+        )
+        if type(resolution_note) is not str or not resolution_note.strip():
+            raise ValueError("terminal review requires a result note")
+        note = resolution_note.strip()
+        finished_by = f"odoo_employee:{employee_id}"
+    else:
+        if any(
+            value is not None
+            for value in (finished_at, finished_by_employee_id, resolution_note)
+        ):
+            raise ValueError("nonterminal review cannot include terminal detail")
+        terminal_time = None
+        note = None
+        finished_by = None
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT f.id AS feedback_id, f.task_type, f.status, f.lifecycle_origin, "
+            "f.projection_version, f.finished_at, f.finished_by, f.resolution_note, "
+            "td.odoo_task_id, td.state AS task_delivery_state, "
+            "td.claim_owner AS task_claim_owner, td.claim_token AS task_claim_token, "
+            "td.claim_expires_at AS task_claim_expires_at, s.odoo_improvement_id, "
+            "s.state AS sync_state, s.claim_owner AS sync_claim_owner, "
+            "s.claim_token AS sync_claim_token, "
+            "s.claim_expires_at AS sync_claim_expires_at, "
+            "s.active_attempt_id FROM feedback f "
+            "JOIN feedback_task_delivery td ON td.feedback_id = f.id "
+            "JOIN feedback_odoo_sync s ON s.feedback_id = f.id "
+            "WHERE f.id = %s FOR UPDATE OF f, td, s",
+            (candidate.feedback_id,),
+        )
+        locked = cur.fetchone()
+        if not isinstance(locked, Mapping):
+            raise InvalidTransition("review lifecycle state is unavailable")
+        claimed = candidate.sync_claim_token is not None
+        sync_authority_matches = (
+            locked.get("sync_state") == "in_flight"
+            and locked.get("sync_claim_owner") == candidate.sync_claim_owner
+            and locked.get("sync_claim_token") == candidate.sync_claim_token
+            and locked.get("sync_claim_expires_at") == candidate.sync_claim_expires_at
+            if claimed
+            else locked.get("sync_state") != "in_flight"
+            and locked.get("sync_claim_owner") is None
+            and locked.get("sync_claim_token") is None
+            and locked.get("sync_claim_expires_at") is None
+        )
+        if (
+            locked.get("feedback_id") != candidate.feedback_id
+            or locked.get("task_type") != candidate.task_type
+            or locked.get("status") != candidate.status
+            or locked.get("lifecycle_origin") != "local"
+            or locked.get("projection_version") != candidate.projection_version
+            or locked.get("odoo_task_id") != candidate.odoo_task_id
+            or locked.get("odoo_improvement_id") != candidate.odoo_improvement_id
+            or locked.get("active_attempt_id") is not None
+            or not sync_authority_matches
+            or locked.get("task_delivery_state") != "delivered"
+            or locked.get("task_claim_owner") is not None
+            or locked.get("task_claim_token") is not None
+            or locked.get("task_claim_expires_at") is not None
+        ):
+            raise InvalidTransition("review lifecycle state changed before adoption")
+        old_status = locked["status"]
+        if status != old_status and status not in _TRANSITIONS.get(old_status, set()):
+            raise InvalidTransition("review lifecycle cannot move backward")
+        if old_status in {"completed", "declined"} and (
+            status != old_status
+            or locked.get("finished_at") != terminal_time
+            or locked.get("finished_by") != finished_by
+            or locked.get("resolution_note") != note
+        ):
+            raise InvalidTransition("terminal review lifecycle is immutable")
+        changed = (
+            status != old_status
+            or locked.get("finished_at") != terminal_time
+            or locked.get("finished_by") != finished_by
+            or locked.get("resolution_note") != note
+        )
+        version = candidate.projection_version + int(changed)
+        cur.execute(
+            "UPDATE feedback SET status = %s, finished_at = %s, finished_by = %s, "
+            "resolution_note = %s, projection_version = %s, updated_at = %s "
+            "WHERE id = %s AND projection_version = %s AND status = %s "
+            "RETURNING id, projection_version",
+            (
+                status,
+                terminal_time,
+                finished_by,
+                note,
+                version,
+                current_time,
+                candidate.feedback_id,
+                candidate.projection_version,
+                candidate.status,
+            ),
+        )
+        feedback_row = cur.fetchone()
+        if (
+            not isinstance(feedback_row, Mapping)
+            or feedback_row.get("id") != candidate.feedback_id
+            or feedback_row.get("projection_version") != version
+        ):
+            raise InvalidTransition("review feedback adoption conflicted")
+        sync_authority_sql = (
+            "AND state = 'in_flight' AND claim_owner = %s AND claim_token = %s "
+            "AND active_attempt_id IS NULL "
+            if claimed
+            else "AND state <> 'in_flight' AND claim_owner IS NULL "
+            "AND claim_token IS NULL AND claim_expires_at IS NULL "
+            "AND active_attempt_id IS NULL "
+        )
+        sync_authority_params = (
+            (candidate.sync_claim_owner, candidate.sync_claim_token) if claimed else ()
+        )
+        cur.execute(
+            "UPDATE feedback_odoo_sync SET desired_version = %s, "
+            "last_synced_version = %s, state = 'idle', claim_owner = NULL, "
+            "claim_token = NULL, claim_expires_at = NULL, active_attempt_id = NULL, "
+            "attempt_count = 0, last_error_class = NULL, last_error_summary = NULL, "
+            "quarantine_reason = NULL, quarantined_at = NULL, updated_at = %s "
+            "WHERE feedback_id = %s AND odoo_improvement_id = %s "
+            f"{sync_authority_sql}RETURNING feedback_id",
+            (
+                version,
+                version,
+                current_time,
+                candidate.feedback_id,
+                candidate.odoo_improvement_id,
+                *sync_authority_params,
+            ),
+        )
+        sync_row = cur.fetchone()
+        if not isinstance(sync_row, Mapping) or sync_row.get("feedback_id") != candidate.feedback_id:
+            raise InvalidTransition("review sync adoption conflicted")
+        cur.execute(
+            "UPDATE feedback_task_delivery SET desired_version = %s, "
+            "last_synced_version = %s, desired_status = %s, state = 'delivered', "
+            "last_synced_contract_version = desired_contract_version, "
+            "claim_owner = NULL, claim_token = NULL, claim_expires_at = NULL, "
+            "attempt_count = 0, last_error_summary = NULL, blocked_reason = NULL, "
+            "updated_at = %s WHERE feedback_id = %s AND odoo_task_id = %s "
+            "AND state = 'delivered' AND claim_owner IS NULL "
+            "AND claim_token IS NULL AND claim_expires_at IS NULL "
+            "RETURNING feedback_id",
+            (
+                version,
+                version,
+                status,
+                current_time,
+                candidate.feedback_id,
+                candidate.odoo_task_id,
+            ),
+        )
+        task_row = cur.fetchone()
+        if not isinstance(task_row, Mapping) or task_row.get("feedback_id") != candidate.feedback_id:
+            raise InvalidTransition("review task adoption conflicted")
+    return changed
+
+
 def for_admin(limit: int = 200) -> list[dict]:
     """Return local feedback with its current durable sync state."""
     rows = db.query(
@@ -452,10 +1009,21 @@ def for_admin(limit: int = 200) -> list[dict]:
         (_clamp_limit(limit, default=200),),
     )
     for row in rows:
-        row["type_label"] = feedback_type_or_legacy_bug(row.get("task_type")).label
+        canonical_type = feedback_type_or_legacy_bug(row.get("task_type"))
+        row["type_label"] = canonical_type.label
         row["task_delivery_label"], row["task_delivery_note"] = (
             feedback_task_delivery.admin_status_for(row)
         )
+        row["review_managed"] = canonical_type.behavior == "review"
+        task_id = row.get("task_delivery_task_id")
+        row["review_task_id"] = (
+            task_id
+            if row["review_managed"] and type(task_id) is int and 0 < task_id <= _MAX_SIGNED_64
+            else None
+        )
+        if row["review_managed"]:
+            row["task_delivery_label"] = "Managed in Odoo"
+            row["task_delivery_note"] = None
         row.pop("task_delivery_state", None)
         row.pop("task_delivery_desired_version", None)
         row.pop("task_delivery_last_synced_version", None)
@@ -965,7 +1533,7 @@ def transition(
     clean_note = (resolution_note or "").strip()
     with db.cursor() as cur:
         cur.execute(
-            "SELECT status, lifecycle_origin, projection_version "
+            "SELECT status, lifecycle_origin, projection_version, task_type "
             "FROM feedback WHERE id = %s FOR UPDATE",
             (feedback_id,),
         )
@@ -974,6 +1542,8 @@ def transition(
             raise KeyError(feedback_id)
         if row["lifecycle_origin"] != "local":
             raise InvalidTransition("feedback is not locally managed")
+        if feedback_type_or_legacy_bug(row.get("task_type")).behavior == "review":
+            raise InvalidTransition("Managed in Odoo")
 
         current = row["status"]
         if status not in _TRANSITIONS.get(current, set()):

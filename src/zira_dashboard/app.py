@@ -507,6 +507,12 @@ async def _tick_feedback_task_delivery():
     await asyncio.to_thread(feedback_task_worker.run_batch)
 
 
+async def _tick_feedback_review_reconcile():
+    from . import feedback_review_reconciler
+
+    await asyncio.to_thread(feedback_review_reconciler.run_batch)
+
+
 # (name, tick coroutine, interval seconds). `name` is used only in the
 # "warmer tick failed" log line. Intervals are unchanged from the original
 # per-loop functions this registry replaced.
@@ -546,6 +552,7 @@ _WARMERS = [
     ("Saturday recruiting", _tick_saturday_recruiting, 60),
     ("feedback Odoo mirror", _tick_feedback_sync, 60),
     ("feedback owner task delivery", _tick_feedback_task_delivery, 60),
+    ("feedback review reconciliation", _tick_feedback_review_reconcile, 60),
 ]
 
 

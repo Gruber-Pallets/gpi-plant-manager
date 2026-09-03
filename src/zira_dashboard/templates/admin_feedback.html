@@ -46,7 +46,13 @@
               </div>
               <div>
                 <dt>Owner task sync</dt>
-                <dd>{{ item.task_delivery_label }}{% if item.task_delivery_note %}<br><span class="muted">{{ item.task_delivery_note }}</span>{% endif %}</dd>
+                <dd>
+                  {{ item.task_delivery_label }}
+                  {% if item.review_managed and item.review_task_id and odoo_url %}
+                    · <a href="{{ odoo_url }}/web#id={{ item.review_task_id }}&model=project.task&view_type=form" target="_blank" rel="noopener">Open task</a>
+                  {% endif %}
+                  {% if item.task_delivery_note %}<br><span class="muted">{{ item.task_delivery_note }}</span>{% endif %}
+                </dd>
               </div>
               <div>
                 <dt>Sync</dt>
@@ -57,14 +63,14 @@
               </div>
             </dl>
 
-            {% if item.status == 'requested' %}
+            {% if not item.review_managed and item.status == 'requested' %}
               <form method="post" action="/admin/feedback/{{ item.id }}/status" class="progress-form">
                 <input type="hidden" name="status" value="in_progress">
                 <button type="submit" class="button-secondary">Mark In Progress</button>
               </form>
             {% endif %}
 
-            {% if item.status in ['requested', 'in_progress'] %}
+            {% if not item.review_managed and item.status in ['requested', 'in_progress'] %}
               <div class="terminal-actions">
                 <form method="post" action="/admin/feedback/{{ item.id }}/status" enctype="multipart/form-data">
                   <input type="hidden" name="status" value="completed">
@@ -92,7 +98,7 @@
                   <button type="submit" class="button-decline">Decline</button>
                 </form>
               </div>
-            {% else %}
+            {% elif item.status in ['completed', 'declined'] %}
               <section class="resolution">
                 <h2>Final result</h2>
                 <p>{{ item.resolution_note }}</p>

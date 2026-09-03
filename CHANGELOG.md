@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Keep review tasks and the shared list together
+
+- **The reference table now follows the shared review task. It normally catches up within one minute and safely retries when Odoo is busy.**
+
 ### Share each floor review once
 
 - **Each floor review now gets one shared Odoo task assigned to Dale. Retries find the same task instead of making another one.**

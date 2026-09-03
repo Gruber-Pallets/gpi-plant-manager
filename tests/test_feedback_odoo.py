@@ -271,6 +271,7 @@ def test_read_feedback_review_task_returns_exact_contract_fields(monkeypatch):
             "state": "01_in_progress",
             "active": True,
             "description": "<p>Source: GPI Plant Manager</p>",
+            "write_date": "2026-09-02 18:31:00",
         }
     ])
 
@@ -278,14 +279,20 @@ def test_read_feedback_review_task_returns_exact_contract_fields(monkeypatch):
         "id": 901,
         "name": "[GPI-PM-FB-42] [Floor Issue] Save fails",
         "project_id": 81,
+        "project_name": "GPI OS Manager - TASKS",
         "stage_id": 91,
         "stage_name": "General",
         "user_ids": [17],
         "state": "01_in_progress",
         "active": True,
         "description": "<p>Source: GPI Plant Manager</p>",
+        "write_date": "2026-09-02 18:31:00",
     }
     assert calls[0][0:2] == ("project.task", "read")
+    assert calls[0][3]["fields"] == [
+        "id", "name", "project_id", "stage_id", "user_ids", "state", "active",
+        "description", "write_date",
+    ]
 
 
 def test_stage_failure_leaves_project_uncached_and_retries(monkeypatch):

@@ -16,6 +16,7 @@ from zira_dashboard.feedback_projection import (
     build_projection,
     build_projection_from_snapshot,
     readback_mismatched_fields,
+    review_lifecycle_fields,
     resolve_employee_id,
     source_id_for,
     verify_readback,
@@ -167,6 +168,34 @@ def test_resolution_note_escapes_html_text_but_keeps_quotes_literal():
     assert projection.fields["x_studio_notes"] == (
         '<p>They\'re "ready" &amp; &lt;safe&gt;</p>'
     )
+
+
+def test_review_lifecycle_fields_are_narrow_and_use_utc_terminal_time():
+    fields = review_lifecycle_fields(
+        status="Completed",
+        occurred_at="2026-09-02T23:30:00Z",
+        employee_id=41,
+        detail='Fixed <safely> & "checked"',
+        stop_type="datetime",
+    )
+
+    assert fields == {
+        "x_studio_status": "Completed",
+        "x_studio_date_stop": "2026-09-02 23:30:00",
+        "x_studio_completed_by": 41,
+        "x_studio_notes": '<p>Fixed &lt;safely&gt; &amp; "checked"</p>',
+    }
+
+
+@pytest.mark.parametrize("status", ["Requested", "In-Progress"])
+def test_nonterminal_review_lifecycle_writes_only_status(status):
+    assert review_lifecycle_fields(
+        status=status,
+        occurred_at=None,
+        employee_id=None,
+        detail=None,
+        stop_type="date",
+    ) == {"x_studio_status": status}
 
 
 def test_verify_readback_accepts_odoo_normalized_literal_quotes_in_note():

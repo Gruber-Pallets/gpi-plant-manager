@@ -87,6 +87,35 @@ def test_feedback_warmer_is_registered_once_at_sixty_seconds():
     assert matches == [("feedback Odoo mirror", app_module._tick_feedback_sync, 60)]
 
 
+def test_feedback_review_reconciler_is_registered_once_at_sixty_seconds():
+    matches = [
+        item for item in app_module._WARMERS
+        if item[0] == "feedback review reconciliation"
+    ]
+
+    assert matches == [
+        (
+            "feedback review reconciliation",
+            app_module._tick_feedback_review_reconcile,
+            60,
+        )
+    ]
+
+
+def test_feedback_review_tick_calls_run_batch_only_through_to_thread(monkeypatch):
+    from zira_dashboard import feedback_review_reconciler
+
+    run = MagicMock()
+    to_thread = AsyncMock()
+    monkeypatch.setattr(feedback_review_reconciler, "run_batch", run)
+    monkeypatch.setattr(app_module.asyncio, "to_thread", to_thread)
+
+    asyncio.run(app_module._tick_feedback_review_reconcile())
+
+    to_thread.assert_awaited_once_with(run)
+    run.assert_not_called()
+
+
 def test_feedback_tick_calls_only_run_batch_through_to_thread(monkeypatch):
     from zira_dashboard import feedback_sync
 

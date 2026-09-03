@@ -325,6 +325,54 @@ def _odoo_time(value: object, field_type: str) -> str:
     return value.astimezone(_CHICAGO).date().isoformat()
 
 
+def review_lifecycle_fields(
+    *,
+    status: str,
+    occurred_at: str | None,
+    employee_id: int | None,
+    detail: str | None,
+    stop_type: str,
+) -> dict[str, object]:
+    """Build the narrow reference payload owned by the review reconciler."""
+    if status not in STATUS_VALUES.values():
+        raise ValueError("unsupported review lifecycle status")
+    if stop_type not in {"date", "datetime"}:
+        raise ValueError("Odoo date field must be date or datetime")
+    fields: dict[str, object] = {"x_studio_status": status}
+    if status not in {"Completed", "Declined"}:
+        if any(value is not None for value in (occurred_at, employee_id, detail)):
+            raise ValueError("nonterminal review lifecycle cannot have terminal detail")
+        return fields
+    if (
+        type(occurred_at) is not str
+        or not occurred_at.endswith("Z")
+        or type(employee_id) is not int
+        or not 0 < employee_id <= MAX_SIGNED_64
+        or type(detail) is not str
+        or not detail.strip()
+    ):
+        raise ValueError("terminal review lifecycle requires valid event detail")
+    try:
+        event_time = datetime.fromisoformat(f"{occurred_at[:-1]}+00:00")
+    except ValueError:
+        raise ValueError("terminal review lifecycle requires valid event detail") from None
+    if event_time.utcoffset() != datetime.min.replace(tzinfo=UTC).utcoffset():
+        raise ValueError("terminal review lifecycle requires a UTC event time")
+    utc_time = event_time.astimezone(UTC)
+    fields.update(
+        {
+            "x_studio_date_stop": (
+                utc_time.date().isoformat()
+                if stop_type == "date"
+                else utc_time.strftime("%Y-%m-%d %H:%M:%S")
+            ),
+            "x_studio_completed_by": employee_id,
+            "x_studio_notes": f"<p>{html.escape(detail.strip(), quote=False)}</p>",
+        }
+    )
+    return fields
+
+
 def _binary_evidence(image: object) -> BinaryEvidence:
     if type(image) is not NormalizedImage:
         raise ValueError("projection images must be normalized images")

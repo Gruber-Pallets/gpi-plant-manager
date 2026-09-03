@@ -202,6 +202,70 @@ def test_post_maps_rejected_image_to_unprocessable_entity(monkeypatch):
     assert response.status_code == 422
 
 
+def test_admin_cannot_mutate_review_lifecycle(monkeypatch):
+    monkeypatch.setenv("SUPER_ADMIN_UPNS", "dale@gruberpallets.com")
+    cursor = ReturningCursor(feedback_row("requested") | {"task_type": "floor_issue"})
+
+    @contextmanager
+    def fake_cursor():
+        yield cursor
+
+    monkeypatch.setattr(feedback_store.db, "cursor", fake_cursor)
+
+    with admin_client("dale@gruberpallets.com") as client:
+        response = client.post(
+            "/admin/feedback/7/status",
+            data={"status": "completed", "resolution_note": "local result"},
+        )
+
+    assert response.status_code == 422
+    assert "Managed in Odoo" in response.text
+    assert len(cursor.executions) == 1
+
+
+def test_review_admin_card_links_to_odoo_and_has_no_local_forms(monkeypatch):
+    monkeypatch.setenv("SUPER_ADMIN_UPNS", "dale@gruberpallets.com")
+    monkeypatch.setenv("ODOO_URL", "https://odoo.example")
+    monkeypatch.setitem(
+        feedback_admin.templates.env.globals,
+        "nav_inbox_summary",
+        lambda: {"total": 0, "urgent_total": 0, "source_errors": []},
+    )
+    monkeypatch.setitem(feedback_admin.templates.env.globals, "static_v", lambda _name: "test")
+    rows = [{
+        "id": 42,
+        "created_at": "2026-09-02 12:00",
+        "submitter": "person@example.com",
+        "page_url": None,
+        "task_type": "floor_issue",
+        "type_label": "Floor Issue",
+        "message": "Loose guard",
+        "status": "requested",
+        "finished_at": None,
+        "finished_by": None,
+        "resolution_note": None,
+        "projection_version": 1,
+        "sync_state": "idle",
+        "desired_version": 1,
+        "last_synced_version": 1,
+        "task_delivery_label": "Managed in Odoo",
+        "task_delivery_note": None,
+        "review_managed": True,
+        "review_task_id": 55,
+        "has_before_image": False,
+        "has_after_image": False,
+    }]
+    monkeypatch.setattr(feedback_store, "for_admin", lambda limit=200: rows)
+
+    with admin_client("dale@gruberpallets.com") as client:
+        response = client.get("/admin/feedback")
+
+    assert response.status_code == 200
+    assert "Managed in Odoo" in response.text
+    assert 'href="https://odoo.example/web#id=55&model=project.task&view_type=form"' in response.text
+    assert 'action="/admin/feedback/42/status"' not in response.text
+
+
 def test_admin_list_queries_local_and_sync_state(monkeypatch):
     captured = {}
     monkeypatch.setattr(

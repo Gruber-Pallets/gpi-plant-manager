@@ -65,6 +65,14 @@ def test_feedback_schema_has_durable_odoo_outbox_and_immutable_manifest():
     assert "CREATE TABLE IF NOT EXISTS feedback_odoo_warnings" in ddl
     assert "CREATE TABLE IF NOT EXISTS feedback_odoo_operator_actions" in ddl
     assert "CREATE TABLE IF NOT EXISTS feedback_odoo_backfill_state" in ddl
+    assert "last_review_feedback_id BIGINT NOT NULL DEFAULT 0" in ddl
+    assert "ADD COLUMN IF NOT EXISTS last_review_feedback_id BIGINT NOT NULL DEFAULT 0" in ddl
+    assert "review_lease_owner TEXT" in ddl
+    assert "review_lease_token UUID" in ddl
+    assert "review_lease_expires_at TIMESTAMPTZ" in ddl
+    assert "ADD COLUMN IF NOT EXISTS review_lease_owner TEXT" in ddl
+    assert "ADD COLUMN IF NOT EXISTS review_lease_token UUID" in ddl
+    assert "ADD COLUMN IF NOT EXISTS review_lease_expires_at TIMESTAMPTZ" in ddl
 
 
 def test_feedback_schema_has_exact_append_only_pre_attempt_release_audit():
@@ -105,8 +113,6 @@ def test_schema_has_owner_task_delivery_outbox():
     )
     assert "ALTER COLUMN desired_contract_version SET DEFAULT 2" in ddl
     assert "last_synced_contract_version <= desired_contract_version" in ddl
-
-
 
 def test_feedback_remote_ids_use_signed_64_bit_columns_and_idempotent_migration():
     ddl = " ".join(SCHEMA_DDL.split())

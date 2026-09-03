@@ -1510,6 +1510,7 @@ def read_feedback_review_task(task_id: int) -> dict[str, Any]:
             "state",
             "active",
             "description",
+            "write_date",
         ],
     )
     if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
@@ -1533,18 +1534,25 @@ def read_feedback_review_task(task_id: int) -> dict[str, Any]:
         or type(row.get("state")) is not str
         or type(row.get("active")) is not bool
         or type(row.get("description")) is not str
+        or type(row.get("write_date")) is not str
     ):
         raise OdooTaskPayloadError("Odoo review task readback payload was malformed")
+    try:
+        datetime.strptime(row["write_date"], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        raise OdooTaskPayloadError("Odoo review task readback payload was malformed") from None
     return {
         "id": safe_task_id,
         "name": row["name"],
         "project_id": _review_positive_id(project[0], "review task project"),
+        "project_name": project[1],
         "stage_id": _review_positive_id(stage[0], "review task stage"),
         "stage_name": stage[1],
         "user_ids": list(users),
         "state": row["state"],
         "active": row["active"],
         "description": row["description"],
+        "write_date": row["write_date"],
     }
 
 
