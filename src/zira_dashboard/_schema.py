@@ -2142,8 +2142,20 @@ CREATE TABLE IF NOT EXISTS feedback_odoo_operator_actions (
 CREATE TABLE IF NOT EXISTS feedback_odoo_backfill_state (
   id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   last_feedback_id BIGINT NOT NULL DEFAULT 0,
+  last_review_feedback_id BIGINT NOT NULL DEFAULT 0,
+  review_lease_owner TEXT,
+  review_lease_token UUID,
+  review_lease_expires_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE feedback_odoo_backfill_state
+  ADD COLUMN IF NOT EXISTS last_review_feedback_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE feedback_odoo_backfill_state
+  ADD COLUMN IF NOT EXISTS review_lease_owner TEXT;
+ALTER TABLE feedback_odoo_backfill_state
+  ADD COLUMN IF NOT EXISTS review_lease_token UUID;
+ALTER TABLE feedback_odoo_backfill_state
+  ADD COLUMN IF NOT EXISTS review_lease_expires_at TIMESTAMPTZ;
 INSERT INTO feedback_odoo_backfill_state (id) VALUES (1)
 ON CONFLICT (id) DO NOTHING;
 
