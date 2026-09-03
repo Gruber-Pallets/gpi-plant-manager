@@ -28,7 +28,11 @@ readiness CLI. The same merge also regressed dependencies that provide the
 Task 13 mirror-generation lock and Shadow source snapshot:
 `attendance_mirror.py`, `attendance_corrections.py`, `production_history.py`,
 `_schema.py`, and `templates/settings.html`. Restore the matching Task 13
-tests as one coherent suite.
+tests as one coherent suite. Remove the obsolete
+`test_attendance_readiness_warmer.py` suite: it was introduced with the
+regressed worker, does not exist in the known-good Task 13 release, and
+asserts its retired `run_warmer_tick(...)` interface. The current Task 13
+readiness test covers the retained warmer-registration behavior.
 
 Do not adapt the older module with a compatibility wrapper. That would leave
 older readiness rules and state formats in production. Do not force Live or

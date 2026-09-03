@@ -85,6 +85,9 @@ Expected: failure because the regressed module has no `tick` API and the app cal
 - Modify: `tests/test_attendance_location_policy.py`
 - Modify: `tests/test_settings_timeclock_layout.py`
 - Modify: matching Task 13 mirror, correction, precompute, and production-history test files
+- Delete: `tests/test_attendance_readiness_warmer.py` (a post-Task-13 suite
+  tied only to the retired `run_warmer_tick(...)` interface; its useful
+  warmer-registration coverage is retained in `tests/test_attendance_readiness.py`)
 
 **Interfaces:**
 
@@ -132,6 +135,8 @@ def tick(now_utc: datetime | None = None) -> CutoverActivationResult:
 ```
 
 Use the matching Task 13 tests from `15d86881`, then retain any later tests that cover unrelated feedback behavior. Restore the required mirror generation field and lock API, correction/cache-readiness hooks, strict-production Shadow snapshot inputs, additive schema state, and Settings explanation markup as one compatible Task 13 boundary.
+Remove the obsolete warmer test suite instead of preserving its assertions for
+the retired worker interface.
 
 - [ ] **Step 3: Run focused GREEN tests**
 
