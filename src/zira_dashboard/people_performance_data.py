@@ -10,6 +10,7 @@ import logging
 import math
 
 from . import (
+    attendance_mirror,
     attendance_timeline,
     forklift_event_store,
     forklift_score,
@@ -54,6 +55,14 @@ class _ProductionSource:
     totals: tuple
     attribution_rows: tuple[dict, ...]
     error: Exception | None = None
+
+
+@dataclass(frozen=True)
+class _AttendanceSource:
+    """People's local attendance view and the retained mirror-health blockers."""
+
+    spans: tuple
+    freshness_blockers: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -128,6 +137,51 @@ def _calendar_bounds(day: date) -> tuple[datetime, datetime]:
         day + timedelta(days=1), time.min, tzinfo=shift_config.SITE_TZ
     ).astimezone(UTC)
     return start, end
+
+
+def _attendance_freshness_blockers(
+    health: attendance_mirror.MirrorHealth,
+    *,
+    as_of_utc: datetime,
+) -> tuple[str, ...]:
+    """Describe retained mirror-health gaps without the retired observation field."""
+    as_of = _aware_utc(as_of_utc, "as_of_utc")
+    blockers: list[str] = []
+    if health.baseline_completed_at is None:
+        blockers.append("baseline_incomplete")
+    completed = health.last_incremental_completed_at
+    if completed is None or as_of - _aware_utc(
+        completed, "last_incremental_completed_at"
+    ) > timedelta(seconds=90):
+        blockers.append("mirror_stale")
+    if health.last_error:
+        blockers.append("mirror_sync_failed")
+    full_sweep = health.last_full_sweep_completed_at
+    if full_sweep is None or as_of - _aware_utc(
+        full_sweep, "last_full_sweep_completed_at"
+    ) > timedelta(hours=2):
+        blockers.append("full_sweep_stale")
+    return tuple(blockers)
+
+
+def _load_attendance_source(
+    start: datetime,
+    end: datetime,
+    *,
+    as_of_utc: datetime,
+) -> _AttendanceSource:
+    """Load People attendance through the restored Task 13 timeline boundary."""
+    health = attendance_mirror.health_snapshot()
+    spans = attendance_timeline.timeline_for_range(
+        start,
+        end,
+        as_of_utc=as_of_utc,
+        health_snapshot=health,
+    )
+    return _AttendanceSource(
+        spans=tuple(spans),
+        freshness_blockers=_attendance_freshness_blockers(health, as_of_utc=as_of_utc),
+    )
 
 
 def _load_production_source(client, day: date, cap: datetime) -> _ProductionSource:
@@ -515,7 +569,7 @@ def load_dashboard(
     now = _aware_utc(_utc_now() if now_utc is None else now_utc, "now_utc")
     start, end, cap, is_today, breaks = _dashboard_window(day, now)
     attendance_future = _LOAD_POOL.submit(
-        attendance_timeline.snapshot_for_range,
+        _load_attendance_source,
         start,
         end,
         as_of_utc=cap,

@@ -4,7 +4,6 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta, timezone
 import os
 from threading import Event, Thread, current_thread
-from types import SimpleNamespace
 
 import pytest
 
@@ -70,7 +69,7 @@ class _InsertCursor:
         return None
 
 
-def test_incremental_attendance_change_requests_history_aware_strict_mark(monkeypatch):
+def test_incremental_attendance_change_queues_without_marking_strict(monkeypatch):
     calls = []
     monkeypatch.setattr(
         attendance_mirror,
@@ -91,110 +90,9 @@ def test_incremental_attendance_change_requests_history_aware_strict_mark(monkey
         (
             frozenset({date(2026, 8, 28)}),
             "odoo_attendance_changed",
-            {"requested_at": SYNCED_AT, "mark_strict": True},
+            {"requested_at": SYNCED_AT},
         )
     ]
-
-
-def test_recalc_marks_only_completed_history_strict_while_live(monkeypatch):
-    cursor = _InsertCursor()
-    monkeypatch.setattr(
-        attendance_mirror.attendance_location_policy,
-        "live_is_active_cur",
-        lambda *, cur, now_utc: True,
-    )
-    monkeypatch.setattr(
-        attendance_mirror.shift_config,
-        "snapshot_for",
-        lambda _day, **_kwargs: SimpleNamespace(
-            shift_start=datetime.min.time().replace(hour=7),
-            shift_end=datetime.min.time().replace(hour=15),
-        ),
-    )
-
-    attendance_mirror._enqueue_recalc_cur(
-        cursor,
-        (date(2026, 8, 27), date(2026, 8, 28), date(2026, 8, 29)),
-        "odoo_attendance_changed",
-        requested_at=datetime(2026, 8, 28, 15, tzinfo=UTC),
-        mark_strict=True,
-    )
-
-    strict_params = [
-        params
-        for sql, params in cursor.statements
-        if "INSERT INTO attendance_strict_days" in sql
-    ]
-    assert strict_params == [
-        (
-            date(2026, 8, 27),
-            "odoo_attendance_changed",
-            datetime(2026, 8, 28, 15, tzinfo=UTC),
-        )
-    ]
-
-
-def test_recalc_does_not_create_strict_history_while_off_or_shadow(monkeypatch):
-    cursor = _InsertCursor()
-    monkeypatch.setattr(
-        attendance_mirror.attendance_location_policy,
-        "live_is_active_cur",
-        lambda *, cur, now_utc: False,
-    )
-
-    attendance_mirror._enqueue_recalc_cur(
-        cursor,
-        (date(2026, 8, 27), date(2026, 8, 28)),
-        "odoo_attendance_changed",
-        requested_at=datetime(2026, 8, 28, 22, tzinfo=UTC),
-        mark_strict=True,
-    )
-
-    assert not any(
-        "INSERT INTO attendance_strict_days" in sql for sql, _params in cursor.statements
-    )
-
-
-def test_recalc_marks_same_day_strict_only_after_shift_end_while_live(monkeypatch):
-    monkeypatch.setattr(
-        attendance_mirror.attendance_location_policy,
-        "live_is_active_cur",
-        lambda *, cur, now_utc: True,
-    )
-    monkeypatch.setattr(
-        attendance_mirror.shift_config,
-        "snapshot_for",
-        lambda _day, **_kwargs: SimpleNamespace(
-            shift_start=datetime.min.time().replace(hour=7),
-            shift_end=datetime.min.time().replace(hour=15),
-        ),
-    )
-
-    during_shift = _InsertCursor()
-    attendance_mirror._enqueue_recalc_cur(
-        during_shift,
-        (date(2026, 8, 28),),
-        "odoo_attendance_changed",
-        requested_at=datetime(2026, 8, 28, 19, 59, tzinfo=UTC),
-        mark_strict=True,
-    )
-    after_shift = _InsertCursor()
-    attendance_mirror._enqueue_recalc_cur(
-        after_shift,
-        (date(2026, 8, 28),),
-        "odoo_attendance_changed",
-        requested_at=datetime(2026, 8, 28, 20, 0, tzinfo=UTC),
-        mark_strict=True,
-    )
-
-    assert not any(
-        "INSERT INTO attendance_strict_days" in sql
-        for sql, _params in during_shift.statements
-    )
-    assert any(
-        "INSERT INTO attendance_strict_days" in sql
-        for sql, _params in after_shift.statements
-    )
 
 
 def test_local_days_use_plant_timezone_and_cover_cross_midnight_rows():
@@ -565,10 +463,9 @@ def test_sweep_keeps_recovery_and_deletion_recalc_reasons_separate(monkeypatch):
         (
             frozenset({deleted_day}),
             "odoo_attendance_deleted",
-                {
-                    "requested_at": datetime(2026, 8, 28, 22, 0, tzinfo=UTC),
-                    "mark_strict": True,
-                },
+            {
+                "requested_at": datetime(2026, 8, 28, 22, 0, tzinfo=UTC),
+            },
         ),
     ]
 
@@ -781,7 +678,7 @@ def test_sweep_tombstones_are_auditable_excluded_and_enqueue_old_days(
     assert attendance_mirror.mark_deleted_after_successful_sweep({901}, generation=1) == {
         date(2026, 8, 28)
     }
-    assert db.query("SELECT day, reason FROM attendance_strict_days") == []
+    assert db.query("SELECT * FROM attendance_strict_days") == []
     assert [
         row["odoo_attendance_id"]
         for row in attendance_mirror.rows_overlapping(
@@ -1322,9 +1219,7 @@ def test_sweep_recovery_and_unrelated_deletion_keep_distinct_reasons(
         {"day": date(2026, 8, 28), "reason": "odoo_attendance_deleted"},
     ]
     assert db.query("SELECT day, reason FROM attendance_recalc_queue ORDER BY day") == expected
-    assert db.query(
-        "SELECT day, reason FROM attendance_strict_days ORDER BY day"
-    ) == []
+    assert db.query("SELECT * FROM attendance_strict_days") == []
 
 
 @_needs_postgres

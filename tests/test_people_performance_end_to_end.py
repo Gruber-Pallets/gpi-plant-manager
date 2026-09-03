@@ -128,8 +128,8 @@ def test_each_source_degrades_without_false_zero(client, installed_sources, monk
 def test_attendance_failure_never_calls_schedule(client, installed_sources, monkeypatch):
     called = {"schedule": False}
     monkeypatch.setattr(
-        people_performance_data.attendance_timeline,
-        "snapshot_for_range",
+        people_performance_data,
+        "_load_attendance_source",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline")),
     )
     monkeypatch.setattr(

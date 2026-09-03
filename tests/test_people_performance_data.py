@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 from zira_dashboard import forklift_score
 from zira_dashboard import people_performance_data as data
-from zira_dashboard.attendance_timeline import AttendanceTimelineSnapshot
 from zira_dashboard.forklift_event_store import ForkliftCompletionCoverage
 from zira_dashboard.leaderboard import StationTotal
 from zira_dashboard.people_performance import BreakSpan
@@ -74,11 +73,50 @@ def test_dashboard_window_keeps_shift_end_without_valid_trailing_break(monkeypat
 
 
 def _attendance(spans, *, blockers=()):
-    return AttendanceTimelineSnapshot(
+    return data._AttendanceSource(
         spans=tuple(spans),
-        open_employee_ids=frozenset(item.employee_odoo_id for item in spans if item.is_open),
-        verified_through_utc=NOW,
         freshness_blockers=tuple(blockers),
+    )
+
+
+def test_people_attendance_source_uses_task13_timeline_and_retained_health(monkeypatch):
+    health = data.attendance_mirror.MirrorHealth(
+        last_incremental_completed_at=NOW - timedelta(minutes=2),
+        last_full_sweep_completed_at=NOW - timedelta(hours=3),
+        baseline_completed_at=None,
+        oldest_recalc_requested_at=None,
+        last_error="poll failed",
+    )
+    calls = {}
+    monkeypatch.setattr(data.attendance_mirror, "health_snapshot", lambda: health)
+    monkeypatch.setattr(
+        data.attendance_timeline,
+        "timeline_for_range",
+        lambda start, end, *, as_of_utc, health_snapshot: (
+            calls.update(
+                start=start,
+                end=end,
+                as_of_utc=as_of_utc,
+                health_snapshot=health_snapshot,
+            )
+            or (TRENT_SPAN,)
+        ),
+    )
+
+    source = data._load_attendance_source(START, END, as_of_utc=NOW)
+
+    assert calls == {
+        "start": START,
+        "end": END,
+        "as_of_utc": NOW,
+        "health_snapshot": health,
+    }
+    assert source.spans == (TRENT_SPAN,)
+    assert source.freshness_blockers == (
+        "baseline_incomplete",
+        "mirror_stale",
+        "mirror_sync_failed",
+        "full_sweep_stale",
     )
 
 
@@ -149,9 +187,11 @@ def install_sources(
     monkeypatch.setattr(data, "_bounds", lambda day, now: (START, END, NOW, True))
     monkeypatch.setattr(data, "_breaks", lambda day: ())
     monkeypatch.setattr(
-        data.attendance_timeline,
-        "snapshot_for_range",
-        lambda start, end, as_of_utc=None: _attendance(spans, blockers=attendance_blockers),
+        data,
+        "_load_attendance_source",
+        lambda start, end, as_of_utc: _attendance(
+            spans, blockers=attendance_blockers
+        ),
     )
     monkeypatch.setattr(
         data.production_history,
@@ -213,9 +253,9 @@ def test_load_dashboard_uses_one_cap_and_id_only_forklift_join(monkeypatch):
         resolved={"driver-Trent": 60},
     )
     monkeypatch.setattr(
-        data.attendance_timeline,
-        "snapshot_for_range",
-        lambda start, end, as_of_utc=None: (
+        data,
+        "_load_attendance_source",
+        lambda start, end, as_of_utc: (
             seen.update(start=start, end=end, attendance_cap=as_of_utc)
             or _attendance((TRENT_SPAN,))
         ),
@@ -552,8 +592,8 @@ def test_attendance_failure_returns_empty_page_without_loading_other_sources(mon
     monkeypatch.setattr(data, "_bounds", lambda day, now: (START, END, NOW, True))
     monkeypatch.setattr(data, "_breaks", lambda day: ())
     monkeypatch.setattr(
-        data.attendance_timeline,
-        "snapshot_for_range",
+        data,
+        "_load_attendance_source",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("mirror down")),
     )
     monkeypatch.setattr(

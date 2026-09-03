@@ -1,3186 +1,3546 @@
-"""Readiness and atomic cutover contracts for Odoo attendance locations."""
-
 from __future__ import annotations
 
-from dataclasses import asdict, replace
-from datetime import UTC, date, datetime, time, timedelta
 from contextlib import contextmanager
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta
 import json
-import math
-import os
+from pathlib import Path
 from types import SimpleNamespace
-from threading import Event, Lock, Thread
-from unittest.mock import MagicMock
 
 import pytest
 
 from zira_dashboard import (
-    _schema,
+    app as app_module,
     attendance_exceptions,
     attendance_location_policy,
+    attendance_mirror,
     attendance_readiness,
-    attendance_recalc,
-    attendance_timeline,
+    db,
+    exception_inbox,
+    inbox_reconcile,
     precompute,
     production_history,
+    shift_config,
+    wc_attributions,
 )
+from zira_dashboard.routes import settings
 
 
-NOW = datetime(2026, 9, 1, 15, 0, tzinfo=UTC)
+NOW = datetime(2026, 8, 31, 14, 0, tzinfo=UTC)
+DAY = NOW.astimezone(shift_config.SITE_TZ).date()
 
 
-@pytest.fixture(autouse=True)
-def _canonical_shift_fixture(monkeypatch):
-    monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "snapshot_for",
-        lambda day, **_kwargs: SimpleNamespace(
-            day=day,
-            shift_start=datetime.min.time().replace(hour=7),
-            shift_end=datetime.min.time().replace(hour=15),
-            breaks=(),
-            is_workday=True,
-        ),
+def _ready_inputs(**changes):
+    values = attendance_readiness._ReadinessInputs(
+        rollout_mode="shadow",
+        rollout_valid=True,
+        baseline_completed_at=NOW - timedelta(days=2),
+        last_incremental_completed_at=NOW - timedelta(seconds=20),
+        last_full_sweep_completed_at=NOW - timedelta(minutes=30),
+        last_sweep_deletion_count=0,
+        open_rows_not_refreshed=0,
+        projection_completed_at=NOW - timedelta(seconds=10),
+        recalc_queue_requested_at=None,
+        recalc_queue_depth=0,
+        open_conflicts=0,
+        conflict_seconds_today=0.0,
+        open_unmapped=0,
+        unmapped_seconds_today=0.0,
+        open_missing_required=0,
+        missing_seconds_today=0.0,
+        unassigned_units_today=0.0,
+        oldest_unassigned_at=None,
+        shadow_changed_worker_units=0.0,
+        failed_corrections=0,
+        correction_retries_today=0,
+        correction_verification_failures_today=0,
+        failed_department_repairs=0,
+        shadow_day=DAY,
+        shadow_complete_days=1,
+        shadow_error=None,
     )
+    return replace(values, **changes)
 
 
 @contextmanager
-def _source_fence():
-    yield object()
+def _cursor(marker):
+    yield marker
 
 
-def _set_persisted_due_boundary(db):
-    """Make the current DB clock an exact canonical start-boundary fixture."""
-    original_rows = db.query(
-        "SELECT shift_start, shift_end, work_weekdays, breaks, updated_at "
-        "FROM global_schedule WHERE id = 1"
-    )
-    original = dict(original_rows[0]) if original_rows else None
-    now = db.query("SELECT clock_timestamp() AS now")[0]["now"]
-    local_cutover = (now - timedelta(seconds=1)).astimezone(
-        attendance_readiness.shift_config.SITE_TZ
-    )
-    shift_start = local_cutover.time().replace(tzinfo=None)
-    candidate_end = local_cutover + timedelta(hours=1)
-    shift_end = (
-        candidate_end.time().replace(tzinfo=None)
-        if candidate_end.date() == local_cutover.date()
-        else time.max
-    )
-    db.execute(
-        "INSERT INTO global_schedule "
-        "(id, shift_start, shift_end, work_weekdays, breaks, updated_at) "
-        "VALUES (1, %s, %s, %s, '[]'::jsonb, now()) "
-        "ON CONFLICT (id) DO UPDATE SET shift_start = EXCLUDED.shift_start, "
-        "shift_end = EXCLUDED.shift_end, work_weekdays = EXCLUDED.work_weekdays, "
-        "breaks = EXCLUDED.breaks, updated_at = EXCLUDED.updated_at",
-        (shift_start, shift_end, [local_cutover.weekday()]),
-    )
-    snapshot = attendance_readiness.shift_config.snapshot_for(local_cutover.date())
-    assert snapshot.is_workday
-    cutover = datetime.combine(
-        local_cutover.date(),
-        snapshot.shift_start,
-        tzinfo=attendance_readiness.shift_config.SITE_TZ,
-    )
-    assert cutover.astimezone(UTC) == local_cutover.astimezone(UTC)
-    return now, cutover, original
-
-
-def _restore_persisted_boundary(db, original) -> None:
-    if original is None:
-        db.execute("DELETE FROM global_schedule WHERE id = 1")
-        return
-    db.execute(
-        "UPDATE global_schedule SET shift_start = %s, shift_end = %s, "
-        "work_weekdays = %s, breaks = %s, updated_at = %s WHERE id = 1",
-        (
-            original["shift_start"],
-            original["shift_end"],
-            original["work_weekdays"],
-            original["breaks"],
-            original["updated_at"],
-        ),
-    )
-
-
-def _frozen_day(day: date, source: str = "frozen-day"):
-    return production_history.StrictSourceSnapshot(
-        day=day,
-        shift_start_utc=datetime.combine(day, datetime.min.time(), tzinfo=UTC)
-        + timedelta(hours=12),
-        shift_end_utc=datetime.combine(day, datetime.min.time(), tzinfo=UTC)
-        + timedelta(hours=20),
-        break_windows=(),
-        shift_by_day={},
-        stations=(),
-        work_center_by_odoo_id={},
-        source_fingerprint=source,
-    )
-
-
-def _bound_decision(
-    report,
-    local_source="local-source",
-    production_source="production-source",
-    frozen_source="meter-source",
-    checked_at=NOW,
-    valid_for=timedelta(minutes=5),
-):
-    digest = attendance_readiness.report_digest(report)
-    valid_until = checked_at + valid_for
-    return attendance_readiness.DecisionSnapshot(
-        report=report,
-        report_digest=digest,
-        local_source_fingerprint=local_source,
-        production_fingerprint=production_source,
-        frozen_production_fingerprint=frozen_source,
-        source_binding_digest=attendance_readiness._decision_binding_digest(
-            digest,
-            local_source,
-            production_source,
-            frozen_source,
-            checked_at=checked_at,
-            valid_until=valid_until,
-        ),
-        checked_at=checked_at,
-        valid_until=valid_until,
-    )
-
-
-def _decision(report):
-    return _bound_decision(report)
-
-
-def _inputs(**overrides):
-    values = {
-        "baseline_complete": True,
-        "mirror_error": None,
-        "projection_complete": True,
-        "mirror_age_seconds": 15.0,
-        "last_full_sweep_age_seconds": 600.0,
-        "open_rows_not_refreshed": 0,
-        "last_sweep_deletion_count": 2,
-        "projection_lag_seconds": 0.0,
-        "recalc_queue_age_seconds": None,
-        "recalc_queue_depth": 0,
-        "open_conflicts": 0,
-        "conflict_minutes_today": 0.0,
-        "open_unmapped": 0,
-        "unmapped_minutes_today": 0.0,
-        "open_missing_required": 0,
-        "missing_minutes_today": 0.0,
-        "unassigned_units_today": 0.0,
-        "oldest_unassigned_age_seconds": None,
-        "shadow_changed_worker_units": 0.0,
-        "failed_corrections": 0,
-        "correction_retries_today": 0,
-        "correction_verification_failures_today": 0,
-        "failed_department_repairs": 0,
-        "unmapped_affects_production": False,
-        "missing_affects_production": False,
-        "comparison_identity_available": True,
-        "shadow_day_complete": True,
-    }
-    values.update(overrides)
-    return attendance_readiness._ReadinessInputs(**values)
-
-
-def test_readiness_report_has_the_exact_public_fields():
-    assert tuple(attendance_readiness.ReadinessReport.__dataclass_fields__) == (
-        "ready",
-        "mirror_age_seconds",
-        "last_full_sweep_age_seconds",
-        "open_rows_not_refreshed",
-        "last_sweep_deletion_count",
-        "projection_lag_seconds",
-        "recalc_queue_age_seconds",
-        "recalc_queue_depth",
-        "open_conflicts",
-        "conflict_minutes_today",
-        "open_unmapped",
-        "unmapped_minutes_today",
-        "open_missing_required",
-        "missing_minutes_today",
-        "unassigned_units_today",
-        "oldest_unassigned_age_seconds",
-        "shadow_changed_worker_units",
-        "failed_corrections",
-        "correction_retries_today",
-        "correction_verification_failures_today",
-        "failed_department_repairs",
-        "blockers",
-    )
-
-
-def test_rollout_audit_schema_is_append_only_and_identifier_safe():
-    ddl = _schema.SCHEMA_DDL
-    assert "CREATE TABLE IF NOT EXISTS attendance_rollout_audit" in ddl
-    assert "event_kind TEXT NOT NULL" in ddl
-    assert "blocker_codes JSONB" in ddl
-    assert "employee_name" not in ddl.split(
-        "CREATE TABLE IF NOT EXISTS attendance_rollout_audit", 1
-    )[1].split(";", 1)[0]
-
-
-def test_ready_report_uses_one_collected_snapshot(monkeypatch):
-    calls = []
+def test_build_report_uses_one_frozen_local_database_snapshot(monkeypatch):
+    marker = _ActivationCursor()
+    seen = []
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(marker))
     monkeypatch.setattr(
         attendance_readiness,
-        "_collect_inputs",
-        lambda now_utc, production_client=None, **_kwargs: calls.append(
-            (now_utc, production_client)
-        )
-        or _inputs(),
-    )
-
-    report = attendance_readiness.build_report(NOW, production_client="meter")
-
-    assert report.ready is True
-    assert report.blockers == ()
-    assert report.last_sweep_deletion_count == 2
-    assert calls == [(NOW, "meter")]
-
-
-def test_report_converts_source_failure_to_bounded_fail_closed_metrics(monkeypatch):
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_inputs",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("person name")),
-    )
-
-    report = attendance_readiness.build_report(NOW)
-
-    assert report.ready is False
-    assert "projection_incomplete" in report.blockers
-    assert "person name" not in attendance_readiness.report_json(report)
-
-
-@pytest.mark.parametrize(
-    ("overrides", "blocker"),
-    [
-        ({"baseline_complete": False}, "baseline_incomplete"),
-        ({"mirror_age_seconds": 90.001}, "mirror_stale"),
-        ({"mirror_error": "timeout"}, "mirror_sync_failed"),
-        ({"open_rows_not_refreshed": 1}, "open_rows_not_refreshed"),
-        ({"last_full_sweep_age_seconds": 7200.001}, "full_sweep_stale"),
-        (
-            {"recalc_queue_age_seconds": 900.001, "recalc_queue_depth": 1},
-            "recalculation_stuck",
-        ),
-        ({"open_conflicts": 1}, "unresolved_conflicts"),
-        ({"failed_corrections": 1}, "failed_corrections"),
-        ({"failed_department_repairs": 1}, "failed_department_repairs"),
-        ({"projection_complete": False}, "projection_incomplete"),
-    ],
-)
-def test_hard_readiness_blockers_are_fail_closed(monkeypatch, overrides, blocker):
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_inputs",
-        lambda *_args, **_kwargs: _inputs(**overrides),
-    )
-
-    report = attendance_readiness.build_report(NOW)
-
-    assert report.ready is False
-    assert blocker in report.blockers
-
-
-def test_unmapped_and_missing_only_block_when_they_affect_production(monkeypatch):
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_inputs",
-        lambda *_args, **_kwargs: _inputs(
-            open_unmapped=2,
-            unmapped_minutes_today=18.0,
-            open_missing_required=3,
-            missing_minutes_today=22.0,
-        ),
-    )
-
-    visible_only = attendance_readiness.build_report(NOW)
-
-    assert visible_only.ready is True
-    assert visible_only.open_unmapped == 2
-    assert visible_only.open_missing_required == 3
-
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_inputs",
-        lambda *_args, **_kwargs: _inputs(
-            open_unmapped=2,
-            open_missing_required=3,
-            unassigned_units_today=12.0,
-            unmapped_affects_production=True,
-            missing_affects_production=True,
-        ),
-    )
-
-    affected = attendance_readiness.build_report(NOW)
-
-    assert affected.ready is False
-    assert affected.blockers[-2:] == (
-        "unmapped_location_affects_production",
-        "missing_location_affects_production",
-    )
-
-
-def test_report_digest_is_stable_and_contains_no_personal_fields(monkeypatch):
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_inputs",
-        lambda *_args, **_kwargs: _inputs(open_conflicts=1),
-    )
-    report = attendance_readiness.build_report(NOW)
-
-    first = attendance_readiness.report_digest(report)
-    second = attendance_readiness.report_digest(
-        attendance_readiness.ReadinessReport(**asdict(report))
-    )
-
-    assert first == second
-    assert len(first) == 64
-    assert "employee" not in attendance_readiness.report_json(report).lower()
-
-
-def test_report_digest_ignores_moving_ages_but_rejects_nonfinite_decision_values():
-    first = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 3.0, None, 0, 0, 4.0, 0, 5.0, 0, 6.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    later = attendance_readiness.ReadinessReport(
-        True, 31.0, 32.0, 0, 0, 33.0, None, 0, 0, 34.0, 0, 35.0, 0, 36.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-
-    assert attendance_readiness.report_digest(first) == attendance_readiness.report_digest(later)
-    invalid = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 3.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        math.inf, None, 0.0, 0, 0, 0, 0, (),
-    )
-    with pytest.raises(ValueError, match="nonfinite_readiness_value"):
-        attendance_readiness.report_digest(invalid)
-
-
-def test_decision_snapshot_reads_one_source_digest_from_its_repeatable_snapshot(
-    monkeypatch,
-):
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    fingerprint_calls = []
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_source_fingerprints",
-        lambda **kwargs: fingerprint_calls.append(kwargs)
-        or ("local-a", "production-a"),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_or_failed",
-        lambda *_args, **_kwargs: _inputs(frozen_production_fingerprint="meter-a"),
-    )
-    monkeypatch.setattr(
-        attendance_readiness, "_report_from_inputs", lambda *_args, **_kwargs: ready
-    )
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_metered_leaderboard",
-        lambda *_args, **_kwargs: (),
-    )
-    monkeypatch.setattr(attendance_readiness, "_saved_shadow_day", lambda: None)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_frozen_local_sources",
-        _source_fence,
-        raising=False,
-    )
-
-    decision = attendance_readiness.build_decision_snapshot(NOW)
-
-    assert decision.local_source_fingerprint == "local-a"
-    assert decision.production_fingerprint == "production-a"
-    assert len(fingerprint_calls) == 1
-
-
-def test_decision_snapshot_binds_semantic_report_and_both_source_fingerprints(monkeypatch):
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_source_fingerprints",
-        lambda **_kwargs: ("local-a", "production-a"),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_or_failed",
-        lambda *_args, **_kwargs: _inputs(frozen_production_fingerprint="meter-a"),
-    )
-    monkeypatch.setattr(
-        attendance_readiness, "_report_from_inputs", lambda *_args, **_kwargs: ready
-    )
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_metered_leaderboard",
-        lambda *_args, **_kwargs: (),
-    )
-    monkeypatch.setattr(attendance_readiness, "_saved_shadow_day", lambda: None)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_frozen_local_sources",
-        _source_fence,
-        raising=False,
-    )
-    frozen_day = _frozen_day(NOW.astimezone(attendance_readiness.shift_config.SITE_TZ).date())
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_freeze_readiness_production_sources",
-        lambda *_args, **_kwargs: ("meter", (), None, None, frozen_day, None),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_snapshot_production_day",
-        lambda _day: frozen_day,
-    )
-
-    decision = attendance_readiness.build_decision_snapshot(NOW)
-
-    assert decision.report is ready
-    assert decision.report_digest == attendance_readiness.report_digest(ready)
-    assert decision.local_source_fingerprint == "local-a"
-    assert decision.production_fingerprint == "production-a"
-    assert decision.frozen_production_fingerprint == "meter-a"
-    assert decision.source_binding_digest == attendance_readiness._decision_binding_digest(
-        decision.report_digest,
-        "local-a",
-        "production-a",
-        "meter-a",
-        checked_at=decision.checked_at,
-        valid_until=decision.valid_until,
-    )
-
-
-def test_decision_snapshot_holds_one_local_source_fence_across_collection(monkeypatch):
-    state = {"locked": False, "collected": False}
-    cursor = object()
-
-    @contextmanager
-    def frozen_sources():
-        state["locked"] = True
-        try:
-            yield cursor
-        finally:
-            state["locked"] = False
-
-    def fingerprints(*, cur=None, **_kwargs):
-        assert state["locked"] is True
-        assert cur is cursor
-        return ("local-a", "production-a")
-
-    def collect(*_args, **_kwargs):
-        assert state["locked"] is True
-        state["collected"] = True
-        return _inputs(frozen_production_fingerprint="meter-a")
-
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_frozen_local_sources",
-        frozen_sources,
-        raising=False,
-    )
-    monkeypatch.setattr(attendance_readiness, "_source_fingerprints", fingerprints)
-    monkeypatch.setattr(attendance_readiness, "_collect_or_failed", collect)
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_metered_leaderboard",
-        lambda *_args, **_kwargs: (),
-    )
-    monkeypatch.setattr(attendance_readiness, "_saved_shadow_day", lambda: None)
-    frozen_day = _frozen_day(NOW.astimezone(attendance_readiness.shift_config.SITE_TZ).date())
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_freeze_readiness_production_sources",
-        lambda *_args, **_kwargs: ("meter", (), None, None, frozen_day, None),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_snapshot_production_day",
-        lambda _day: frozen_day,
-    )
-
-    attendance_readiness.build_decision_snapshot(NOW)
-
-    assert state == {"locked": False, "collected": True}
-
-
-def test_local_source_fingerprint_covers_shadow_proof_and_department_fallback():
-    sql = attendance_readiness._SOURCE_FINGERPRINT_SQL
-    strict_sql = production_history._STRICT_LOCAL_SOURCE_SQL
-    assert "odoo_attendance_shadow_health" in sql
-    assert "odoo_attendance_shadow_epoch" in sql
-    assert "department_name" in strict_sql and "FROM people" in strict_sql
-    assert "wage_type" in strict_sql
-    assert "odoo_department_name" in strict_sql
-    assert "odoo_department_name" in attendance_readiness._SHADOW_SOURCE_FINGERPRINT_SQL
-    assert "wage_type" in attendance_readiness._SHADOW_SOURCE_FINGERPRINT_SQL
-
-
-def test_readiness_source_digest_is_day_scoped_and_semantic():
-    sql = attendance_readiness._SOURCE_FINGERPRINT_SQL
-
-    assert "jsonb_agg(to_jsonb(s)" not in sql
-    assert "JOIN odoo_attendance_mirror" in sql
-    assert "COUNT(*) FILTER" in sql
-    assert "last_seen_at < sync.mirror_observed_at" in sql
-    assert "WHERE completed_at IS NULL OR cache_ready_at IS NULL" in sql
-    assert "SELECT DISTINCT ON (item_key)" in sql
-    assert "FROM attendance_correction_job_events" in sql
-    assert "WHERE created_at >= %s AND created_at < %s" in sql
-    assert "FROM attendance_department_repairs WHERE status = 'failed'" in sql
-    assert "WHERE p.day = %s" in sql
-
-
-@pytest.mark.parametrize(
-    ("overrides", "blocker"),
-    [
-        ({"unassigned_units_today": 0.001}, "unassigned_production"),
-        ({"comparison_identity_available": False}, "comparison_identity_unavailable"),
-        ({"shadow_day_complete": False}, "shadow_day_incomplete"),
-    ],
-)
-def test_shadow_and_comparison_preconditions_fail_closed(monkeypatch, overrides, blocker):
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_inputs",
-        lambda *_args, **_kwargs: _inputs(**overrides),
-    )
-
-    report = attendance_readiness.build_report(NOW)
-
-    assert report.ready is False
-    assert blocker in report.blockers
-
-
-def test_cutover_must_be_future_and_exact_local_boundary_including_dst(monkeypatch):
-    monkeypatch.setattr(attendance_readiness.shift_config, "shift_start_for", lambda _day: datetime.min.time().replace(hour=6))
-    monkeypatch.setattr(attendance_readiness.shift_config, "is_workday", lambda _day: True)
-    monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "snapshot_for",
-        lambda day, **_kwargs: SimpleNamespace(
-            day=day,
-            shift_start=datetime.min.time().replace(hour=6),
-            shift_end=datetime.min.time().replace(hour=15),
-            breaks=(),
-            is_workday=True,
-        ),
-    )
-    future_boundary = datetime(2026, 11, 2, 6, 0, tzinfo=attendance_readiness.shift_config.SITE_TZ)
-
-    assert attendance_readiness.validate_cutover(future_boundary, now_utc=NOW) == future_boundary
-    with pytest.raises(ValueError, match="cutover_boundary_required"):
-        attendance_readiness.validate_cutover(
-            future_boundary + timedelta(minutes=1), now_utc=NOW
-        )
-    with pytest.raises(ValueError, match="cutover_future_required"):
-        attendance_readiness.validate_cutover(
-            datetime(2026, 8, 31, 6, 0, tzinfo=attendance_readiness.shift_config.SITE_TZ),
-            now_utc=NOW,
-        )
-
-
-def test_ready_cutover_scheduling_uses_fresh_same_request_report(monkeypatch):
-    cutover = datetime(2026, 9, 2, 6, 0, tzinfo=attendance_readiness.shift_config.SITE_TZ)
-    monkeypatch.setattr(attendance_readiness, "validate_cutover", lambda value, now_utc: value)
-    monkeypatch.setattr(attendance_readiness, "_utc_now", lambda: NOW)
-    report = attendance_readiness.ReadinessReport(
-        **{
-            key: value
-            for key, value in asdict(attendance_readiness.build_report.__annotations__.get("return", None)).items()
-        }
-    ) if False else attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    calls = []
-    previous = attendance_location_policy.RolloutConfig("shadow", None, None)
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "get_rollout_config_strict",
-        lambda: previous,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "build_decision_snapshot",
-        lambda now_utc, *, cutover_at=None, production_client=None: calls.append(
-            (now_utc, cutover_at, production_client)
-        )
-        or _decision(report),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_store_pending_cutover",
-        lambda config, **kwargs: calls.append((config, kwargs)),
-    )
-
-    config = attendance_readiness.schedule_live_cutover(
-        cutover,
-        now_utc=NOW,
-        production_client="meter",
-    )
-
-    assert config.mode == "live"
-    assert config.live_gate == attendance_location_policy.LiveGate(
-        checked_at=NOW,
-        report_digest=attendance_readiness.report_digest(report),
-        activated_at=None,
-    )
-    assert calls[0] == (NOW, cutover, "meter")
-    assert calls[1] == (
-        config,
-        {"checked_at": NOW, "expected_config": previous, "decision": _decision(report)},
-    )
-
-
-def test_active_live_cannot_be_replaced_by_a_new_pending_live_schedule(monkeypatch):
-    cutover = datetime(2026, 9, 2, 6, 0, tzinfo=attendance_readiness.shift_config.SITE_TZ)
-    active = attendance_location_policy.RolloutConfig(
-        "live",
-        datetime(2026, 9, 1, 6, 0, tzinfo=attendance_readiness.shift_config.SITE_TZ),
-        attendance_location_policy.LiveGate(NOW, "active-proof", NOW),
-    )
-    monkeypatch.setattr(attendance_readiness, "validate_cutover", lambda value, now_utc: value)
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "get_rollout_config_strict",
-        lambda: active,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "build_decision_snapshot",
-        lambda *_args, **_kwargs: pytest.fail("active Live cannot build a new schedule"),
-    )
-
-    with pytest.raises(ValueError, match="live_already_active"):
-        attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)
-
-
-def test_live_schedule_rejects_blocked_or_slow_readiness(monkeypatch):
-    cutover = datetime(2026, 9, 2, 6, 0, tzinfo=attendance_readiness.shift_config.SITE_TZ)
-    blocked = attendance_readiness.ReadinessReport(
-        False, 91.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, ("mirror_stale",),
-    )
-    monkeypatch.setattr(attendance_readiness, "validate_cutover", lambda value, now_utc: value)
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "get_rollout_config_strict",
-        lambda: attendance_location_policy.RolloutConfig("shadow", None, None),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "build_decision_snapshot",
-        lambda *_args, **_kwargs: _decision(blocked),
-    )
-
-    with pytest.raises(ValueError, match="live_readiness_blocked:mirror_stale"):
-        attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)
-
-    monkeypatch.setattr(attendance_readiness, "build_decision_snapshot", lambda *_args, **_kwargs: _decision(attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )))
-    monkeypatch.setattr(attendance_readiness, "_utc_now", lambda: NOW + timedelta(minutes=5, microseconds=1))
-    with pytest.raises(ValueError, match="live_readiness_expired"):
-        attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)
-
-
-def test_schedule_rejects_when_mirror_threshold_crosses_before_db_acceptance(
-    monkeypatch,
-):
-    report = attendance_readiness.ReadinessReport(
-        True, 89.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    decision = _bound_decision(report, valid_for=timedelta(seconds=1))
-    config = attendance_location_policy.RolloutConfig(
-        "live",
-        NOW + timedelta(days=1),
-        attendance_location_policy.LiveGate(NOW, decision.report_digest, None),
-    )
-    cursor = _AtomicCursor(_raw_config(config), accepted_at=NOW + timedelta(seconds=2))
-    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _CursorContext(cursor))
-    monkeypatch.setattr(attendance_readiness, "_lock_readiness_sources_cur", lambda _cur: None)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_source_fingerprints",
-        lambda **_kwargs: ("local-source", "production-source"),
-    )
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "set_rollout_config",
-        lambda *_args, **_kwargs: pytest.fail("expired decision was scheduled"),
-    )
-
-    with pytest.raises(ValueError, match="^live_readiness_expired$"):
-        attendance_readiness._store_pending_cutover(
-            config,
-            checked_at=NOW,
-            decision=decision,
-        )
-
-
-def test_activation_rejects_when_threshold_crosses_during_boundary_recheck(monkeypatch):
-    cutover = NOW - timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(NOW - timedelta(minutes=1), "old", None),
-    )
-    report = attendance_readiness.ReadinessReport(
-        True, 89.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    decision = _bound_decision(report, valid_for=timedelta(seconds=1))
-    cursor = _AtomicCursor(
-        _raw_config(pending),
-        accepted_at=NOW + timedelta(seconds=2),
-    )
-    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _CursorContext(cursor))
-    monkeypatch.setattr(attendance_readiness, "_lock_readiness_sources_cur", lambda _cur: None)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_source_fingerprints",
-        lambda **_kwargs: ("local-source", "production-source"),
-    )
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "set_rollout_config",
-        lambda *_args, **_kwargs: pytest.fail("expired decision activated"),
-    )
-
-    assert attendance_readiness._settle_due_cutover(
-        expected_config=pending,
-        report=report,
-        decision=decision,
-        now_utc=NOW,
-    ) == "superseded"
-
-
-@pytest.mark.parametrize("lateness", [timedelta(hours=3), timedelta(days=1)])
-def test_missed_activation_boundary_returns_to_shadow_without_strict_write(
-    monkeypatch,
-    lateness,
-):
-    cutover = NOW - lateness
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(cutover - timedelta(minutes=1), "old", None),
-    )
-    report = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    cursor = _AtomicCursor(_raw_config(pending))
-    saved = []
-    alerts = []
-    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _CursorContext(cursor))
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "set_rollout_config",
-        lambda config, *, cur: saved.append(config),
-    )
-    monkeypatch.setattr(
-        attendance_readiness.app_settings,
-        "set_setting",
-        lambda key, value, *, cur: alerts.append((key, value)),
-    )
-
-    assert attendance_readiness._settle_due_cutover(
-        expected_config=pending,
-        report=report,
-        now_utc=NOW,
-    ) == "rolled_back"
-    assert saved == [attendance_location_policy.RolloutConfig("shadow", None, None)]
-    assert "cutover_boundary_missed" in alerts[0][1]["blockers"]
-    assert not any(
-        "INSERT INTO attendance_strict_days" in sql for sql, _params in cursor.statements
-    )
-
-
-def test_activation_success_and_failure_delegate_one_atomic_decision(monkeypatch):
-    cutover = NOW - timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(NOW - timedelta(minutes=1), "abc", None),
-    )
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    calls = []
-    @contextmanager
-    def claimed():
-        yield True
-
-    monkeypatch.setattr(attendance_readiness, "_activation_claim", claimed)
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "get_rollout_config_strict",
-        lambda: pending,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "build_decision_snapshot",
-        lambda *_args, **_kwargs: _decision(ready),
-    )
-    monkeypatch.setattr(attendance_readiness, "_settle_due_cutover", lambda **kwargs: calls.append(kwargs) or "activated")
-
-    assert attendance_readiness.activate_due_cutover(NOW, production_client="meter") == "activated"
-    assert calls == [{
-        "expected_config": pending,
-        "report": ready,
-        "decision": _decision(ready),
-        "now_utc": NOW,
-    }]
-
-    blocked = SimpleNamespace(ready=False, blockers=("mirror_stale",))
-    monkeypatch.setattr(
-        attendance_readiness,
-        "build_decision_snapshot",
-        lambda *_args, **_kwargs: attendance_readiness.DecisionSnapshot(
-            blocked, "blocked", "local-source", "production-source"
-        ),
-    )
-    assert attendance_readiness.activate_due_cutover(NOW) == "activated"
-    assert calls[-1]["report"] is blocked
-
-
-def test_not_due_or_already_activated_cutover_does_nothing(monkeypatch):
-    @contextmanager
-    def claimed():
-        yield True
-
-    monkeypatch.setattr(attendance_readiness, "_activation_claim", claimed)
-    for config in (
-        attendance_location_policy.RolloutConfig("shadow", None, None),
-        attendance_location_policy.RolloutConfig(
-            "live",
-            NOW + timedelta(hours=1),
-            attendance_location_policy.LiveGate(NOW, "abc", None),
-        ),
-        attendance_location_policy.RolloutConfig(
-            "live",
-            NOW - timedelta(hours=1),
-            attendance_location_policy.LiveGate(NOW, "abc", NOW),
-        ),
-    ):
-        monkeypatch.setattr(
-            attendance_readiness.attendance_location_policy,
-            "get_rollout_config_strict",
-            lambda config=config: config,
-        )
-        monkeypatch.setattr(
-            attendance_readiness,
-            "build_decision_snapshot",
-            lambda *_args, **_kwargs: pytest.fail("not-due cutover must not recheck"),
-        )
-        assert attendance_readiness.activate_due_cutover(NOW) == "not_due"
-
-
-def _issue(
-    kind,
-    *,
-    start=NOW - timedelta(minutes=10),
-    end=NOW,
-    units=None,
-    wc=None,
-):
-    return SimpleNamespace(
-        kind=kind,
-        start_utc=start,
-        end_utc=end,
-        units=units,
-        app_work_center_name=wc,
-    )
-
-
-def test_issue_aggregation_counts_minutes_units_age_and_output_sensitive_overlap():
-    snapshot = SimpleNamespace(
-        complete=True,
-        issues=(
-            _issue("attendance_conflicting_location"),
-            _issue("attendance_unmapped_location", start=NOW - timedelta(minutes=8)),
-            _issue("attendance_missing_location", start=NOW - timedelta(minutes=6)),
-            _issue(
-                "production_unassigned_run",
-                start=NOW - timedelta(minutes=7),
-                end=NOW - timedelta(minutes=2),
-                units=12.5,
-                wc="Repair 1",
-            ),
-        ),
-        source_errors=(),
-    )
-
-    metrics = attendance_readiness._issue_metrics(snapshot, now_utc=NOW)
-
-    assert metrics == attendance_readiness._IssueMetrics(
-        projection_complete=True,
-        open_conflicts=1,
-        conflict_minutes_today=10.0,
-        open_unmapped=1,
-        unmapped_minutes_today=8.0,
-        open_missing_required=1,
-        missing_minutes_today=6.0,
-        unassigned_units_today=12.5,
-        oldest_unassigned_age_seconds=420.0,
-        unmapped_affects_production=True,
-        missing_affects_production=True,
-    )
-
-
-def test_incomplete_issue_snapshot_never_claims_projection_complete():
-    metrics = attendance_readiness._issue_metrics(
-        SimpleNamespace(complete=False, issues=(), source_errors=("Production",)),
-        now_utc=NOW,
-    )
-    assert metrics.projection_complete is False
-
-
-def test_shadow_comparison_uses_canonical_ids_and_keeps_same_names_separate(monkeypatch):
-    strict = {
-        (101, "Alex"): {"Repair 1": {"units": 4.0}},
-        (102, "Alex"): {"Repair 1": {"units": 6.0}},
-    }
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_attribution_for",
-        lambda day, client, now_utc: strict,
-    )
-    query = MagicMock(
-        return_value=[
-            {"emp_id": "101", "wc_name": "Repair 1", "units": 10.0},
-            {"emp_id": "102", "wc_name": "Repair 1", "units": 0.0},
-        ]
-    )
-    monkeypatch.setattr(attendance_readiness.db, "query", query)
-
-    result = attendance_readiness.compute_shadow_comparison(
-        date(2026, 9, 1),
-        "meter",
-        now_utc=NOW,
-    )
-
-    assert result.complete is True
-    assert result.changed_worker_units == 6.0
-    assert result.comparison_keys == 2
-    assert result.strict_worker_units == 10.0
-    assert result.current_worker_units == 10.0
-    assert "Alex" not in attendance_readiness.shadow_comparison_json(result)
-    assert query.call_count == 1
-
-
-def test_shadow_comparison_fails_closed_on_noncanonical_current_identity(monkeypatch):
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_attribution_for",
-        lambda *_args, **_kwargs: {(101, "Alex"): {"Repair 1": {"units": 4.0}}},
+        "_read_inputs_cur",
+        lambda cur, now: seen.append((cur, now)) or _ready_inputs(),
     )
     monkeypatch.setattr(
         attendance_readiness.db,
         "query",
-        lambda *_args, **_kwargs: [
-            {"emp_id": "Alex", "wc_name": "Repair 1", "units": 4.0}
-        ],
+        lambda *_a, **_k: pytest.fail("build_report escaped its coherent cursor"),
     )
 
-    result = attendance_readiness.compute_shadow_comparison(
-        date(2026, 9, 1), "meter", now_utc=NOW
-    )
+    report = attendance_readiness.build_report(NOW)
 
-    assert result.complete is False
-    assert result.error == "noncanonical_current_employee_id"
-
-
-def test_shadow_refresh_persists_aggregate_only_and_never_production(monkeypatch):
-    comparison = attendance_readiness.ShadowComparison(
-        day=date(2026, 9, 1),
-        checked_at=NOW,
-        complete=True,
-        changed_worker_units=6.0,
-        comparison_keys=2,
-        strict_worker_units=10.0,
-        current_worker_units=10.0,
-        error=None,
-    )
-    config = SimpleNamespace(mode="shadow")
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "get_rollout_config",
-        lambda: config,
-    )
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "get_rollout_config_cur",
-        lambda _cur: config,
-    )
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "lock_rollout_decision_cur",
-        lambda _cur: None,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "compute_shadow_comparison",
-        lambda *_args, **_kwargs: comparison,
-    )
-    monkeypatch.setattr(attendance_readiness.db, "read_snapshot", _source_fence)
-    monkeypatch.setattr(attendance_readiness.db, "cursor", _source_fence)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_snapshot_production_day",
-        lambda day: _frozen_day(day),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_lock_production_config_sources_cur",
-        lambda _cur: None,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_shadow_epoch_entered_at_cur",
-        lambda _cur: NOW - timedelta(days=2),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_snapshot_work_center_mapper",
-        lambda: lambda _odoo_id: None,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_freeze_leaderboard_rows",
-        lambda *_args, **_kwargs: ("meter", ()),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_shadow_source_fingerprint",
-        lambda *_args, **_kwargs: "shadow-source-a",
-    )
-    mirror_at = NOW - timedelta(seconds=15)
-    monkeypatch.setattr(
-        attendance_readiness.attendance_mirror,
-        "health_snapshot",
-        lambda: SimpleNamespace(
-            last_incremental_completed_at=NOW,
-            last_incremental_observed_at=mirror_at,
-            baseline_completed_at=None,
-        ),
-    )
-    monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "shift_start_for",
-        lambda _day: datetime.min.time().replace(hour=7),
-    )
-    monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "shift_end_for",
-        lambda _day: datetime.min.time().replace(hour=15),
-    )
-    writes = []
-    monkeypatch.setattr(
-        attendance_readiness.app_settings,
-        "set_setting",
-        lambda key, value, **_kwargs: writes.append((key, value)),
-    )
-    monkeypatch.setattr(
-        precompute,
-        "upsert_production_daily",
-        lambda *_args, **_kwargs: pytest.fail("shadow comparison cannot write production"),
-    )
-
-    result = attendance_readiness.refresh_shadow_comparison(
-        date(2026, 9, 1),
-        "meter",
-        now_utc=NOW,
-        shadow_entered_at=NOW - timedelta(days=2),
-    )
-    assert result.source_mirror_at == mirror_at
-    assert writes == [
-        (
-            "odoo_attendance_shadow_health",
-            {
-                "schema_version": 1,
-                "day": "2026-09-01",
-                "checked_at": NOW.isoformat(),
-                "shadow_entered_at": (NOW - timedelta(days=2)).isoformat(),
-                "shift_start_utc": datetime(
-                    2026, 9, 1, 12, tzinfo=UTC
-                ).isoformat(),
-                "shift_end_utc": datetime(
-                    2026, 9, 1, 20, tzinfo=UTC
-                ).isoformat(),
-                "source_binding": attendance_readiness._combined_shadow_source_binding(
-                    "shadow-source-a",
-                    attendance_readiness._leaderboard_rows_fingerprint(
-                        date(2026, 9, 1), ()
-                    ),
-                ),
-                "production_source_fingerprint": attendance_readiness._leaderboard_rows_fingerprint(
-                    date(2026, 9, 1), ()
-                ),
-                "complete": True,
-                "projection_complete": True,
-                "source_mirror_at": mirror_at.isoformat(),
-                "changed_worker_units": 6.0,
-                "comparison_keys": 2,
-                "strict_worker_units": 10.0,
-                "current_worker_units": 10.0,
-                "error": None,
-            },
-        )
+    assert report.ready is True
+    assert report.blockers == ()
+    assert seen == [(marker, NOW)]
+    assert report.mirror_age_seconds == 20.0
+    assert report.last_full_sweep_age_seconds == 1800.0
+    assert report.projection_lag_seconds == 10.0
+    assert marker.operations == [
+        ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY", None)
     ]
 
 
-def test_shadow_refresh_never_labels_old_comparison_with_later_mirror_observation(
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("changes", "blocker"),
+    [
+        ({"rollout_valid": False}, "rollout_state_unavailable"),
+        ({"baseline_completed_at": None}, "attendance_baseline_incomplete"),
+        (
+            {"last_incremental_completed_at": NOW - timedelta(seconds=91)},
+            "attendance_mirror_stale",
+        ),
+        (
+            {"last_full_sweep_completed_at": NOW - timedelta(hours=2, seconds=1)},
+            "attendance_full_sweep_stale",
+        ),
+        ({"open_rows_not_refreshed": 1}, "attendance_open_rows_not_refreshed"),
+        (
+            {"projection_completed_at": NOW - timedelta(seconds=91)},
+            "attendance_projection_stale",
+        ),
+        (
+            {
+                "recalc_queue_depth": 1,
+                "recalc_queue_requested_at": NOW - timedelta(minutes=16),
+            },
+            "attendance_recalculation_stuck",
+        ),
+        ({"failed_corrections": 1}, "attendance_correction_failed"),
+        ({"failed_department_repairs": 1}, "attendance_department_repair_failed"),
+        ({"open_conflicts": 1}, "attendance_conflicts_open"),
+        ({"open_unmapped": 1}, "attendance_unmapped_location"),
+        ({"open_missing_required": 1}, "attendance_required_location_missing"),
+        ({"unassigned_units_today": 1.0}, "unassigned_production"),
+        ({"shadow_complete_days": 0}, "shadow_comparison_day_incomplete"),
+        ({"shadow_error": "source failed"}, "shadow_comparison_unavailable"),
+    ],
+)
+def test_hard_readiness_conditions_fail_closed(monkeypatch, changes, blocker):
+    monkeypatch.setattr(attendance_readiness, "_read_inputs", lambda _now: _ready_inputs(**changes))
+
+    report = attendance_readiness.build_report(NOW)
+
+    assert report.ready is False
+    assert blocker in report.blockers
+
+
+def test_shadow_completion_must_follow_the_exact_observation_epoch_even_same_day():
+    entered_shadow = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+    clean_day = date(2026, 8, 31)
+
+    assert (
+        attendance_readiness._complete_shadow_day_count(
+            [clean_day.isoformat()],
+            rollout_mode="shadow",
+            rollout_updated_at=entered_shadow,
+            completed_at_by_day={clean_day: entered_shadow - timedelta(microseconds=1)},
+        )
+        == 0
+    )
+    assert (
+        attendance_readiness._complete_shadow_day_count(
+            [clean_day.isoformat()],
+            rollout_mode="shadow",
+            rollout_updated_at=entered_shadow,
+            completed_at_by_day={clean_day: entered_shadow},
+        )
+        == 1
+    )
+    assert (
+        attendance_readiness._complete_shadow_day_count(
+            ["2026-08-30"],
+            rollout_mode="live",
+            rollout_updated_at=entered_shadow + timedelta(days=1),
+            completed_at_by_day={},
+        )
+        == 1
+    )
+
+
+def test_readiness_metrics_use_minutes_and_deterministic_blocker_order(monkeypatch):
+    inputs = _ready_inputs(
+        open_conflicts=2,
+        conflict_seconds_today=150.0,
+        open_unmapped=1,
+        unmapped_seconds_today=90.0,
+        open_missing_required=3,
+        missing_seconds_today=210.0,
+        unassigned_units_today=12.5,
+        oldest_unassigned_at=NOW - timedelta(minutes=9),
+        failed_corrections=1,
+    )
+    monkeypatch.setattr(attendance_readiness, "_read_inputs", lambda _now: inputs)
+
+    first = attendance_readiness.build_report(NOW)
+    second = attendance_readiness.build_report(NOW)
+
+    assert first.blockers == second.blockers == tuple(sorted(first.blockers))
+    assert first.conflict_minutes_today == 2.5
+    assert first.unmapped_minutes_today == 1.5
+    assert first.missing_minutes_today == 3.5
+    assert first.oldest_unassigned_age_seconds == 540.0
+
+
+@pytest.mark.parametrize(
+    ("wage_type", "expected_open_missing"),
+    [("monthly", 0), ("hourly", 1), (None, 1), ("unexpected", 1)],
+)
+def test_timeline_metrics_exempt_only_monthly_employee_without_work_center(
+    wage_type,
+    expected_open_missing,
 ):
-    old_observed = datetime(2026, 9, 1, 19, 59, 59, tzinfo=UTC)
-    new_observed = datetime(2026, 9, 1, 20, 0, 1, tzinfo=UTC)
-    observed = {"at": old_observed}
-    comparison = attendance_readiness.ShadowComparison(
-        day=date(2026, 9, 1),
-        checked_at=NOW,
-        complete=True,
-        changed_worker_units=0.0,
-        comparison_keys=1,
-        strict_worker_units=1.0,
-        current_worker_units=1.0,
-        error=None,
-    )
-    config = SimpleNamespace(mode="shadow")
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "get_rollout_config",
-        lambda: config,
-    )
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "get_rollout_config_cur",
-        lambda _cur: config,
-    )
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "lock_rollout_decision_cur",
-        lambda _cur: None,
+    class MetricsCursor:
+        def __init__(self):
+            self.rows = []
+
+        def execute(self, sql, _params=None):
+            if "FROM odoo_attendance_mirror" in sql:
+                self.rows = [
+                    {
+                        "odoo_attendance_id": 501,
+                        "employee_odoo_id": 41,
+                        "employee_name": "Manager",
+                        "check_in_utc": NOW - timedelta(minutes=10),
+                        "check_out_utc": None,
+                        "odoo_work_center_id": None,
+                        "odoo_work_center_name": None,
+                        "odoo_department_id": 7,
+                        "odoo_department_name": "Production",
+                        "odoo_write_date": NOW - timedelta(minutes=1),
+                    }
+                ]
+            elif "FROM people" in sql:
+                self.rows = [
+                    {
+                        "odoo_id": 41,
+                        "department_name": "Production",
+                        "wage_type": wage_type,
+                    }
+                ]
+            elif "FROM work_centers" in sql:
+                self.rows = []
+            elif "FROM departments" in sql:
+                self.rows = [{"name": "Production", "requires_work_center": True}]
+            else:
+                raise AssertionError(sql)
+
+        def fetchall(self):
+            return self.rows
+
+    metrics = attendance_readiness._timeline_metrics_cur(
+        MetricsCursor(),
+        now_utc=NOW,
+        verified_through=NOW,
     )
 
-    def compare(*_args, **_kwargs):
-        observed["at"] = new_observed
-        return comparison
+    assert metrics[4] == expected_open_missing
 
-    monkeypatch.setattr(attendance_readiness, "compute_shadow_comparison", compare)
-    monkeypatch.setattr(attendance_readiness.db, "read_snapshot", _source_fence)
-    monkeypatch.setattr(attendance_readiness.db, "cursor", _source_fence)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_snapshot_production_day",
-        lambda day: _frozen_day(day),
+
+def test_report_digest_binds_exact_report_and_cutover(monkeypatch):
+    monkeypatch.setattr(attendance_readiness, "_read_inputs", lambda _now: _ready_inputs())
+    report = attendance_readiness.build_report(NOW)
+    cutover = NOW + timedelta(days=1)
+
+    digest = attendance_readiness.report_digest(report, cutover)
+
+    assert len(digest) == 64
+    assert digest == attendance_readiness.report_digest(report, cutover)
+    assert digest != attendance_readiness.report_digest(report, cutover + timedelta(days=1))
+
+
+class _ShadowConfigCursor:
+    def __init__(self, *, meter_id="meter-a", reverse=False):
+        work_centers = [
+            {
+                "name": "WC A",
+                "meter_id": meter_id,
+                "odoo_work_center_id": 11,
+                "odoo_work_center_name": "Luke A",
+                "category": "Production",
+                "cell": "A",
+            },
+            {
+                "name": "WC B",
+                "meter_id": "meter-b",
+                "odoo_work_center_id": 22,
+                "odoo_work_center_name": "Luke B",
+                "category": "Production",
+                "cell": "B",
+            },
+        ]
+        departments = [
+            {
+                "name": "Production",
+                "requires_work_center": True,
+                "requires_work_center_explicit": True,
+            },
+            {
+                "name": "Maintenance",
+                "requires_work_center": False,
+                "requires_work_center_explicit": True,
+            },
+        ]
+        if reverse:
+            work_centers.reverse()
+            departments.reverse()
+        self.sources = {
+            "work_centers": work_centers,
+            "departments": departments,
+            "people": [
+                {"odoo_id": 101, "department_name": "Maintenance"},
+                {"odoo_id": 202, "department_name": "Production"},
+            ],
+            "global_schedule": [
+                {
+                    "shift_start": time(7),
+                    "shift_end": time(15),
+                    "work_weekdays": [0, 1, 2, 3, 4],
+                    "breaks": [{"start": "09:00", "end": "09:10"}],
+                }
+            ],
+            "saturday_schedule": [
+                {
+                    "shift_start": time(6),
+                    "shift_end": time(12),
+                    "breaks": [],
+                }
+            ],
+            "schedules": [
+                {
+                    "day": DAY,
+                    "published": True,
+                    "custom_hours": {"start": "07:00", "end": "15:00"},
+                    "published_snapshot": {"version": 2},
+                }
+            ],
+            "company_holidays": [],
+            "saturday_recruitments": [],
+            "wc_time_attributions": [],
+        }
+        self.rows = []
+        self.statements = []
+
+    def execute(self, sql, _params=None):
+        normalized = " ".join(sql.split())
+        self.statements.append(normalized)
+        source = next(
+            (name for name in self.sources if f"FROM {name}" in normalized),
+            None,
+        )
+        self.rows = list(self.sources.get(source, []))
+
+    def fetchall(self):
+        return self.rows
+
+
+def _install_shadow_refresh_origin(
+    monkeypatch,
+    *,
+    rollout=None,
+    epoch=NOW - timedelta(days=2),
+    mirror_incremental=NOW - timedelta(seconds=1),
+    mirror_sweep=NOW - timedelta(minutes=1),
+    mirror_generation=7,
+    current_mirror_origin=None,
+    current_rollout=None,
+):
+    config = attendance_readiness._shadow_config_snapshot_cur(_ShadowConfigCursor(), DAY)
+    rollout = rollout or attendance_location_policy.RolloutConfig("shadow", None, None)
+    health = attendance_mirror.MirrorHealth(
+        last_incremental_completed_at=mirror_incremental,
+        last_full_sweep_completed_at=mirror_sweep,
+        baseline_completed_at=mirror_sweep,
+        oldest_recalc_requested_at=None,
+        last_error=None,
+        full_sweep_generation=mirror_generation,
     )
+    mirror = attendance_mirror.AttendanceMirrorSnapshot(health=health, rows=())
     monkeypatch.setattr(
         attendance_readiness,
-        "_lock_production_config_sources_cur",
-        lambda _cur: None,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_shadow_epoch_entered_at_cur",
-        lambda _cur: NOW - timedelta(days=1),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_snapshot_work_center_mapper",
-        lambda: lambda _odoo_id: None,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_freeze_leaderboard_rows",
-        lambda *_args, **_kwargs: ("meter", ()),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_shadow_source_fingerprint",
-        lambda *_args, **_kwargs: "shadow-source-a",
+        "_shadow_refresh_origin",
+        lambda _day: attendance_readiness._ShadowRefreshOrigin(rollout, epoch, config),
     )
     monkeypatch.setattr(
         attendance_readiness.attendance_mirror,
-        "health_snapshot",
-        lambda: SimpleNamespace(
-            last_incremental_completed_at=observed["at"],
-            last_incremental_observed_at=observed["at"],
-            baseline_completed_at=None,
+        "snapshot_overlapping",
+        lambda *_a, **_k: mirror,
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_read_rollout_config_cur",
+        lambda _cur, **_k: current_rollout or rollout,
+    )
+    monkeypatch.setattr(attendance_readiness, "_shadow_epoch_cur", lambda _cur: epoch)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_config_snapshot_cur",
+        lambda _cur, _day: config,
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_mirror_origin_cur",
+        lambda _cur: (
+            current_mirror_origin
+            if current_mirror_origin is not None
+            else (mirror_incremental, mirror_sweep, mirror_generation)
+        ),
+    )
+    return config, mirror
+
+
+def test_shadow_config_digest_is_canonical_curated_and_privacy_safe():
+    forward = _ShadowConfigCursor()
+    reversed_rows = _ShadowConfigCursor(reverse=True)
+
+    first = attendance_readiness._shadow_config_digest_cur(forward, DAY)
+    second = attendance_readiness._shadow_config_digest_cur(reversed_rows, DAY)
+    remapped = attendance_readiness._shadow_config_digest_cur(
+        _ShadowConfigCursor(meter_id="meter-new"), DAY
+    )
+
+    assert first == second
+    assert len(first) == 64
+    assert remapped != first
+    sql = " ".join(forward.statements).lower()
+    assert "odoo_attendance" not in sql
+    assert "schedule_assignments" not in sql
+    assert "production_daily" not in sql
+    people_sql = next(statement for statement in forward.statements if "FROM people" in statement)
+    assert "odoo_id" in people_sql
+    assert "department_name" in people_sql
+    assert "full_name" not in people_sql
+    assert "birthday" not in people_sql
+    assert "published_snapshot" not in sql
+
+
+def test_shadow_config_digest_changes_when_employee_wage_type_changes():
+    before = _ShadowConfigCursor()
+    after = _ShadowConfigCursor()
+    after.sources["people"][1]["wage_type"] = "monthly"
+
+    assert (
+        attendance_readiness._shadow_config_digest_cur(before, DAY)
+        != attendance_readiness._shadow_config_digest_cur(after, DAY)
+    )
+
+
+def test_shadow_day_origin_binds_exact_testing_and_breakdown_rows():
+    testing = {
+        "id": 41,
+        "wc_name": "WC A",
+        "person_name": "Testing",
+        "employee_odoo_id": None,
+        "start_utc": NOW - timedelta(minutes=20),
+        "end_utc": NOW - timedelta(minutes=10),
+        "source": "testing",
+        "breakdown_id": None,
+    }
+    first_cursor = _ShadowConfigCursor()
+    first_cursor.sources["wc_time_attributions"] = [testing]
+    changed_cursor = _ShadowConfigCursor()
+    changed_cursor.sources["wc_time_attributions"] = [
+        {**testing, "end_utc": NOW - timedelta(minutes=5)}
+    ]
+
+    first = attendance_readiness._shadow_config_snapshot_cur(first_cursor, DAY)
+    changed = attendance_readiness._shadow_config_snapshot_cur(changed_cursor, DAY)
+
+    assert first.digest == changed.digest
+    assert first.day_digest != changed.day_digest
+    assert first.attribution_rows == (testing,)
+    assert "person_name" not in first.day_digest
+
+
+def test_shadow_global_epoch_survives_midnight_while_day_schedule_origin_is_targeted():
+    current = attendance_readiness._shadow_config_snapshot_cur(_ShadowConfigCursor(), DAY)
+    next_day = attendance_readiness._shadow_config_snapshot_cur(
+        _ShadowConfigCursor(), DAY + timedelta(days=1)
+    )
+    edited_cursor = _ShadowConfigCursor()
+    edited_cursor.sources["schedules"][0]["custom_hours"] = {
+        "start": "06:00",
+        "end": "14:00",
+    }
+    edited_cursor.sources["schedules"][0]["published_snapshot"] = {
+        "assignments": [{"person_name": "Private Person"}]
+    }
+    edited = attendance_readiness._shadow_config_snapshot_cur(edited_cursor, DAY)
+
+    assert next_day.digest == current.digest
+    assert next_day.day_digest != current.day_digest
+    assert edited.digest == current.digest
+    assert edited.day_digest != current.day_digest
+
+
+def test_shadow_projection_uses_the_same_fresh_mapping_and_department_snapshot_as_digest(
+    monkeypatch,
+):
+    cursor = _ShadowConfigCursor()
+    snapshot = attendance_readiness._shadow_config_snapshot_cur(cursor, DAY)
+    start = NOW - timedelta(minutes=10)
+    rows = (
+        {
+            "odoo_attendance_id": 1,
+            "employee_odoo_id": 101,
+            "employee_name": "Worker 101",
+            "check_in_utc": start,
+            "check_out_utc": None,
+            "odoo_work_center_id": None,
+            "odoo_work_center_name": None,
+            "odoo_department_id": None,
+            "odoo_department_name": None,
+            "odoo_write_date": NOW,
+        },
+        {
+            "odoo_attendance_id": 2,
+            "employee_odoo_id": 202,
+            "employee_name": "Worker 202",
+            "check_in_utc": start,
+            "check_out_utc": None,
+            "odoo_work_center_id": 11,
+            "odoo_work_center_name": "Luke A",
+            "odoo_department_id": None,
+            "odoo_department_name": "Production",
+            "odoo_write_date": NOW,
+        },
+    )
+    mirror = attendance_mirror.AttendanceMirrorSnapshot(
+        health=attendance_mirror.MirrorHealth(
+            last_incremental_completed_at=NOW,
+            last_full_sweep_completed_at=NOW,
+            baseline_completed_at=NOW,
+            oldest_recalc_requested_at=None,
+            last_error=None,
+        ),
+        rows=rows,
+    )
+    monkeypatch.setattr(
+        attendance_readiness.attendance_timeline.work_centers_store,
+        "app_work_center_name_for_odoo_id",
+        lambda _wc_id: "STALE CACHE",
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "department_requires_work_center",
+        lambda _department: True,
+    )
+
+    spans = attendance_readiness._project_shadow_snapshot(snapshot, mirror, NOW)
+
+    worker_101 = [span for span in spans if span.employee_odoo_id == 101]
+    worker_202 = [span for span in spans if span.employee_odoo_id == 202]
+    assert worker_101[-1].status == "exempt_no_location"
+    assert worker_202[-1].status == "valid"
+    assert worker_202[-1].app_work_center_name == "WC A"
+    assert snapshot.digest == attendance_readiness._shadow_config_digest_cur(
+        _ShadowConfigCursor(), DAY
+    )
+
+
+def test_readiness_config_lock_includes_employee_department_fallback_source():
+    assert attendance_readiness._READINESS_CONFIG_TABLES[-4:] == (
+        "work_centers",
+        "departments",
+        "people",
+        "wc_time_attributions",
+    )
+
+
+def test_schedule_live_requires_future_configured_workday_boundary(monkeypatch):
+    state = {"mode": "normal"}
+
+    class BoundaryCursor(_ActivationCursor):
+        def __init__(self):
+            super().__init__()
+            self.row = None
+
+        def execute(self, sql, params=None):
+            super().execute(sql, params)
+            normalized = " ".join(sql.split())
+            if "FROM global_schedule" in normalized:
+                if state["mode"] == "unavailable":
+                    raise RuntimeError("schedule unavailable")
+                weekdays = [0] if state["mode"] == "closed" else [0, 1, 2, 3, 4]
+                self.row = {"shift_start": time(7, 0), "work_weekdays": weekdays}
+            elif "FROM saturday_schedule" in normalized:
+                self.row = {"shift_start": time(6, 0)}
+            elif any(
+                table in normalized
+                for table in (
+                    "FROM schedules",
+                    "FROM company_holidays",
+                    "FROM saturday_recruitments",
+                )
+            ):
+                self.row = None
+
+        def fetchone(self):
+            return self.row
+
+    monkeypatch.setattr(
+        attendance_readiness.db,
+        "cursor",
+        lambda: _cursor(BoundaryCursor()),
+    )
+    local_day = NOW.astimezone(shift_config.SITE_TZ).date() + timedelta(days=1)
+    valid = datetime.combine(local_day, time(7, 0), tzinfo=shift_config.SITE_TZ).astimezone(UTC)
+
+    with pytest.raises(ValueError, match="cutover_future_boundary_required"):
+        attendance_readiness.schedule_live_cutover(NOW - timedelta(seconds=1), now_utc=NOW)
+    with pytest.raises(ValueError, match="cutover_boundary_required"):
+        attendance_readiness.schedule_live_cutover(valid + timedelta(minutes=1), now_utc=NOW)
+    with pytest.raises(ValueError, match="cutover_timezone_required"):
+        attendance_readiness.schedule_live_cutover(valid.replace(tzinfo=None), now_utc=NOW)
+    state["mode"] = "closed"
+    with pytest.raises(ValueError, match="cutover_workday_required"):
+        attendance_readiness.schedule_live_cutover(valid, now_utc=NOW)
+    state["mode"] = "unavailable"
+    with pytest.raises(ValueError, match="cutover_workday_unavailable"):
+        attendance_readiness.schedule_live_cutover(valid, now_utc=NOW)
+
+
+def test_schedule_live_locks_setting_builds_fresh_report_and_saves_one_gate(monkeypatch):
+    marker = _ActivationCursor()
+    saved = []
+    status_saved = []
+    calls = []
+    cutover = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    report = attendance_readiness._report_from_inputs(_ready_inputs(), NOW)
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(7, 0))
+    monkeypatch.setattr(shift_config, "is_workday", lambda _day: True)
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(marker))
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_lock_rollout_config_cur",
+        lambda cur: (
+            calls.append(("lock", cur))
+            or attendance_location_policy.RolloutConfig("shadow", None, None)
         ),
     )
     monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "shift_start_for",
-        lambda _day: datetime.min.time().replace(hour=7),
+        attendance_readiness,
+        "_build_report_cur",
+        lambda cur, now: calls.append(("report", cur, now)) or report,
     )
     monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "shift_end_for",
-        lambda _day: datetime.min.time().replace(hour=15),
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda config, *, cur=None: saved.append((config, cur)),
     )
-    writes = []
     monkeypatch.setattr(
         attendance_readiness.app_settings,
         "set_setting",
-        lambda _key, value, **_kwargs: writes.append(value),
+        lambda key, value, *, cur=None: status_saved.append((key, value, cur)),
+    )
+    monkeypatch.setattr(attendance_readiness, "_utc_now", lambda: NOW + timedelta(seconds=1))
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_validate_future_boundary_cur",
+        lambda _cur, value, _now: value,
     )
 
-    result = attendance_readiness.refresh_shadow_comparison(
-        date(2026, 9, 1),
-        "meter",
+    config = attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)
+
+    assert calls == [("lock", marker), ("report", marker, NOW)]
+    assert saved == [(config, marker)]
+    assert status_saved[0][2] is marker
+    assert config.mode == "live"
+    assert config.cutover_at == cutover
+    assert config.live_gate is not None
+    assert config.live_gate.checked_at == NOW
+    assert config.live_gate.activated_at is None
+    assert config.live_gate.report_digest == attendance_readiness.report_digest(report, cutover)
+    assert marker.operations == [
+        ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", None),
+        (
+            "LOCK TABLE global_schedule, saturday_schedule, schedules, "
+            "company_holidays, saturday_recruitments, work_centers, departments, people, "
+            "wc_time_attributions IN SHARE MODE",
+            None,
+        ),
+        ("SELECT pg_advisory_xact_lock(%s)", (attendance_readiness._READINESS_LOCK_ID,)),
+    ]
+
+
+def test_schedule_live_rejects_not_ready_stale_and_replayed_state(monkeypatch):
+    marker = _ActivationCursor()
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(7, 0))
+    monkeypatch.setattr(shift_config, "is_workday", lambda _day: True)
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(marker))
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_lock_rollout_config_cur",
+        lambda _cur: attendance_location_policy.RolloutConfig("shadow", None, None),
+    )
+    blocked = attendance_readiness._report_from_inputs(_ready_inputs(open_conflicts=1), NOW)
+    cutover = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(attendance_readiness, "_build_report_cur", lambda _cur, _now: blocked)
+    with pytest.raises(ValueError, match="live_readiness_blocked"):
+        attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)
+
+    ready = attendance_readiness._report_from_inputs(_ready_inputs(), NOW)
+    monkeypatch.setattr(attendance_readiness, "_build_report_cur", lambda _cur, _now: ready)
+    monkeypatch.setattr(attendance_readiness, "_utc_now", lambda: NOW + timedelta(minutes=6))
+    with pytest.raises(ValueError, match="live_readiness_stale"):
+        attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)
+
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_lock_rollout_config_cur",
+        lambda _cur: attendance_location_policy.RolloutConfig(
+            "live",
+            NOW + timedelta(days=1),
+            attendance_location_policy.LiveGate(NOW, "a" * 64, None),
+        ),
+    )
+    with pytest.raises(ValueError, match="live_cutover_already_scheduled"):
+        attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)
+
+
+def test_schedule_locks_every_boundary_policy_table_before_validation_and_report(
+    monkeypatch,
+):
+    cursor = _ActivationCursor()
+    cutover = NOW + timedelta(days=1)
+    ready = attendance_readiness._report_from_inputs(_ready_inputs(), NOW)
+    expected_prefix = [
+        ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", None),
+        (
+            "LOCK TABLE global_schedule, saturday_schedule, schedules, "
+            "company_holidays, saturday_recruitments, work_centers, departments, people, "
+            "wc_time_attributions IN SHARE MODE",
+            None,
+        ),
+        ("SELECT pg_advisory_xact_lock(%s)", (attendance_readiness._READINESS_LOCK_ID,)),
+    ]
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+
+    def validate(_cur, value, _now):
+        assert cursor.operations == expected_prefix
+        return value
+
+    def locked_rollout(_cur):
+        assert cursor.operations == expected_prefix
+        return attendance_location_policy.RolloutConfig("shadow", None, None)
+
+    def build_report(_cur, _now):
+        assert cursor.operations == expected_prefix
+        return ready
+
+    monkeypatch.setattr(attendance_readiness, "_validate_future_boundary_cur", validate)
+    monkeypatch.setattr(attendance_readiness, "_lock_rollout_config_cur", locked_rollout)
+    monkeypatch.setattr(attendance_readiness, "_build_report_cur", build_report)
+    monkeypatch.setattr(attendance_readiness, "_utc_now", lambda: NOW + timedelta(seconds=1))
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda *_a, **_k: None,
+    )
+
+    attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)
+
+    assert cursor.operations == expected_prefix
+
+
+def test_activation_locks_every_boundary_policy_table_before_gate_and_report_reads(
+    monkeypatch,
+):
+    cursor = _ActivationCursor()
+    cutover = NOW - timedelta(minutes=1)
+    ready = attendance_readiness._report_from_inputs(_ready_inputs(), NOW)
+    expected_prefix = [
+        ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", None),
+        (
+            "LOCK TABLE global_schedule, saturday_schedule, schedules, "
+            "company_holidays, saturday_recruitments, work_centers, departments, people, "
+            "wc_time_attributions IN SHARE MODE",
+            None,
+        ),
+        ("SELECT pg_advisory_xact_lock(%s)", (attendance_readiness._READINESS_LOCK_ID,)),
+    ]
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+
+    def locked_rollout(_cur):
+        assert cursor.operations == expected_prefix
+        return _pending_live(cutover)
+
+    def build_report(_cur, _now):
+        assert cursor.operations == expected_prefix
+        return ready
+
+    monkeypatch.setattr(attendance_readiness, "_lock_rollout_config_cur", locked_rollout)
+    monkeypatch.setattr(attendance_readiness, "_build_report_cur", build_report)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_validate_configured_boundary_cur",
+        lambda _cur, value: value,
+    )
+    monkeypatch.setattr(attendance_readiness, "_enqueue_cutover_cur", lambda *_a: None)
+    monkeypatch.setattr(attendance_readiness, "_clear_blocked_cur", lambda *_a: None)
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda *_a, **_k: None,
+    )
+
+    result = attendance_readiness.activate_due_cutover(NOW)
+
+    assert result.status == "activated"
+
+
+def test_schedule_waits_for_config_writer_before_snapshot_and_reads_committed_boundary(
+    monkeypatch,
+):
+    local_day = date(2026, 9, 1)
+    cutover = datetime.combine(local_day, time(5, 30), tzinfo=shift_config.SITE_TZ).astimezone(UTC)
+    report = attendance_readiness._report_from_inputs(_ready_inputs(), NOW)
+
+    class InterleavingCursor:
+        def __init__(self):
+            self.operations = []
+            self.writer_committed = False
+            self.row = None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            self.operations.append((normalized, params))
+            if normalized.startswith("LOCK TABLE"):
+                # Simulate a writer that was already in flight and commits
+                # before this SHARE lock is granted.
+                self.writer_committed = True
+                self.row = None
+            elif "pg_advisory_xact_lock" in normalized:
+                assert self.writer_committed, "RR snapshot was established before writer commit"
+                self.row = None
+            elif "FROM global_schedule" in normalized:
+                assert self.writer_committed
+                self.row = {"shift_start": time(5, 30), "work_weekdays": [1]}
+            elif "FROM saturday_schedule" in normalized:
+                self.row = {"shift_start": time(6, 0)}
+            elif "FROM schedules" in normalized:
+                self.row = None
+            elif "FROM company_holidays" in normalized:
+                self.row = None
+            elif "FROM saturday_recruitments" in normalized:
+                self.row = None
+            else:
+                self.row = None
+
+        def fetchone(self):
+            return self.row
+
+    cursor = InterleavingCursor()
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_lock_rollout_config_cur",
+        lambda _cur: attendance_location_policy.RolloutConfig("shadow", None, None),
+    )
+    monkeypatch.setattr(attendance_readiness, "_build_report_cur", lambda *_a: report)
+    monkeypatch.setattr(attendance_readiness, "_utc_now", lambda: NOW + timedelta(seconds=1))
+    monkeypatch.setattr(attendance_location_policy, "set_rollout_config", lambda *_a, **_k: None)
+    monkeypatch.setattr(attendance_readiness.app_settings, "set_setting", lambda *_a, **_k: None)
+
+    saved = attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)
+
+    assert saved.cutover_at == cutover
+    assert cursor.operations[1][0].startswith("LOCK TABLE")
+    assert "pg_advisory_xact_lock" in cursor.operations[2][0]
+
+
+@pytest.mark.parametrize(
+    (
+        "day",
+        "schedule",
+        "holiday",
+        "recruitment",
+        "expected_start",
+        "expected_workday",
+    ),
+    [
+        (date(2026, 9, 1), None, None, None, time(7, 0), True),
+        (
+            date(2026, 9, 1),
+            {"published": True, "custom_hours": {"start": "05:30"}},
+            None,
+            None,
+            time(5, 30),
+            True,
+        ),
+        (
+            date(2026, 9, 5),
+            {"published": False, "custom_hours": None},
+            None,
+            {"day_kind": "saturday", "holiday_odoo_id": None, "status": "closed"},
+            time(7, 0),
+            False,
+        ),
+        (
+            date(2026, 9, 5),
+            {"published": True, "custom_hours": None},
+            None,
+            {"day_kind": "saturday", "holiday_odoo_id": None, "status": "published"},
+            time(6, 0),
+            True,
+        ),
+        (
+            date(2026, 9, 2),
+            {"published": True, "custom_hours": None},
+            {"odoo_id": 42},
+            {"day_kind": "holiday", "holiday_odoo_id": 42, "status": "published"},
+            time(6, 0),
+            True,
+        ),
+        (
+            date(2026, 9, 2),
+            {"published": True, "custom_hours": None},
+            {"odoo_id": 42},
+            {"day_kind": "holiday", "holiday_odoo_id": 99, "status": "published"},
+            time(7, 0),
+            False,
+        ),
+    ],
+    ids=[
+        "normal-weekday",
+        "published-custom-hours",
+        "closed-saturday",
+        "published-saturday",
+        "dual-published-holiday",
+        "mismatched-holiday-publication",
+    ],
+)
+def test_locked_boundary_resolution_matches_operational_workday_semantics(
+    day,
+    schedule,
+    holiday,
+    recruitment,
+    expected_start,
+    expected_workday,
+):
+    class BoundaryCursor:
+        def __init__(self):
+            self.row = None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            if "FROM global_schedule" in normalized:
+                self.row = {"shift_start": time(7, 0), "work_weekdays": [0, 1, 2, 3, 4]}
+            elif "FROM saturday_schedule" in normalized:
+                self.row = {"shift_start": time(6, 0)}
+            elif "FROM schedules" in normalized:
+                assert params == (day,)
+                self.row = schedule
+            elif "FROM company_holidays" in normalized:
+                assert params == (day, day)
+                self.row = holiday
+            elif "FROM saturday_recruitments" in normalized:
+                assert params == (day,)
+                self.row = recruitment
+            else:
+                raise AssertionError(normalized)
+
+        def fetchone(self):
+            return self.row
+
+    assert attendance_readiness._configured_boundary_cur(BoundaryCursor(), day) == (
+        expected_start,
+        expected_workday,
+    )
+
+
+def test_locked_boundary_validation_ignores_stale_process_cache(monkeypatch):
+    day = date(2026, 9, 1)
+
+    class FreshCursor:
+        def __init__(self):
+            self.row = None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            if "FROM global_schedule" in normalized:
+                self.row = {"shift_start": time(5, 30), "work_weekdays": [1]}
+            elif "FROM saturday_schedule" in normalized:
+                self.row = {"shift_start": time(6, 0)}
+            elif "FROM schedules" in normalized:
+                self.row = None
+            elif "FROM company_holidays" in normalized:
+                self.row = None
+            elif "FROM saturday_recruitments" in normalized:
+                self.row = None
+            else:
+                raise AssertionError(normalized)
+
+        def fetchone(self):
+            return self.row
+
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(7, 0))
+    monkeypatch.setattr(shift_config, "is_workday", lambda _day: False)
+    cutover = datetime.combine(day, time(5, 30), tzinfo=shift_config.SITE_TZ).astimezone(UTC)
+
+    assert attendance_readiness._validate_configured_boundary_cur(FreshCursor(), cutover) == cutover
+
+
+def test_recalculation_health_rejects_impossible_rows_without_hiding_a_zero_depth():
+    completed = NOW - timedelta(minutes=2)
+    rows = [
+        {
+            "attempt_count": 0,
+            "requested_at": NOW - timedelta(minutes=4),
+            "started_at": None,
+            "completed_at": completed,
+            "cache_started_at": None,
+            "cache_ready_at": completed + timedelta(seconds=1),
+            "last_error": None,
+        },
+        {
+            "attempt_count": -1,
+            "requested_at": NOW - timedelta(minutes=3),
+            "started_at": None,
+            "completed_at": completed,
+            "cache_started_at": None,
+            "cache_ready_at": completed + timedelta(seconds=1),
+            "last_error": None,
+        },
+        {
+            "attempt_count": 1,
+            "requested_at": NOW - timedelta(minutes=2),
+            "started_at": NOW - timedelta(minutes=1),
+            "completed_at": completed,
+            "cache_started_at": None,
+            "cache_ready_at": completed + timedelta(seconds=1),
+            "last_error": None,
+        },
+        {
+            "attempt_count": 1,
+            "requested_at": NOW - timedelta(minutes=1),
+            "started_at": None,
+            "completed_at": completed,
+            "cache_started_at": NOW,
+            "cache_ready_at": completed - timedelta(seconds=1),
+            "last_error": "old failure",
+        },
+    ]
+
+    class RecalcCursor:
+        def __init__(self):
+            self.result = None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            assert "attempt_count < 0" in normalized
+            assert "completed_at IS NULL" in normalized
+            assert "cache_ready_at < completed_at" in normalized
+            invalid = 0
+            for row in rows:
+                impossible = (
+                    row["attempt_count"] < 0
+                    or (
+                        row["completed_at"] is None
+                        and (
+                            row["cache_started_at"] is not None or row["cache_ready_at"] is not None
+                        )
+                    )
+                    or (
+                        row["completed_at"] is not None
+                        and (row["started_at"] is not None or row["last_error"] is not None)
+                    )
+                    or (
+                        row["cache_ready_at"] is not None
+                        and (
+                            row["cache_started_at"] is not None
+                            or row["completed_at"] is None
+                            or row["cache_ready_at"] < row["completed_at"]
+                        )
+                    )
+                )
+                invalid += impossible
+            pending = [
+                row for row in rows if row["completed_at"] is None or row["cache_ready_at"] is None
+            ]
+            self.result = {
+                "depth": len(pending),
+                "oldest": min((row["requested_at"] for row in pending), default=None),
+                "invalid": invalid,
+            }
+
+        def fetchone(self):
+            return self.result
+
+    assert attendance_readiness._recalculation_health_cur(RecalcCursor()) == {
+        "depth": 0,
+        "oldest": None,
+        "invalid": 3,
+    }
+
+
+def test_invalid_recalculation_state_is_an_explicit_readiness_blocker():
+    report = attendance_readiness._report_from_inputs(
+        _ready_inputs(recalc_queue_depth=0, recalc_queue_invalid=1),
+        NOW,
+    )
+
+    assert report.ready is False
+    assert "attendance_recalculation_invalid" in report.blockers
+
+
+def _valid_shadow_health_setting() -> dict:
+    complete_day = DAY - timedelta(days=1)
+    return {
+        "day": DAY.isoformat(),
+        "computed_at": NOW.isoformat(),
+        "config_digest": "a" * 64,
+        "day_config_digest": "b" * 64,
+        "mirror_verified_through": (NOW - timedelta(seconds=1)).isoformat(),
+        "mirror_full_sweep_completed_at": (NOW - timedelta(minutes=1)).isoformat(),
+        "mirror_full_sweep_generation": 3,
+        "shadow_epoch_at": (NOW - timedelta(days=2)).isoformat(),
+        "complete_days": [complete_day.isoformat()],
+        "complete_day_health": [
+            {
+                "day": complete_day.isoformat(),
+                "completed_at": datetime.combine(
+                    complete_day,
+                    time(15),
+                    tzinfo=shift_config.SITE_TZ,
+                )
+                .astimezone(UTC)
+                .isoformat(),
+                "schedule_digest": "c" * 64,
+                "workday": True,
+                "conflict_minutes": 0.0,
+                "unmapped_minutes": 0.0,
+                "missing_minutes": 0.0,
+                "unassigned_units": 0.0,
+                "clean": True,
+            }
+        ],
+        "changed_worker_units": 0.0,
+        "unassigned_units_today": 0.0,
+        "oldest_unassigned_at": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value.pop("day"),
+        lambda value: value.pop("config_digest"),
+        lambda value: value.update(config_digest="not-a-digest"),
+        lambda value: value.pop("day_config_digest"),
+        lambda value: value.pop("mirror_verified_through"),
+        lambda value: value.update(computed_at="2026-08-31T14:00:00"),
+        lambda value: value.update(computed_at=(NOW + timedelta(days=1)).isoformat()),
+        lambda value: value.update(complete_days=[DAY.isoformat(), DAY.isoformat()]),
+        lambda value: value.update(complete_days=[(DAY + timedelta(days=1)).isoformat()]),
+        lambda value: value.update(
+            complete_days=[(DAY - timedelta(days=offset)).isoformat() for offset in range(31)]
+        ),
+        lambda value: value.update(changed_worker_units=float("nan")),
+        lambda value: value.update(unassigned_units_today=-1.0),
+        lambda value: value.update(oldest_unassigned_at=(NOW - timedelta(minutes=1)).isoformat()),
+        lambda value: value.update(unassigned_units_today=1.0, oldest_unassigned_at=None),
+        lambda value: value.update(
+            unassigned_units_today=1.0,
+            oldest_unassigned_at=(NOW + timedelta(minutes=1)).isoformat(),
+        ),
+        lambda value: value.update(
+            complete_day_health=value["complete_day_health"] * 2,
+        ),
+        lambda value: value["complete_day_health"][0].pop("missing_minutes"),
+        lambda value: value["complete_day_health"][0].pop("completed_at"),
+        lambda value: value["complete_day_health"][0].pop("schedule_digest"),
+        lambda value: value.update(complete_days=[]),
+        lambda value: value["complete_day_health"][0].update(
+            day=(DAY + timedelta(days=1)).isoformat()
+        ),
+    ],
+    ids=[
+        "missing-day",
+        "missing-config-digest",
+        "malformed-config-digest",
+        "missing-day-config-digest",
+        "missing-mirror-origin",
+        "naive-computed-at",
+        "cross-day-computed-at",
+        "duplicate-complete-day",
+        "future-complete-day",
+        "unbounded-complete-days",
+        "non-finite-changed-units",
+        "negative-unassigned-units",
+        "oldest-present-with-zero-units",
+        "oldest-missing-with-units",
+        "oldest-after-computation",
+        "duplicate-health-day",
+        "missing-health-metric",
+        "missing-health-completion",
+        "missing-health-schedule-origin",
+        "clean-list-without-matching-evidence",
+        "health-after-stored-day",
+    ],
+)
+def test_shadow_health_setting_rejects_cross_field_impossible_shapes(mutate):
+    value = _valid_shadow_health_setting()
+    mutate(value)
+
+    with pytest.raises(ValueError, match="shadow comparison is malformed"):
+        attendance_readiness._validate_shadow_health(value, NOW)
+
+
+def test_shadow_health_setting_accepts_one_coherent_bounded_aggregate():
+    validated = attendance_readiness._validate_shadow_health(
+        _valid_shadow_health_setting(),
+        NOW,
+    )
+
+    assert validated.day == DAY
+    assert validated.computed_at == NOW
+    assert validated.clean_days == (DAY - timedelta(days=1),)
+
+
+def test_non_live_save_treats_only_a_missing_locked_rollout_as_initial_off(monkeypatch):
+    cursor = _ActivationCursor()
+    calls = []
+    requested = attendance_location_policy.RolloutConfig("shadow", None, None)
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda config, *, cur=None: calls.append(("rollout", config, cur)),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_department_requirement",
+        lambda name, required, *, cur=None: calls.append(("department", name, required, cur)),
+    )
+
+    saved = attendance_readiness.save_non_live_rollout(
+        requested,
+        {"Assembly": True},
         now_utc=NOW,
-        shadow_entered_at=NOW - timedelta(days=1),
     )
 
-    assert result.source_mirror_at == old_observed
-    assert writes[0]["source_mirror_at"] == old_observed.isoformat()
+    assert saved == requested
+    assert calls == [
+        ("rollout", requested, cursor),
+        ("department", "Assembly", True, cursor),
+    ]
 
 
-def test_off_and_live_modes_do_not_write_shadow_health(monkeypatch):
-    for mode in ("off", "live"):
-        monkeypatch.setattr(
-            attendance_readiness.attendance_location_policy,
-            "get_rollout_config",
-            lambda mode=mode: SimpleNamespace(mode=mode),
+def test_non_live_save_rejects_a_present_malformed_locked_rollout(monkeypatch):
+    class PresentMalformedCursor(_ActivationCursor):
+        def fetchone(self):
+            return {"value": {"mode": "broken"}}
+
+    cursor = PresentMalformedCursor()
+    writes = []
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda *_a, **_k: writes.append("rollout"),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_department_requirement",
+        lambda *_a, **_k: writes.append("department"),
+    )
+
+    with pytest.raises(ValueError, match="^rollout_state_unavailable$"):
+        attendance_readiness.save_non_live_rollout(
+            attendance_location_policy.RolloutConfig("shadow", None, None),
+            {"Assembly": True},
+            now_utc=NOW,
         )
-        monkeypatch.setattr(
-            attendance_readiness,
-            "compute_shadow_comparison",
-            lambda *_args, **_kwargs: pytest.fail("wrong rollout mode"),
-        )
-        assert (
-            attendance_readiness.refresh_shadow_comparison(
-                date(2026, 9, 1), "meter", now_utc=NOW
-            )
-            is None
-        )
+
+    assert writes == []
 
 
-def test_collect_db_metrics_uses_one_statement_for_coherent_health(monkeypatch):
-    row = {
-        "baseline_complete": True,
-        "mirror_error": None,
-        "mirror_completed_at": NOW - timedelta(seconds=15),
-        "mirror_observed_at": NOW - timedelta(seconds=16),
-        "full_sweep_completed_at": NOW - timedelta(minutes=10),
-        "open_rows_not_refreshed": 0,
-        "last_sweep_deletion_count": 3,
-        "oldest_recalc_requested_at": None,
-        "recalc_queue_depth": 0,
-        "failed_corrections": 0,
-        "correction_retries_today": 2,
-        "correction_verification_failures_today": 1,
-        "failed_department_repairs": 0,
-            "shadow_health": {
-            "schema_version": 1,
-            "day": "2026-08-31",
-            "checked_at": NOW.isoformat(),
-            "shadow_entered_at": (NOW - timedelta(days=4)).isoformat(),
-            "shift_start_utc": datetime(2026, 8, 31, 12, tzinfo=UTC).isoformat(),
-            "shift_end_utc": datetime(2026, 8, 31, 20, tzinfo=UTC).isoformat(),
-            "projection_complete": True,
-            "source_mirror_at": (NOW - timedelta(seconds=20)).isoformat(),
-                "source_binding": attendance_readiness._combined_shadow_source_binding(
-                    "shadow-source-a", "meter-source-a"
+def test_non_live_save_rejects_due_pending_cutover_before_rollout_or_department_write(
+    monkeypatch,
+):
+    cursor = _ActivationCursor()
+    writes = []
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_lock_rollout_config_cur",
+        lambda _cur: _pending_live(NOW),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda *_a, **_k: writes.append("rollout"),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_department_requirement",
+        lambda *_a, **_k: writes.append("department"),
+    )
+
+    with pytest.raises(ValueError, match="^cutover_decision_pending$"):
+        attendance_readiness.save_non_live_rollout(
+            attendance_location_policy.RolloutConfig("shadow", None, None),
+            {"Assembly": True},
+            now_utc=NOW,
+        )
+
+    assert writes == []
+    assert cursor.operations[:3] == [
+        ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", None),
+        (
+            "LOCK TABLE global_schedule, saturday_schedule, schedules, "
+            "company_holidays, saturday_recruitments, work_centers, departments, people, "
+            "wc_time_attributions IN SHARE MODE",
+            None,
+        ),
+        ("SELECT pg_advisory_xact_lock(%s)", (attendance_readiness._READINESS_LOCK_ID,)),
+    ]
+
+
+def test_non_live_save_serializes_activation_winner_and_cannot_disable_active_live(
+    monkeypatch,
+):
+    cursor = _ActivationCursor()
+    cutover = NOW - timedelta(minutes=1)
+    active = attendance_location_policy.RolloutConfig(
+        "live",
+        cutover,
+        attendance_location_policy.LiveGate(
+            checked_at=NOW - timedelta(minutes=2),
+            report_digest="d" * 64,
+            activated_at=NOW,
+        ),
+    )
+    writes = []
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_lock_rollout_config_cur",
+        lambda _cur: active,
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda *_a, **_k: writes.append("rollout"),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_department_requirement",
+        lambda *_a, **_k: writes.append("department"),
+    )
+
+    with pytest.raises(ValueError, match="^rollback_boundary_required$"):
+        attendance_readiness.save_non_live_rollout(
+            attendance_location_policy.RolloutConfig("off", None, None),
+            {"Assembly": False},
+            now_utc=NOW,
+        )
+
+    assert writes == []
+
+
+def test_non_live_save_cancels_future_pending_gate_with_departments_in_one_transaction(
+    monkeypatch,
+):
+    cursor = _ActivationCursor()
+    calls = []
+    requested = attendance_location_policy.RolloutConfig("shadow", None, None)
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_lock_rollout_config_cur",
+        lambda _cur: _pending_live(NOW + timedelta(days=1)),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda config, *, cur=None: calls.append(("rollout", config, cur)),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_department_requirement",
+        lambda name, required, *, cur=None: calls.append(("department", name, required, cur)),
+    )
+
+    saved = attendance_readiness.save_non_live_rollout(
+        requested,
+        {"Assembly": True, "Maintenance": False},
+        now_utc=NOW,
+    )
+
+    assert saved == requested
+    assert calls == [
+        ("rollout", requested, cursor),
+        ("department", "Assembly", True, cursor),
+        ("department", "Maintenance", False, cursor),
+    ]
+
+
+def test_latest_correction_intent_supersedes_old_failure_with_id_tie_breaker():
+    created = NOW - timedelta(hours=1)
+    rows = [
+        {
+            "id": 1,
+            "item_key": "run:a",
+            "status": "failed",
+            "attempt_count": 3,
+            "verification_failure_count": 1,
+            "created_at": created - timedelta(minutes=1),
+            "updated_at": NOW,
+        },
+        {
+            "id": 2,
+            "item_key": "run:a",
+            "status": "complete",
+            "attempt_count": 1,
+            "verification_failure_count": 0,
+            "created_at": created,
+            "updated_at": NOW,
+        },
+        {
+            "id": 3,
+            "item_key": "run:b",
+            "status": "complete",
+            "attempt_count": 1,
+            "verification_failure_count": 0,
+            "created_at": created - timedelta(minutes=1),
+            "updated_at": NOW,
+        },
+        {
+            "id": 4,
+            "item_key": "run:b",
+            "status": "failed",
+            "attempt_count": 2,
+            "verification_failure_count": 1,
+            "created_at": created,
+            "updated_at": NOW,
+        },
+        {
+            "id": 5,
+            "item_key": "run:c",
+            "status": "failed",
+            "attempt_count": 4,
+            "verification_failure_count": 2,
+            "created_at": created,
+            "updated_at": NOW,
+        },
+        {
+            "id": 6,
+            "item_key": "run:c",
+            "status": "complete",
+            "attempt_count": 1,
+            "verification_failure_count": 0,
+            "created_at": created,
+            "updated_at": NOW,
+        },
+    ]
+
+    class CorrectionCursor:
+        def __init__(self):
+            self.result = None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            assert "DISTINCT ON (item_key)" in normalized
+            assert "ORDER BY item_key, created_at DESC, id DESC" in normalized
+            assert params is not None
+            latest = {}
+            for row in sorted(
+                rows,
+                key=lambda value: (
+                    value["item_key"],
+                    value["created_at"],
+                    value["id"],
                 ),
-                "production_source_fingerprint": "meter-source-a",
-        },
-        "shadow_epoch": {
-            "schema_version": 1,
-            "entered_at": (NOW - timedelta(days=4)).isoformat(),
-        },
-    }
-    query = MagicMock(return_value=[row])
-    monkeypatch.setattr(attendance_readiness.db, "query", query)
+                reverse=True,
+            ):
+                latest.setdefault(row["item_key"], row)
+            day_start, day_end, _again_start, _again_end = params
+            selected = tuple(latest.values())
+            self.result = {
+                "failed": sum(row["status"] == "failed" for row in selected),
+                "retries": sum(
+                    max(row["attempt_count"] - 1, 0)
+                    for row in selected
+                    if day_start <= row["updated_at"] < day_end
+                ),
+                "verification_failures": sum(
+                    row["verification_failure_count"]
+                    for row in selected
+                    if day_start <= row["updated_at"] < day_end
+                ),
+            }
 
-    metrics = attendance_readiness._collect_db_metrics(NOW)
+        def fetchone(self):
+            return self.result
 
-    assert metrics["mirror_age_seconds"] == 15.0
-    assert metrics["last_full_sweep_age_seconds"] == 600.0
-    assert metrics["correction_retries_today"] == 2
-    assert metrics["shadow_day_complete"] is True
-    assert metrics["projection_lag_seconds"] == 5.0
-    assert metrics["correction_job_ids"] == ()
-    assert query.call_count == 1
-    assert "WITH sync AS" in query.call_args.args[0]
-    assert "array_agg(DISTINCT correction_job_id" in query.call_args.args[0]
-
-
-def test_missing_or_same_day_shadow_proof_fails_the_complete_day_precondition(monkeypatch):
-    base = {
-        "baseline_complete": True,
-        "mirror_error": None,
-        "mirror_completed_at": NOW,
-        "mirror_observed_at": NOW,
-        "full_sweep_completed_at": NOW,
-        "open_rows_not_refreshed": 0,
-        "last_sweep_deletion_count": 0,
-        "oldest_recalc_requested_at": None,
-        "recalc_queue_depth": 0,
-        "failed_corrections": 0,
-        "correction_retries_today": 0,
-        "correction_verification_failures_today": 0,
-        "failed_department_repairs": 0,
-    }
-    query = MagicMock(
-        side_effect=[
-            [{**base, "shadow_health": None}],
-            [{
-                **base,
-                "shadow_health": {
-                    "day": "2026-09-01",
-                    "projection_complete": True,
-                    "source_mirror_at": NOW.isoformat(),
-                },
-            }],
-        ]
-    )
-    monkeypatch.setattr(attendance_readiness.db, "query", query)
-
-    assert attendance_readiness._collect_db_metrics(NOW)["shadow_day_complete"] is False
-    assert attendance_readiness._collect_db_metrics(NOW)["shadow_day_complete"] is False
-
-
-def test_shadow_proof_requires_the_same_epoch_from_before_the_observed_shift(monkeypatch):
-    shadow_day = date(2026, 8, 31)
-    shift_start = datetime.combine(
-        shadow_day,
-        datetime.min.time().replace(hour=7),
-        tzinfo=attendance_readiness.shift_config.SITE_TZ,
-    ).astimezone(UTC)
-    base = {
-        "baseline_complete": True,
-        "mirror_error": None,
-        "mirror_completed_at": NOW,
-        "mirror_observed_at": NOW,
-        "full_sweep_completed_at": NOW,
-        "open_rows_not_refreshed": 0,
-        "last_sweep_deletion_count": 0,
-        "oldest_recalc_requested_at": None,
-        "recalc_queue_depth": 0,
-        "failed_corrections": 0,
-        "correction_retries_today": 0,
-        "correction_verification_failures_today": 0,
-        "failed_department_repairs": 0,
-    }
-    old_epoch = (shift_start - timedelta(days=3)).isoformat()
-    query = MagicMock(
-        side_effect=[
-            [{
-                **base,
-                "shadow_epoch": {"schema_version": 1, "entered_at": old_epoch},
-                "shadow_health": {
-                    "day": shadow_day.isoformat(),
-                    "checked_at": NOW.isoformat(),
-                    "projection_complete": True,
-                    "source_mirror_at": NOW.isoformat(),
-                    "shadow_entered_at": (shift_start + timedelta(minutes=1)).isoformat(),
-                    "shift_start_utc": shift_start.isoformat(),
-                    "shift_end_utc": (shift_start + timedelta(hours=8)).isoformat(),
-                },
-            }],
-            [{
-                **base,
-                "shadow_epoch": {
-                    "schema_version": 1,
-                    "entered_at": (shift_start + timedelta(minutes=1)).isoformat(),
-                },
-                "shadow_health": {
-                    "day": shadow_day.isoformat(),
-                    "checked_at": NOW.isoformat(),
-                    "projection_complete": True,
-                    "source_mirror_at": NOW.isoformat(),
-                    "shadow_entered_at": (shift_start + timedelta(minutes=1)).isoformat(),
-                    "shift_start_utc": shift_start.isoformat(),
-                    "shift_end_utc": (shift_start + timedelta(hours=8)).isoformat(),
-                },
-            }],
-        ]
-    )
-    monkeypatch.setattr(attendance_readiness.db, "query", query)
-    monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "shift_start_for",
-        lambda _day: datetime.min.time().replace(hour=7),
-    )
-    monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "shift_end_for",
-        lambda _day: datetime.min.time().replace(hour=15),
+    cursor = CorrectionCursor()
+    health = attendance_readiness._correction_health_cur(
+        cursor,
+        NOW - timedelta(hours=2),
+        NOW + timedelta(hours=2),
     )
 
-    assert attendance_readiness._collect_db_metrics(NOW)["shadow_day_complete"] is False
-    assert attendance_readiness._collect_db_metrics(NOW)["shadow_day_complete"] is False
+    assert health == {"failed": 1, "retries": 1, "verification_failures": 1}
+    assert len(rows) == 6  # prior attempts remain immutable audit history
 
 
-def test_shadow_proof_requires_source_observation_through_shift_end(monkeypatch):
-    shadow_day = date(2026, 8, 31)
-    shift_start = datetime(2026, 8, 31, 12, tzinfo=UTC)
-    shift_end = datetime(2026, 8, 31, 20, tzinfo=UTC)
-    entered_at = shift_start - timedelta(days=1)
-    row = {
-        "baseline_complete": True,
-        "mirror_error": None,
-        "mirror_completed_at": NOW,
-        "mirror_observed_at": shift_end - timedelta(seconds=1),
-        "full_sweep_completed_at": NOW,
-        "open_rows_not_refreshed": 0,
-        "last_sweep_deletion_count": 0,
-        "oldest_recalc_requested_at": None,
-        "recalc_queue_depth": 0,
-        "failed_corrections": 0,
-        "correction_retries_today": 0,
-        "correction_verification_failures_today": 0,
-        "failed_department_repairs": 0,
-        "shadow_epoch": {"schema_version": 1, "entered_at": entered_at.isoformat()},
-        "shadow_health": {
-            "schema_version": 1,
-            "day": shadow_day.isoformat(),
-            "checked_at": NOW.isoformat(),
-            "shadow_entered_at": entered_at.isoformat(),
-            "shift_start_utc": shift_start.isoformat(),
-            "shift_end_utc": shift_end.isoformat(),
-            "projection_complete": True,
-            "source_mirror_at": (shift_end - timedelta(seconds=1)).isoformat(),
-        },
-    }
-    monkeypatch.setattr(attendance_readiness.db, "query", MagicMock(return_value=[row]))
+def test_read_only_json_payload_contains_every_public_metric(monkeypatch):
+    monkeypatch.setattr(attendance_readiness, "_read_inputs", lambda _now: _ready_inputs())
 
-    assert attendance_readiness._collect_db_metrics(NOW)["shadow_day_complete"] is False
+    payload = attendance_readiness.report_json(attendance_readiness.build_report(NOW))
+    decoded = json.loads(payload)
+
+    assert decoded["ready"] is True
+    assert decoded["checked_at"] == NOW.isoformat()
+    assert set(attendance_readiness.ReadinessReport.__dataclass_fields__) <= set(decoded)
 
 
-class _AtomicCursor:
-    def __init__(self, raw_config, *, accepted_at=NOW):
-        self.raw_config = raw_config
-        self.accepted_at = accepted_at
-        self.statements = []
-        self._row = None
+class _ActivationCursor:
+    def __init__(self):
+        self.operations = []
 
     def execute(self, sql, params=None):
-        normalized = " ".join(sql.split())
-        self.statements.append((normalized, params))
-        if normalized.startswith("SELECT value FROM app_settings"):
-            self._row = {"value": self.raw_config}
-        elif normalized.startswith("SELECT clock_timestamp() AS accepted_at"):
-            self._row = {"accepted_at": self.accepted_at}
-        else:
-            self._row = None
+        self.operations.append((" ".join(sql.split()), params))
 
     def fetchone(self):
-        return self._row
+        return None
 
 
-class _CursorContext:
-    def __init__(self, cursor):
-        self.cursor = cursor
-
-    def __enter__(self):
-        return self.cursor
-
-    def __exit__(self, *_args):
-        return False
-
-
-def _raw_config(config):
+def _rollout_value(config):
+    gate = config.live_gate
     return {
         "mode": config.mode,
         "cutover_at": config.cutover_at.isoformat() if config.cutover_at else None,
         "live_gate": (
             {
-                "checked_at": config.live_gate.checked_at.isoformat(),
-                "report_digest": config.live_gate.report_digest,
-                "activated_at": (
-                    config.live_gate.activated_at.isoformat()
-                    if config.live_gate.activated_at
-                    else None
-                ),
+                "checked_at": gate.checked_at.isoformat(),
+                "report_digest": gate.report_digest,
+                "activated_at": gate.activated_at.isoformat() if gate.activated_at else None,
             }
-            if config.live_gate
+            if gate is not None
             else None
         ),
     }
 
 
-def test_ready_settlement_uses_precompute_lock_order_and_enqueues_strict_day(monkeypatch):
-    cutover = datetime(2026, 9, 1, 12, tzinfo=UTC)
-    settle_now = cutover + timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
+class _OrdinaryFenceCursor(_ActivationCursor):
+    def __init__(self, rollout, status=None, queue=None):
+        super().__init__()
+        self.rollout = rollout
+        self.status = status
+        self.queue = queue
+        self.row = None
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        normalized = " ".join(sql.split())
+        if "FROM app_settings WHERE key" in normalized:
+            key = params[0]
+            value = self.rollout if key == attendance_readiness._ROLLOUT_SETTING else self.status
+            self.row = {"value": value} if value is not None else None
+        elif "FROM attendance_recalc_queue WHERE day" in normalized:
+            self.row = self.queue
+        else:
+            self.row = None
+
+    def fetchone(self):
+        return self.row
+
+
+def _pending_live(cutover):
+    return attendance_location_policy.RolloutConfig(
         "live",
         cutover,
-        attendance_location_policy.LiveGate(settle_now - timedelta(minutes=1), "old", None),
+        attendance_location_policy.LiveGate(NOW - timedelta(minutes=1), "b" * 64, None),
     )
-    cursor = _AtomicCursor(_raw_config(pending))
-    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _CursorContext(cursor))
-    saved = []
+
+
+def test_due_activation_is_serialized_marks_strict_and_enqueues_before_gate(monkeypatch):
+    cursor = _ActivationCursor()
+    cutover = NOW - timedelta(minutes=1)
+    calls = []
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
     monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "set_rollout_config",
-        lambda config, *, cur: saved.append(config),
+        attendance_readiness, "_lock_rollout_config_cur", lambda _cur: _pending_live(cutover)
     )
-    report = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-
-    result = attendance_readiness._settle_due_cutover(
-        expected_config=pending,
-        report=report,
-        now_utc=settle_now,
-    )
-
-    assert result == "activated"
-    assert cursor.statements[0][0] == (
-        "LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE"
-    )
-    assert saved[0].live_gate.activated_at == settle_now
-    assert saved[0].live_gate.report_digest == attendance_readiness.report_digest(report)
-    sql = "\n".join(statement for statement, _params in cursor.statements)
-    assert "INSERT INTO attendance_strict_days" in sql
-    assert "INSERT INTO attendance_recalc_queue" in sql
-    assert "INSERT INTO attendance_rollout_audit" in sql
-    assert "DELETE FROM app_settings" in sql
-    assert any(
-        params and params[0] == "odoo_attendance_readiness_report"
-        for statement, params in cursor.statements
-        if "INSERT INTO app_settings" in statement
-    )
-
-
-def test_structured_readiness_evidence_logs_only_bounded_identifiers(caplog):
-    segments = [
-        attendance_timeline.LocationSpan(
-            employee_odoo_id=101,
-            employee_name="Worker Secret",
-            start_utc=NOW,
-            end_utc=NOW + timedelta(minutes=5),
-            status="unmapped_location",
-            app_work_center_name=None,
-            odoo_work_center_id=71,
-            odoo_work_center_name="Raw Secret",
-            attendance_ids=tuple(range(1, 130)),
-            department_repair=None,
-        ),
-        attendance_timeline.LocationSpan(
-            employee_odoo_id=101,
-            employee_name="Worker Secret",
-            start_utc=NOW + timedelta(minutes=5),
-            end_utc=NOW + timedelta(minutes=10),
-            status="missing_required_location",
-            app_work_center_name=None,
-            odoo_work_center_id=None,
-            odoo_work_center_name=None,
-            attendance_ids=(130,),
-            department_repair=None,
-        ),
-        attendance_timeline.LocationSpan(
-            employee_odoo_id=101,
-            employee_name="Worker Secret",
-            start_utc=NOW + timedelta(minutes=10),
-            end_utc=NOW + timedelta(minutes=15),
-            status="missing_required_location",
-            app_work_center_name=None,
-            odoo_work_center_id=None,
-            odoo_work_center_name=None,
-            attendance_ids=(130,),
-            department_repair=None,
-        ),
-    ]
-    db_metrics = {
-        "correction_job_ids": (11, 12),
-        "repair_attendance_ids": (21,),
-        "recalculation_ids": ("2026-08-31",),
-    }
-
-    with caplog.at_level("INFO", logger=attendance_readiness.__name__):
-        attendance_readiness._log_readiness_identifiers(
-            segments,
-            db_metrics,
-            now_utc=NOW,
-        )
-
-    record = caplog.records[-1]
-    assert record.employee_ids == (101,)
-    assert record.work_center_ids == (71,)
-    assert len(record.attendance_ids) == 100
-    assert record.correction_ids == (11, 12)
-    assert record.repair_ids == (21,)
-    assert record.recalculation_ids == ("2026-08-31",)
-    assert record.exception_ids == (
-        attendance_readiness.inbox_keys.attendance_issue_key(
-            "attendance_missing_location", 101, (130,), NOW + timedelta(minutes=5)
-        ),
-        attendance_readiness.inbox_keys.attendance_issue_key(
-            "attendance_unmapped_location", 101, tuple(range(1, 130)), NOW
-        ),
-    )
-    assert "Worker" not in record.getMessage()
-
-
-def test_blocked_settlement_rolls_back_once_with_stable_exception_identity(monkeypatch):
-    cutover = datetime(2026, 9, 1, 12, tzinfo=UTC)
-    settle_now = cutover + timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(settle_now - timedelta(minutes=1), "old", None),
-    )
-    cursor = _AtomicCursor(_raw_config(pending))
-    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _CursorContext(cursor))
-    saved = []
-    settings = []
     monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
+        attendance_readiness,
+        "_validate_configured_boundary_cur",
+        lambda _cur, value: value,
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_build_report_cur",
+        lambda _cur, _now: attendance_readiness._report_from_inputs(_ready_inputs(), NOW),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_enqueue_cutover_cur",
+        lambda cur, day, now: calls.append(("enqueue", cur, day, now)),
+    )
+    monkeypatch.setattr(
+        attendance_readiness, "_clear_blocked_cur", lambda cur: calls.append(("clear", cur))
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
         "set_rollout_config",
-        lambda config, *, cur: saved.append(config),
+        lambda config, *, cur=None: calls.append(("config", cur, config)),
     )
     monkeypatch.setattr(
         attendance_readiness.app_settings,
         "set_setting",
-        lambda key, value, *, cur: settings.append((key, value)),
-    )
-    blocked = attendance_readiness.ReadinessReport(
-        False, 91.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, ("mirror_stale",),
+        lambda key, value, *, cur=None: calls.append(("status", cur, key, value)),
     )
 
-    assert attendance_readiness._settle_due_cutover(
-        expected_config=pending,
-        report=blocked,
-        now_utc=settle_now,
-    ) == "rolled_back"
+    result = attendance_readiness.activate_due_cutover(NOW)
 
-    assert saved == [attendance_location_policy.RolloutConfig("shadow", None, None)]
-    assert settings[0][0] == "odoo_attendance_cutover_blocked"
-    payload = settings[0][1]
-    assert payload["item_key"] == attendance_readiness.cutover_blocked_item_key(cutover)
-    assert payload["blockers"] == ["mirror_stale"]
-    assert "employee" not in json.dumps(payload).lower()
+    assert result.status == "activated"
+    assert cursor.operations[0] == ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", None)
+    assert cursor.operations[1][0].startswith("LOCK TABLE")
+    assert "pg_advisory_xact_lock" in cursor.operations[2][0]
+    assert [call[0] for call in calls] == ["enqueue", "config", "clear", "status"]
+    assert calls[0][2] == cutover.astimezone(shift_config.SITE_TZ).date()
+    assert calls[1][2].live_gate.activated_at == NOW
 
 
-def test_blocked_cutover_payload_materializes_one_stable_urgent_issue(monkeypatch):
-    cutover = NOW - timedelta(seconds=1)
-    monkeypatch.setattr(
-        attendance_exceptions.app_settings,
-        "get_setting",
-        lambda _key: {
-            "item_key": "untrusted",
-            "cutover_at": cutover.isoformat(),
-            "checked_at": NOW.isoformat(),
-            "blockers": ["mirror_stale"],
-        },
-    )
-
-    issue = attendance_exceptions._cutover_blocked_issue(NOW.date())
-
-    assert issue is not None
-    assert issue.item_key == attendance_readiness.cutover_blocked_item_key(cutover)
-    assert issue.priority == "urgent"
-    assert issue.employee_name is None
-
-
-def test_settlement_rechecks_locked_pending_config_and_loses_duplicate_race(monkeypatch):
-    cutover = NOW - timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(NOW - timedelta(minutes=1), "old", None),
-    )
-    already_activated = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(NOW - timedelta(minutes=1), "new", NOW),
-    )
-    cursor = _AtomicCursor(_raw_config(already_activated))
-    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _CursorContext(cursor))
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "set_rollout_config",
-        lambda *_args, **_kwargs: pytest.fail("duplicate activation cannot mutate"),
-    )
-    report = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-
-    assert attendance_readiness._settle_due_cutover(
-        expected_config=pending,
-        report=report,
-        now_utc=NOW,
-    ) == "superseded"
-
-
-def test_settlement_rejects_changed_bound_source_before_any_activation_write(monkeypatch):
-    cutover = NOW - timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(NOW - timedelta(minutes=1), "old", None),
-    )
-    cursor = _AtomicCursor(_raw_config(pending))
-    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _CursorContext(cursor))
-    monkeypatch.setattr(attendance_readiness, "_lock_readiness_sources_cur", lambda cur: None)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_source_fingerprints",
-        lambda **_kwargs: ("local-new", "production-old"),
-    )
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "set_rollout_config",
-        lambda *_args, **_kwargs: pytest.fail("stale decision cannot mutate"),
-    )
-    report = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    decision = attendance_readiness.DecisionSnapshot(
-        report, attendance_readiness.report_digest(report), "local-old", "production-old"
-    )
-
-    assert attendance_readiness._settle_due_cutover(
-        expected_config=pending,
-        report=report,
-        decision=decision,
-        now_utc=NOW,
-    ) == "superseded"
-    assert not any(
-        "INSERT INTO attendance_strict_days" in sql for sql, _ in cursor.statements
-    )
-
-
-def test_settlement_rejects_a_tampered_frozen_meter_binding(monkeypatch):
-    cutover = NOW - timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(NOW - timedelta(minutes=1), "old", None),
-    )
-    cursor = _AtomicCursor(_raw_config(pending))
-    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _CursorContext(cursor))
-    monkeypatch.setattr(attendance_readiness, "_lock_readiness_sources_cur", lambda cur: None)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_source_fingerprints",
-        lambda **_kwargs: ("local", "production"),
-    )
-    monkeypatch.setattr(
-        attendance_readiness.attendance_location_policy,
-        "set_rollout_config",
-        lambda *_args, **_kwargs: pytest.fail("tampered meter proof cannot mutate"),
-    )
-    report = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    digest = attendance_readiness.report_digest(report)
-    original = attendance_readiness.DecisionSnapshot(
-        report=report,
-        report_digest=digest,
-        local_source_fingerprint="local",
-        production_fingerprint="production",
-        frozen_production_fingerprint="meter-a",
-        source_binding_digest=attendance_readiness._decision_binding_digest(
-            digest, "local", "production", "meter-a"
+def test_activated_cutover_stays_strict_but_reports_recalc_cache_pending(monkeypatch):
+    cursor = _ActivationCursor()
+    cutover = NOW - timedelta(minutes=1)
+    queue_ready = {"value": False}
+    statuses = []
+    activated = replace(
+        _pending_live(cutover),
+        live_gate=attendance_location_policy.LiveGate(
+            NOW - timedelta(minutes=2), "b" * 64, NOW - timedelta(minutes=1)
         ),
     )
-    tampered = replace(original, frozen_production_fingerprint="meter-b")
-
-    assert attendance_readiness._settle_due_cutover(
-        expected_config=pending,
-        report=report,
-        decision=tampered,
-        now_utc=NOW,
-    ) == "superseded"
-
-
-def test_prior_strict_day_survives_failed_cutover_rollback(monkeypatch):
-    prior = date(2026, 8, 31)
-    monkeypatch.setattr(attendance_location_policy, "strict_days", lambda: {prior})
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(attendance_readiness, "_lock_rollout_config_cur", lambda _cur: activated)
     monkeypatch.setattr(
-        attendance_location_policy,
-        "get_rollout_config",
-        lambda: attendance_location_policy.RolloutConfig("shadow", None, None),
+        attendance_readiness,
+        "_cutover_queue_state_cur",
+        lambda *_a: "ready" if queue_ready["value"] else "pending",
     )
-
-    assert attendance_location_policy.day_is_strict(prior) is True
-
-
-def test_recalc_completion_takes_rollout_lock_before_queue_row(monkeypatch):
-    day = date(2026, 9, 1)
-    lease = NOW + timedelta(minutes=15)
-
-    class Cursor:
-        def __init__(self):
-            self.statements = []
-            self.row = None
-
-        def execute(self, sql, params=None):
-            normalized = " ".join(sql.split())
-            self.statements.append(normalized)
-            if normalized.startswith("SELECT day, attempt_count"):
-                self.row = {
-                    "day": day,
-                    "attempt_count": 1,
-                    "started_at": lease,
-                    "completed_at": None,
-                }
-            elif "RETURNING day" in normalized:
-                self.row = {"day": day}
-            else:
-                self.row = None
-
-        def fetchone(self):
-            return self.row
-
-    cursor = Cursor()
-    monkeypatch.setattr(attendance_recalc.db, "cursor", lambda: _CursorContext(cursor))
-    monkeypatch.setattr(precompute, "store_prepared_day", lambda *_args, **_kwargs: 2)
-
-    assert attendance_recalc._complete_claim(
-        attendance_recalc.RecalcClaim(day, 1, lease),
-        SimpleNamespace(day=day, expected_match_state=None),
-        NOW,
-    ) == 2
-    assert cursor.statements[0] == (
-        "LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE"
-    )
-
-
-def test_ordinary_precompute_is_fenced_until_cutover_recalc_completes(monkeypatch):
-    day = date(2026, 9, 1)
-    prepared = precompute.PreparedProductionDay(
-        day=day,
-        rows=(),
-        strict_day=day,
-        expected_match_state="strict",
-        source_fingerprint="strict-source",
-        request_fingerprint="strict-request-source",
-    )
-
-    class Cursor:
-        def __init__(self):
-            self.row = None
-
-        def execute(self, sql, params=None):
-            normalized = " ".join(sql.split())
-            if normalized.startswith("SELECT s.reason"):
-                self.row = {"reason": "live_cutover", "completed_at": None}
-            else:
-                self.row = None
-
-        def fetchone(self):
-            return self.row
-
     monkeypatch.setattr(
-        attendance_location_policy,
-        "match_state_for_day_cur",
-        lambda *_args, **_kwargs: "strict",
-    )
-    monkeypatch.setattr(production_history, "lock_strict_sources_cur", lambda _cur: None)
-    monkeypatch.setattr(
-        production_history,
-        "strict_local_source_fingerprint",
-        lambda _day, *, cur: "strict-source",
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: statuses.append((key, value, cur)),
     )
 
-    with pytest.raises(precompute.CutoverRecalcPending):
-        precompute._validate_prepared_match_state_cur(
-            Cursor(), prepared
+    result = attendance_readiness.activate_due_cutover(NOW)
+
+    assert result.status == "recalculation_pending"
+    assert (
+        attendance_location_policy._match_state_from_config(
+            cutover.astimezone(shift_config.SITE_TZ).date(),
+            config=activated,
+            now_utc=NOW,
         )
+        == "strict"
+    )
+    assert statuses[-1][1]["status"] == "recalculation_pending"
 
-    precompute._validate_prepared_match_state_cur(
-        Cursor(), prepared, allow_cutover_recalc=True
+    queue_ready["value"] = True
+    assert attendance_readiness.activate_due_cutover(NOW).status == "active"
+    assert statuses[-1][1] == {"status": "active", "cutover_at": cutover.isoformat()}
+
+
+def test_cutover_queue_ready_requires_one_legal_terminal_row():
+    completed = NOW - timedelta(minutes=1)
+    rows = iter(
+        [
+            {
+                "attempt_count": 1,
+                "started_at": None,
+                "completed_at": completed,
+                "cache_started_at": NOW,
+                "cache_ready_at": completed - timedelta(seconds=1),
+                "last_error": "stale",
+            },
+            {
+                "attempt_count": 0,
+                "started_at": None,
+                "completed_at": completed,
+                "cache_started_at": None,
+                "cache_ready_at": completed + timedelta(seconds=1),
+                "last_error": None,
+            },
+        ]
     )
 
+    class QueueCursor:
+        def execute(self, _sql, _params):
+            pass
 
-def test_cutover_fence_does_not_reset_the_active_recalc_claim(monkeypatch):
-    day = date(2026, 9, 1)
-    prepared = precompute.PreparedProductionDay(
-        day=day,
-        rows=(),
-        strict_day=day,
-        expected_match_state="strict",
-        source_fingerprint="strict-source",
-        request_fingerprint="strict-request-source",
-    )
-    monkeypatch.setattr(precompute, "prepare_day", lambda *_args: prepared)
-    queued = []
-    monkeypatch.setattr(
-        attendance_readiness.attendance_mirror,
-        "ensure_recalc_queued",
-        lambda days, reason, **kwargs: queued.append(
-            (tuple(days), reason, kwargs["source_fingerprint"])
+        def fetchone(self):
+            return next(rows)
+
+    cursor = QueueCursor()
+    assert attendance_readiness._cutover_queue_ready_cur(cursor, DAY) is False
+    assert attendance_readiness._cutover_queue_ready_cur(cursor, DAY) is True
+
+
+def test_activated_cutover_invalid_terminal_queue_never_releases_fence(monkeypatch):
+    cutover = NOW - timedelta(minutes=1)
+    completed = NOW - timedelta(minutes=2)
+    activated = replace(
+        _pending_live(cutover),
+        live_gate=attendance_location_policy.LiveGate(
+            NOW - timedelta(minutes=3),
+            "b" * 64,
+            NOW - timedelta(minutes=1),
         ),
+    )
+    statuses = []
+
+    class QueueCursor(_ActivationCursor):
+        def __init__(self):
+            super().__init__()
+            self.row = None
+
+        def execute(self, sql, params=None):
+            super().execute(sql, params)
+            if "FROM attendance_recalc_queue WHERE day" in " ".join(sql.split()):
+                self.row = {
+                    "attempt_count": 1,
+                    "started_at": None,
+                    "completed_at": completed,
+                    "cache_started_at": NOW,
+                    "cache_ready_at": completed - timedelta(seconds=1),
+                    "last_error": "stale",
+                }
+            else:
+                self.row = None
+
+        def fetchone(self):
+            return self.row
+
+    cursor = QueueCursor()
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(attendance_readiness, "_lock_rollout_config_cur", lambda _cur: activated)
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: statuses.append((key, value, cur)),
+    )
+
+    result = attendance_readiness.activate_due_cutover(NOW)
+
+    assert result.status == "recalculation_pending"
+    assert result.blockers == ("attendance_recalculation_invalid",)
+    assert statuses[-1][1] == {
+        "status": "recalculation_pending",
+        "cutover_at": cutover.isoformat(),
+        "blockers": ["attendance_recalculation_invalid"],
+    }
+
+
+def test_cutover_recalculation_fences_ordinary_precompute_until_cache_ready(monkeypatch):
+    cutover = NOW - timedelta(minutes=1)
+    config = replace(
+        _pending_live(cutover),
+        live_gate=attendance_location_policy.LiveGate(
+            NOW - timedelta(minutes=2), "b" * 64, NOW - timedelta(minutes=1)
+        ),
+    )
+    status = {
+        "value": {
+            "status": "recalculation_pending",
+            "cutover_at": cutover.isoformat(),
+        }
+    }
+    prepared = precompute.PreparedProductionDay(DAY, (), DAY, "strict")
+    calls = []
+    queue = {
+        "attempt_count": 1,
+        "started_at": None,
+        "completed_at": NOW - timedelta(seconds=2),
+        "cache_started_at": None,
+        "cache_ready_at": NOW - timedelta(seconds=1),
+        "last_error": None,
+    }
+    monkeypatch.setattr(precompute, "prepare_day", lambda *_a: calls.append("prepare") or prepared)
+    monkeypatch.setattr(
+        precompute,
+        "_validate_prepared_match_state_cur",
+        lambda *_a: calls.append("validate"),
     )
     monkeypatch.setattr(
         precompute,
-        "store_prepared_day",
-        lambda *_args, **_kwargs: pytest.fail("direct strict write bypassed queue"),
+        "_upsert_production_daily_cur",
+        lambda *_a, **_k: calls.append("write") or 1,
     )
     monkeypatch.setattr(
-        attendance_readiness.attendance_mirror,
-        "enqueue_recalc",
-        lambda *_args, **_kwargs: pytest.fail("active cutover claim must not be reset"),
+        db,
+        "cursor",
+        lambda: _cursor(_OrdinaryFenceCursor(_rollout_value(config), status["value"], queue)),
     )
 
-    assert precompute.precompute_day(day, object()) == {
-        "day": day.isoformat(),
+    pending_result = precompute.precompute_day(DAY, object())
+
+    assert pending_result == {
+        "day": DAY.isoformat(),
         "rows_written": 0,
-        "queued": True,
+        "skipped": "cutover_recalculation_pending",
     }
-    assert queued == [((day,), "strict_direct_refresh", "strict-request-source")]
+    assert calls == []
 
+    later_day = DAY + timedelta(days=1)
+    later_result = precompute.precompute_day(later_day, object())
+    assert later_result == {
+        "day": later_day.isoformat(),
+        "rows_written": 0,
+        "skipped": "cutover_recalculation_pending",
+    }
+    assert calls == []
 
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_sync_state_persists_the_open_row_observation_clock():
-    from zira_dashboard import db
+    # The dedicated attendance-recalculation worker calls prepare/store
+    # directly, so it remains the sole writer while ordinary refresh is fenced.
+    assert precompute.store_prepared_day(prepared, cur=object()) == 1
+    assert calls == ["validate", "write"]
 
-    db.init_pool()
-    db.bootstrap_schema()
-    columns = db.query(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema = current_schema() "
-        "AND table_name = 'odoo_attendance_sync_state' "
-        "AND column_name = 'last_incremental_observed_at'"
-    )
-
-    assert columns == [{"column_name": "last_incremental_observed_at"}]
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_two_due_warmers_build_one_boundary_report(monkeypatch):
-    from zira_dashboard import app_settings, db
-
-    db.init_pool()
-    checked = datetime.now(UTC) - timedelta(seconds=1)
-    cutover = checked - timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live", cutover, attendance_location_policy.LiveGate(checked, "scheduled", None)
-    )
-    app_settings.set_setting("odoo_attendance_location", _raw_config(pending))
-    entered = Event()
-    release = Event()
-    count_lock = Lock()
-    build_count = 0
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-
-    def build(*_args, **_kwargs):
-        nonlocal build_count
-        with count_lock:
-            build_count += 1
-        entered.set()
-        assert release.wait(timeout=5)
-        return _decision(ready)
-
-    monkeypatch.setattr(attendance_readiness, "build_decision_snapshot", build)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_settle_due_cutover",
-        lambda **_kwargs: "activated",
-    )
-    results = []
-    errors = []
-
-    def run():
-        try:
-            results.append(attendance_readiness.activate_due_cutover(checked, production_client=object()))
-        except Exception as exc:  # pragma: no cover - asserted in parent thread
-            errors.append(exc)
-
-    first = Thread(target=run)
-    second = Thread(target=run)
-    first.start()
-    assert entered.wait(timeout=5)
-    second.start()
-    second.join(timeout=5)
-    release.set()
-    first.join(timeout=5)
-    try:
-        assert not errors
-        assert build_count == 1
-        assert sorted(results) == ["activated", "busy"]
-    finally:
-        app_settings.set_setting(
-            "odoo_attendance_location",
-            {"mode": "shadow", "cutover_at": None, "live_gate": None},
-        )
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_activation_commits_gate_strict_day_and_recalc_together(monkeypatch):
-    from zira_dashboard import app_settings, db
-
-    monkeypatch.undo()
-    db.init_pool()
-    now, cutover, original_schedule = _set_persisted_due_boundary(db)
-    day = cutover.date()
-    pending = attendance_location_policy.RolloutConfig(
-        "live", cutover, attendance_location_policy.LiveGate(now - timedelta(minutes=1), "scheduled", None)
-    )
-    monkeypatch.setattr(attendance_location_policy, "_utc_now", lambda: datetime.now(UTC))
-    with db.cursor() as cur:
-        cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_rollout_audit WHERE cutover_at = %s", (cutover,))
-    app_settings.set_setting("odoo_attendance_location", _raw_config(pending))
-    local_fp, production_fp = attendance_readiness._source_fingerprints(now_utc=now)
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    decision = _bound_decision(ready, local_fp, production_fp, checked_at=now)
-
-    try:
-        assert attendance_readiness._settle_due_cutover(
-            expected_config=pending,
-            report=ready,
-            decision=decision,
-            now_utc=now,
-        ) == "activated"
-        config = attendance_location_policy.get_rollout_config_strict()
-        assert config.live_gate is not None
-        assert now <= config.live_gate.activated_at <= now + timedelta(seconds=5)
-        assert db.query("SELECT reason FROM attendance_strict_days WHERE day = %s", (day,)) == [
-            {"reason": "live_cutover"}
-        ]
-        assert db.query("SELECT reason FROM attendance_recalc_queue WHERE day = %s", (day,)) == [
-            {"reason": "live_cutover"}
-        ]
-        assert db.query(
-            "SELECT event_kind, rollout_mode, cutover_at, report_digest "
-            "FROM attendance_rollout_audit WHERE cutover_at = %s",
-            (cutover,),
-        ) == [{
-            "event_kind": "live_activated",
-            "rollout_mode": "live",
-            "cutover_at": cutover.astimezone(UTC),
-            "report_digest": attendance_readiness.report_digest(ready),
-        }]
-    finally:
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_rollout_audit WHERE cutover_at = %s", (cutover,))
-        app_settings.set_setting(
-            "odoo_attendance_location",
-            {"mode": "shadow", "cutover_at": None, "live_gate": None},
-        )
-        _restore_persisted_boundary(db, original_schedule)
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_activation_rolls_back_every_success_write_on_enqueue_failure(monkeypatch):
-    from zira_dashboard import app_settings, db
-
-    monkeypatch.undo()
-    db.init_pool()
-    now, cutover, original_schedule = _set_persisted_due_boundary(db)
-    day = cutover.date()
-    pending = attendance_location_policy.RolloutConfig(
-        "live", cutover, attendance_location_policy.LiveGate(now - timedelta(minutes=1), "scheduled", None)
-    )
-    monkeypatch.setattr(attendance_location_policy, "_utc_now", lambda: datetime.now(UTC))
-    with db.cursor() as cur:
-        cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_rollout_audit WHERE cutover_at = %s", (cutover,))
-    app_settings.set_setting("odoo_attendance_location", _raw_config(pending))
-    local_fp, production_fp = attendance_readiness._source_fingerprints(now_utc=now)
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    decision = _bound_decision(ready, local_fp, production_fp, checked_at=now)
-    monkeypatch.setattr(
-        attendance_readiness.attendance_mirror,
-        "_enqueue_recalc_cur",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("injected enqueue failure")),
-    )
-
-    try:
-        with pytest.raises(RuntimeError, match="injected enqueue failure"):
-            attendance_readiness._settle_due_cutover(
-                expected_config=pending,
-                report=ready,
-                decision=decision,
-                now_utc=now,
-            )
-        assert attendance_location_policy.get_rollout_config_strict() == pending
-        assert db.query("SELECT day FROM attendance_strict_days WHERE day = %s", (day,)) == []
-        assert db.query("SELECT day FROM attendance_recalc_queue WHERE day = %s", (day,)) == []
-        assert db.query(
-            "SELECT id FROM attendance_rollout_audit WHERE cutover_at = %s",
-            (cutover,),
-        ) == []
-    finally:
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_rollout_audit WHERE cutover_at = %s", (cutover,))
-        app_settings.set_setting(
-            "odoo_attendance_location",
-            {"mode": "shadow", "cutover_at": None, "live_gate": None},
-        )
-        _restore_persisted_boundary(db, original_schedule)
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_concurrent_live_schedules_use_one_exact_config_cas(monkeypatch):
-    from zira_dashboard import app_settings, db
-
-    db.init_pool()
-    checked = datetime.now(UTC) - timedelta(seconds=1)
-    previous = attendance_location_policy.RolloutConfig("shadow", None, None)
-    app_settings.set_setting("odoo_attendance_location", _raw_config(previous))
-    monkeypatch.setattr(attendance_readiness, "_utc_now", lambda: checked)
-    monkeypatch.setattr(attendance_readiness.shift_config, "shift_start_for", lambda _day: datetime.min.time().replace(hour=7))
-    monkeypatch.setattr(attendance_readiness.shift_config, "is_workday", lambda _day: True)
-    local_fp, production_fp = attendance_readiness._source_fingerprints(now_utc=checked)
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    decision = _bound_decision(ready, local_fp, production_fp, checked_at=checked)
-    configs = [
-        attendance_location_policy.RolloutConfig(
-            "live",
-            datetime(2099, 1, day, 7, tzinfo=attendance_readiness.shift_config.SITE_TZ),
-            attendance_location_policy.LiveGate(checked, decision.report_digest, None),
-        )
-        for day in (5, 6)
+    status["value"] = {"status": "active", "cutover_at": cutover.isoformat()}
+    assert precompute.precompute_day(DAY, object())["rows_written"] == 1
+    assert precompute.precompute_day(later_day, object())["rows_written"] == 1
+    assert calls == [
+        "validate",
+        "write",
+        "prepare",
+        "validate",
+        "write",
+        "prepare",
+        "validate",
+        "write",
     ]
-    results = []
-
-    def save(config):
-        try:
-            attendance_readiness._store_pending_cutover(
-                config,
-                checked_at=checked,
-                expected_config=previous,
-                decision=decision,
-            )
-            results.append("saved")
-        except ValueError as exc:
-            results.append(str(exc))
-
-    threads = [Thread(target=save, args=(config,)) for config in configs]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=10)
-    try:
-        assert all(not thread.is_alive() for thread in threads)
-        assert sorted(results) == ["live_schedule_superseded", "saved"]
-        assert attendance_location_policy.get_rollout_config_strict() in configs
-    finally:
-        app_settings.set_setting(
-            "odoo_attendance_location",
-            {"mode": "shadow", "cutover_at": None, "live_gate": None},
-        )
 
 
-@pytest.mark.parametrize("requested_mode", ["off", "shadow"])
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_stale_non_live_settings_cannot_overwrite_boundary_activation(
-    monkeypatch,
-    requested_mode,
-):
-    from zira_dashboard import app_settings, db
-    from zira_dashboard.routes import settings
-
-    monkeypatch.undo()
-    db.init_pool()
-    now, cutover, original_schedule = _set_persisted_due_boundary(db)
-    day = cutover.date()
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(now - timedelta(minutes=1), "scheduled", None),
-    )
-    monkeypatch.setattr(attendance_location_policy, "_utc_now", lambda: datetime.now(UTC))
-    with db.cursor() as cur:
-        cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_rollout_audit WHERE cutover_at = %s", (cutover,))
-    app_settings.set_setting("odoo_attendance_location", _raw_config(pending))
-    local_fp, production_fp = attendance_readiness._source_fingerprints(now_utc=now)
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    decision = _bound_decision(ready, local_fp, production_fp, checked_at=now)
-    activation_inside_transaction = Event()
-    allow_activation_commit = Event()
-    settings_started = Event()
-    settings_finished = Event()
-    results = []
-    original_audit = attendance_readiness._record_rollout_audit_cur
-
-    def hold_activation_transaction(cur, **kwargs):
-        original_audit(cur, **kwargs)
-        if kwargs.get("event_kind") == "live_activated":
-            activation_inside_transaction.set()
-            assert allow_activation_commit.wait(timeout=5)
-
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_record_rollout_audit_cur",
-        hold_activation_transaction,
-    )
-
-    def boundary_activation():
-        results.append(
-            attendance_readiness._settle_due_cutover(
-                expected_config=pending,
-                report=ready,
-                decision=decision,
-                now_utc=now,
-            )
-        )
-
-    def stale_settings_request():
-        assert activation_inside_transaction.wait(timeout=5)
-        settings_started.set()
-        try:
-            settings._save_non_live_attendance_location(
-                mode=requested_mode,
-                cutover_at=(cutover + timedelta(days=1) if requested_mode == "shadow" else None),
-                selected_departments=set(),
-                departments=(),
-                expected_config=pending,
-            )
-        except ValueError as exc:
-            results.append(str(exc))
-        finally:
-            settings_finished.set()
-
-    activation_thread = Thread(target=boundary_activation)
-    settings_thread = Thread(target=stale_settings_request)
-    settings_thread.start()
-    activation_thread.start()
-    assert activation_inside_transaction.wait(timeout=5)
-    assert settings_started.wait(timeout=5)
-    assert settings_finished.wait(timeout=0.2) is False
-    allow_activation_commit.set()
-    activation_thread.join(timeout=10)
-    settings_thread.join(timeout=10)
-    try:
-        assert not activation_thread.is_alive()
-        assert not settings_thread.is_alive()
-        assert sorted(results) == ["activated", "rollout_save_superseded"]
-        stored = attendance_location_policy.get_rollout_config_strict()
-        assert stored.mode == "live"
-        assert stored.live_gate is not None
-        assert now <= stored.live_gate.activated_at <= now + timedelta(seconds=5)
-    finally:
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_rollout_audit WHERE cutover_at = %s", (cutover,))
-        app_settings.set_setting(
-            "odoo_attendance_location",
-            {"mode": "shadow", "cutover_at": None, "live_gate": None},
-        )
-        _restore_persisted_boundary(db, original_schedule)
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_prepared_legacy_snapshot_is_rejected_after_boundary_activation(
+def test_ordinary_precompute_rechecks_cutover_queue_inside_store_transaction(
     monkeypatch,
 ):
-    from zira_dashboard import app_settings, db
-
-    db.init_pool()
-    day = date(2099, 1, 8)
-    cutover = datetime(2099, 1, 8, 7, tzinfo=attendance_readiness.shift_config.SITE_TZ)
-    now = cutover.astimezone(UTC) + timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(now - timedelta(minutes=1), "scheduled", None),
-    )
-    prepared = precompute.PreparedProductionDay(
-        day,
-        ({
-            "day": day,
-            "emp_id": "101",
-            "name": "Worker 101",
-            "wc_name": "WC A",
-            "units": 7.0,
-            "downtime": 0.0,
-            "hours": 1.0,
-            "days_worked": 1.0,
-            "excluded_minutes": 0.0,
-        },),
-        None,
-        "legacy",
-    )
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    monkeypatch.setattr(attendance_location_policy, "_utc_now", lambda: now)
-    with db.cursor() as cur:
-        cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-    app_settings.set_setting("odoo_attendance_location", _raw_config(pending))
-    activated = Event()
-    results = []
-
-    def activate():
-        results.append(
-            attendance_readiness._settle_due_cutover(
-                expected_config=pending,
-                report=ready,
-                now_utc=now,
-            )
-        )
-        activated.set()
-
-    def stale_store():
-        assert activated.wait(timeout=5)
-        try:
-            precompute.store_prepared_day(prepared)
-        except production_history.ProductionSourceUnavailable:
-            results.append("legacy_rejected")
-
-    threads = [Thread(target=stale_store), Thread(target=activate)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=10)
-    try:
-        assert all(not thread.is_alive() for thread in threads)
-        assert sorted(results) == ["activated", "legacy_rejected"]
-        assert db.query("SELECT emp_id FROM production_daily WHERE day = %s", (day,)) == []
-    finally:
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-        app_settings.set_setting(
-            "odoo_attendance_location",
-            {"mode": "shadow", "cutover_at": None, "live_gate": None},
-        )
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_activation_and_recalc_completion_share_lock_order_without_deadlock(
-    monkeypatch,
-):
-    from zira_dashboard import app_settings, db
-
-    db.init_pool()
-    day = date(2099, 1, 9)
-    cutover = datetime(2099, 1, 9, 7, tzinfo=attendance_readiness.shift_config.SITE_TZ)
-    now = cutover.astimezone(UTC) + timedelta(seconds=1)
-    lease = now + timedelta(minutes=15)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(now - timedelta(minutes=1), "scheduled", None),
-    )
-    prepared = precompute.PreparedProductionDay(day, (), None, None)
-    claim = attendance_recalc.RecalcClaim(day, 1, lease)
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    monkeypatch.setattr(attendance_location_policy, "_utc_now", lambda: now)
-    with db.cursor() as cur:
-        cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-        cur.execute(
-            "INSERT INTO attendance_recalc_queue "
-            "(day, reason, requested_at, started_at, attempt_count) "
-            "VALUES (%s, %s, %s, %s, 1)",
-            (day, "source_change", now - timedelta(minutes=1), lease),
-        )
-    app_settings.set_setting("odoo_attendance_location", _raw_config(pending))
-    start = Event()
-    results = []
-    errors = []
-
-    def activate():
-        assert start.wait(timeout=5)
-        try:
-            results.append(
-                attendance_readiness._settle_due_cutover(
-                    expected_config=pending,
-                    report=ready,
-                    now_utc=now,
-                )
-            )
-        except Exception as exc:  # pragma: no cover - asserted in parent thread
-            errors.append(exc)
-
-    def complete():
-        assert start.wait(timeout=5)
-        try:
-            results.append(attendance_recalc._complete_claim(claim, prepared, now))
-        except Exception as exc:  # pragma: no cover - asserted in parent thread
-            errors.append(exc)
-
-    threads = [Thread(target=activate), Thread(target=complete)]
-    for thread in threads:
-        thread.start()
-    start.set()
-    for thread in threads:
-        thread.join(timeout=10)
-    try:
-        assert all(not thread.is_alive() for thread in threads)
-        assert errors == []
-        assert "activated" in results
-        assert any(value in (None, 0) for value in results)
-    finally:
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-        app_settings.set_setting(
-            "odoo_attendance_location",
-            {"mode": "shadow", "cutover_at": None, "live_gate": None},
-        )
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_ordinary_live_write_waits_for_cutover_recalc_completion(monkeypatch):
-    from zira_dashboard import app_settings, db
-
-    db.init_pool()
-    day = date(2099, 1, 12)
-    cutover = datetime(2099, 1, 12, 7, tzinfo=attendance_readiness.shift_config.SITE_TZ)
-    now = cutover.astimezone(UTC) + timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(now - timedelta(minutes=1), "scheduled", None),
-    )
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    row = {
-        "day": day,
-        "emp_id": "101",
-        "name": "Worker 101",
-        "wc_name": "WC A",
-        "units": 9.0,
-        "downtime": 0.0,
-        "hours": 1.0,
-        "days_worked": 1.0,
-        "excluded_minutes": 0.0,
-    }
-    source_fingerprint = production_history.strict_local_source_fingerprint(day)
-    prepared = precompute.PreparedProductionDay(
-        day, (row,), day, "strict", source_fingerprint, "strict-request-source"
-    )
-    monkeypatch.setattr(attendance_location_policy, "_utc_now", lambda: now)
-    with db.cursor() as cur:
-        cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-        cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-    app_settings.set_setting("odoo_attendance_location", _raw_config(pending))
-    try:
-        assert attendance_readiness._settle_due_cutover(
-            expected_config=pending,
-            report=ready,
-            now_utc=now,
-        ) == "activated"
-        with pytest.raises(precompute.CutoverRecalcPending):
-            precompute.store_prepared_day(prepared)
-        assert db.query("SELECT units FROM production_daily WHERE day = %s", (day,)) == []
-
-        lease = now + timedelta(minutes=15)
-        with db.cursor() as cur:
-            cur.execute(
-                "UPDATE attendance_recalc_queue SET started_at = %s, attempt_count = 1 "
-                "WHERE day = %s",
-                (lease, day),
-            )
-        assert attendance_recalc._complete_claim(
-            attendance_recalc.RecalcClaim(day, 1, lease),
-            prepared,
-            now,
-        ) == 1
-        assert db.query("SELECT units FROM production_daily WHERE day = %s", (day,)) == [
-            {"units": 9.0}
-        ]
-    finally:
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM production_daily WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-        app_settings.set_setting(
-            "odoo_attendance_location",
-            {"mode": "shadow", "cutover_at": None, "live_gate": None},
-        )
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_schedule_drift_blocks_due_live_activation(monkeypatch):
-    from zira_dashboard import app_settings, db
-
-    db.init_pool()
-    db.bootstrap_schema()
-    monkeypatch.undo()
-    day = date(2099, 9, 1)
-    cutover = datetime.combine(
-        day,
-        datetime.min.time().replace(hour=7),
-        tzinfo=attendance_readiness.shift_config.SITE_TZ,
-    ).astimezone(UTC)
-    now = cutover + timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "live",
-        cutover,
-        attendance_location_policy.LiveGate(now - timedelta(minutes=1), "scheduled", None),
-    )
-    ready = attendance_readiness.ReadinessReport(
-        True, 1.0, 2.0, 0, 0, 0.0, None, 0, 0, 0.0, 0, 0.0, 0, 0.0,
-        0.0, None, 0.0, 0, 0, 0, 0, (),
-    )
-    prior_schedule = db.query("SELECT * FROM global_schedule WHERE id = 1")
-    prior_rollout = app_settings.get_setting("odoo_attendance_location")
-    monkeypatch.setattr(attendance_location_policy, "_utc_now", lambda: now)
-    try:
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO global_schedule "
-                "(id, shift_start, shift_end, work_weekdays, breaks, updated_at) "
-                "VALUES (1, '08:00', '15:30', %s, '[]'::jsonb, now()) "
-                "ON CONFLICT (id) DO UPDATE SET shift_start = EXCLUDED.shift_start, "
-                "shift_end = EXCLUDED.shift_end, work_weekdays = EXCLUDED.work_weekdays, "
-                "breaks = EXCLUDED.breaks, updated_at = now()",
-                ([day.weekday()],),
-            )
-            app_settings.set_setting(
-                "odoo_attendance_location",
-                _raw_config(pending),
-                cur=cur,
-            )
-            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-
-        assert attendance_readiness._settle_due_cutover(
-            expected_config=pending,
-            report=ready,
-            now_utc=now,
-        ) == "rolled_back"
-        assert attendance_location_policy.get_rollout_config_strict() == (
-            attendance_location_policy.RolloutConfig("shadow", None, None)
-        )
-        alert = app_settings.get_setting("odoo_attendance_cutover_blocked")
-        assert alert["blockers"] == ["cutover_boundary_changed"]
-        assert db.query("SELECT day FROM attendance_strict_days WHERE day = %s", (day,)) == []
-        assert db.query("SELECT day FROM attendance_recalc_queue WHERE day = %s", (day,)) == []
-    finally:
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM attendance_strict_days WHERE day = %s", (day,))
-            cur.execute("DELETE FROM attendance_recalc_queue WHERE day = %s", (day,))
-            cur.execute(
-                "DELETE FROM attendance_rollout_audit WHERE cutover_at = %s",
-                (cutover,),
-            )
-            cur.execute(
-                "DELETE FROM app_settings WHERE key = ANY(%s)",
-                (["odoo_attendance_location", "odoo_attendance_cutover_blocked"],),
-            )
-            if prior_rollout is not None:
-                app_settings.set_setting(
-                    "odoo_attendance_location",
-                    prior_rollout,
-                    cur=cur,
-                )
-            cur.execute("DELETE FROM global_schedule WHERE id = 1")
-            if prior_schedule:
-                row = prior_schedule[0]
-                cur.execute(
-                    "INSERT INTO global_schedule "
-                    "(id, shift_start, shift_end, work_weekdays, breaks, updated_at) "
-                    "VALUES (1, %s, %s, %s, %s::jsonb, %s)",
-                    (
-                        row["shift_start"],
-                        row["shift_end"],
-                        row["work_weekdays"],
-                        json.dumps(row["breaks"]),
-                        row["updated_at"],
-                    ),
-                )
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_schedule_drift_keeps_pending_rollback_strict(monkeypatch):
-    from zira_dashboard import app_settings, db
-
-    db.init_pool()
-    db.bootstrap_schema()
-    monkeypatch.undo()
-    activated_day = date(2099, 8, 31)
-    rollback_day = date(2099, 9, 1)
-    activated = datetime.combine(
-        activated_day,
-        datetime.min.time().replace(hour=7),
-        tzinfo=attendance_readiness.shift_config.SITE_TZ,
-    ).astimezone(UTC)
-    rollback = datetime.combine(
-        rollback_day,
-        datetime.min.time().replace(hour=7),
-        tzinfo=attendance_readiness.shift_config.SITE_TZ,
-    ).astimezone(UTC)
-    now = rollback + timedelta(seconds=1)
-    pending = attendance_location_policy.RolloutConfig(
-        "shadow",
-        rollback,
-        attendance_location_policy.LiveGate(
-            activated - timedelta(minutes=1),
-            "activated",
-            activated,
+    cutover = NOW - timedelta(minutes=1)
+    config = replace(
+        _pending_live(cutover),
+        live_gate=attendance_location_policy.LiveGate(
+            NOW - timedelta(minutes=2), "b" * 64, NOW - timedelta(minutes=1)
         ),
     )
-    prior_schedule = db.query("SELECT * FROM global_schedule WHERE id = 1")
-    prior_rollout = app_settings.get_setting("odoo_attendance_location")
-    try:
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO global_schedule "
-                "(id, shift_start, shift_end, work_weekdays, breaks, updated_at) "
-                "VALUES (1, '08:00', '15:30', %s, '[]'::jsonb, now()) "
-                "ON CONFLICT (id) DO UPDATE SET shift_start = EXCLUDED.shift_start, "
-                "shift_end = EXCLUDED.shift_end, work_weekdays = EXCLUDED.work_weekdays, "
-                "breaks = EXCLUDED.breaks, updated_at = now()",
-                ([rollback_day.weekday()],),
-            )
-            app_settings.set_setting(
-                "odoo_attendance_location",
-                _raw_config(pending),
-                cur=cur,
-            )
-        monkeypatch.setattr(attendance_location_policy, "strict_days", lambda: set())
-
-        assert attendance_location_policy.match_state_for_day(
-            rollback_day,
-            now_utc=now,
-        ) == "strict"
-        assert attendance_readiness._settle_due_rollback(
-            pending,
-            now_utc=now,
-        ) == "superseded"
-        assert attendance_location_policy.get_rollout_config_strict() == pending
-        alert = app_settings.get_setting("odoo_attendance_cutover_blocked")
-        assert alert["blockers"] == ["rollback_boundary_changed"]
-    finally:
-        with db.cursor() as cur:
-            cur.execute(
-                "DELETE FROM app_settings WHERE key = ANY(%s)",
-                (["odoo_attendance_location", "odoo_attendance_cutover_blocked"],),
-            )
-            if prior_rollout is not None:
-                app_settings.set_setting(
-                    "odoo_attendance_location",
-                    prior_rollout,
-                    cur=cur,
-                )
-            cur.execute("DELETE FROM global_schedule WHERE id = 1")
-            if prior_schedule:
-                row = prior_schedule[0]
-                cur.execute(
-                    "INSERT INTO global_schedule "
-                    "(id, shift_start, shift_end, work_weekdays, breaks, updated_at) "
-                    "VALUES (1, %s, %s, %s, %s::jsonb, %s)",
-                    (
-                        row["shift_start"],
-                        row["shift_end"],
-                        row["work_weekdays"],
-                        json.dumps(row["breaks"]),
-                        row["updated_at"],
-                    ),
-                )
-
-
-def test_collect_inputs_uses_one_pending_safe_strict_bundle(monkeypatch):
-    segment = SimpleNamespace(
-        status="missing_required_location",
-        start_utc=NOW - timedelta(minutes=5),
-        end_utc=NOW,
-        app_work_center_name=None,
+    ready_queue = {
+        "attempt_count": 1,
+        "started_at": None,
+        "completed_at": NOW - timedelta(seconds=2),
+        "cache_started_at": None,
+        "cache_ready_at": NOW - timedelta(seconds=1),
+        "last_error": None,
+    }
+    pending_queue = {
+        "attempt_count": 0,
+        "started_at": None,
+        "completed_at": None,
+        "cache_started_at": None,
+        "cache_ready_at": None,
+        "last_error": None,
+    }
+    cursor = _OrdinaryFenceCursor(
+        _rollout_value(config),
+        {"status": "active", "cutover_at": cutover.isoformat()},
+        ready_queue,
     )
-    strict_inputs = SimpleNamespace(segments=(segment,))
-    calls = []
+    prepared = precompute.PreparedProductionDay(DAY, (), DAY, "strict")
+    writes = []
+    monkeypatch.setattr(attendance_readiness, "ordinary_refresh_ready", lambda _day: True)
+
+    def prepare(*_args):
+        # The exact cutover is requeued after meter/source computation but
+        # before the ordinary transaction is allowed to publish its snapshot.
+        cursor.queue = pending_queue
+        return prepared
+
+    monkeypatch.setattr(precompute, "prepare_day", prepare)
+    monkeypatch.setattr(precompute, "_validate_prepared_match_state_cur", lambda *_a: None)
     monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_db_metrics",
-        lambda _now: {
-            "baseline_complete": True,
-            "mirror_error": None,
-            "mirror_age_seconds": 1.0,
-            "last_full_sweep_age_seconds": 2.0,
-            "open_rows_not_refreshed": 0,
-            "last_sweep_deletion_count": 0,
-            "recalc_queue_age_seconds": None,
-            "recalc_queue_depth": 0,
-            "failed_corrections": 0,
-            "correction_retries_today": 0,
-            "correction_verification_failures_today": 0,
-            "failed_department_repairs": 0,
+        precompute,
+        "_upsert_production_daily_cur",
+        lambda *_a, **_k: writes.append("production") or 1,
+    )
+    monkeypatch.setattr(db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_mirror,
+        "enqueue_recalc",
+        lambda *_a, **_k: pytest.fail("fenced ordinary store mutated the queue"),
+    )
+
+    result = precompute.precompute_day(DAY, object())
+
+    assert result == {
+        "day": DAY.isoformat(),
+        "rows_written": 0,
+        "skipped": "cutover_recalculation_pending",
+    }
+    assert writes == []
+    queue_reads = [
+        operation
+        for operation in cursor.operations
+        if "FROM attendance_recalc_queue WHERE day" in operation[0]
+    ]
+    assert len(queue_reads) == 1
+    assert queue_reads[0][0].endswith("FOR SHARE")
+
+
+def test_ordinary_store_uses_one_deadlock_safe_lock_order(monkeypatch):
+    cutover = NOW - timedelta(minutes=1)
+    config = replace(
+        _pending_live(cutover),
+        live_gate=attendance_location_policy.LiveGate(
+            NOW - timedelta(minutes=2), "b" * 64, NOW - timedelta(minutes=1)
+        ),
+    )
+    cursor = _OrdinaryFenceCursor(
+        _rollout_value(config),
+        {"status": "active", "cutover_at": cutover.isoformat()},
+        {
+            "attempt_count": 1,
+            "started_at": None,
+            "completed_at": NOW - timedelta(seconds=2),
+            "cache_started_at": None,
+            "cache_ready_at": NOW - timedelta(seconds=1),
+            "last_error": None,
         },
     )
-    snapshot_mapper = lambda odoo_id: "Repair 1" if odoo_id == 71 else None
+    prepared = precompute.PreparedProductionDay(DAY, (), DAY, "strict")
+    monkeypatch.setattr(db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        precompute,
+        "_validate_prepared_match_state_cur",
+        lambda cur, _prepared: cur.execute(
+            "LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE"
+        ),
+    )
+    monkeypatch.setattr(precompute, "_upsert_production_daily_cur", lambda *_a, **_k: 1)
+
+    assert precompute.store_prepared_day(prepared) == 1
+
+    sql = [operation[0] for operation in cursor.operations]
+    config_lock = next(
+        index for index, value in enumerate(sql) if value.startswith("LOCK TABLE global_schedule")
+    )
+    readiness_lock = next(
+        index
+        for index, operation in enumerate(cursor.operations)
+        if operation[1] == (attendance_readiness._READINESS_LOCK_ID,)
+    )
+    queue_lock = next(
+        index
+        for index, value in enumerate(sql)
+        if "FROM attendance_recalc_queue WHERE day" in value and value.endswith("FOR SHARE")
+    )
+    matcher_lock = sql.index(
+        "LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE"
+    )
+    assert config_lock < readiness_lock < queue_lock < matcher_lock
+
+
+def test_malformed_rollout_fences_public_ordinary_precompute_before_source_work(
+    monkeypatch,
+):
+    cursor = _OrdinaryFenceCursor({"mode": "live", "cutover_at": "not-a-time", "live_gate": None})
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        precompute,
+        "prepare_day",
+        lambda *_a, **_k: pytest.fail("malformed rollout reached production source work"),
+    )
+
+    result = precompute.precompute_day(DAY, object())
+
+    assert result == {
+        "day": DAY.isoformat(),
+        "rows_written": 0,
+        "skipped": "cutover_recalculation_pending",
+    }
+
+
+def test_due_pending_live_fences_before_source_work_or_queue_mutation(monkeypatch):
+    cutover = NOW - timedelta(minutes=1)
+    cursor = _OrdinaryFenceCursor(_rollout_value(_pending_live(cutover)))
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        precompute,
+        "prepare_day",
+        lambda *_a, **_k: pytest.fail("pending live reached production source work"),
+    )
+    monkeypatch.setattr(
+        attendance_mirror,
+        "enqueue_recalc",
+        lambda *_a, **_k: pytest.fail("pending live mutated recalculation queue"),
+    )
+
+    result = precompute.precompute_day(DAY, object())
+
+    assert result == {
+        "day": DAY.isoformat(),
+        "rows_written": 0,
+        "skipped": "cutover_recalculation_pending",
+    }
+
+
+@pytest.mark.parametrize("stored_status", [None, {}, {"status": "broken"}])
+def test_activated_cutover_fails_closed_when_local_status_is_missing_or_malformed(
+    monkeypatch,
+    stored_status,
+):
+    cutover = NOW - timedelta(minutes=1)
+    config = replace(
+        _pending_live(cutover),
+        live_gate=attendance_location_policy.LiveGate(NOW, "b" * 64, NOW),
+    )
+    cursor = _OrdinaryFenceCursor(_rollout_value(config), stored_status)
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+
+    assert attendance_readiness.ordinary_refresh_ready(DAY) is False
+
+
+@pytest.mark.parametrize(
+    "queue_row",
+    [
+        None,
+        {
+            "attempt_count": 0,
+            "started_at": None,
+            "completed_at": None,
+            "cache_started_at": None,
+            "cache_ready_at": None,
+            "last_error": None,
+        },
+        {
+            "attempt_count": 1,
+            "started_at": None,
+            "completed_at": NOW - timedelta(minutes=2),
+            "cache_started_at": NOW,
+            "cache_ready_at": NOW - timedelta(minutes=3),
+            "last_error": "stale",
+        },
+    ],
+    ids=["missing", "pending", "invalid"],
+)
+def test_active_cutover_status_does_not_release_fence_without_ready_queue(
+    monkeypatch,
+    queue_row,
+):
+    cutover = NOW - timedelta(minutes=1)
+    config = replace(
+        _pending_live(cutover),
+        live_gate=attendance_location_policy.LiveGate(
+            NOW - timedelta(minutes=3), "b" * 64, NOW - timedelta(minutes=1)
+        ),
+    )
+    cursor = _OrdinaryFenceCursor(
+        _rollout_value(config),
+        {"status": "active", "cutover_at": cutover.isoformat()},
+        queue_row,
+    )
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+
+    assert attendance_readiness.ordinary_refresh_ready(DAY) is False
+
+
+def test_failed_boundary_recheck_rolls_back_once_with_stable_blocked_identity(monkeypatch):
+    cursor = _ActivationCursor()
+    cutover = NOW - timedelta(minutes=1)
+    calls = []
+    blocked = attendance_readiness._report_from_inputs(_ready_inputs(open_conflicts=1), NOW)
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness, "_lock_rollout_config_cur", lambda _cur: _pending_live(cutover)
+    )
     monkeypatch.setattr(
         attendance_readiness,
-        "_snapshot_work_center_mapper",
-        lambda: snapshot_mapper,
+        "_validate_configured_boundary_cur",
+        lambda _cur, value: value,
     )
+    monkeypatch.setattr(attendance_readiness, "_build_report_cur", lambda *_a: blocked)
     monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_inputs_for_day",
-        lambda day, client, now_utc, map_work_center: calls.append(
-            (day, client, now_utc, map_work_center)
-        )
-        or strict_inputs,
-    )
-    strict = {(101, "Alex"): {"Repair 1": {"units": 4.0}}}
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_attribution_from_inputs",
-        lambda day, inputs: strict,
-    )
-    run = SimpleNamespace(
-        start_utc=NOW - timedelta(minutes=4),
-        end_utc=NOW,
-        units=4.0,
-        wc_name="Repair 1",
-    )
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_unassigned_runs_from_inputs",
-        lambda day, inputs, now_utc: (run,),
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda config, *, cur=None: calls.append(("config", config, cur)),
     )
     monkeypatch.setattr(
         attendance_readiness,
-        "_compare_strict_to_current",
-        lambda day, strict_attribution, now_utc: attendance_readiness.ShadowComparison(
-            day, now_utc, True, 4.0, 1, 4.0, 4.0, None
+        "_store_blocked_cur",
+        lambda cur, *, cutover_at, report: calls.append(
+            ("blocked", cur, cutover_at, report.blockers)
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: calls.append(("status", key, value, cur)),
+    )
+
+    result = attendance_readiness.activate_due_cutover(NOW)
+
+    assert result.status == "blocked"
+    assert calls[0][1] == attendance_location_policy.RolloutConfig("shadow", None, None)
+    assert [call[0] for call in calls].count("blocked") == 1
+    assert result.blockers == tuple(sorted(result.blockers))
+
+
+def test_due_activation_revalidates_a_changed_workday_boundary_before_marking_strict(
+    monkeypatch,
+):
+    cursor = _ActivationCursor()
+    cutover = NOW - timedelta(minutes=1)
+    calls = []
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_lock_rollout_config_cur",
+        lambda _cur: _pending_live(cutover),
+    )
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(8, 0))
+    monkeypatch.setattr(shift_config, "is_workday", lambda _day: True)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_build_report_cur",
+        lambda *_a: attendance_readiness._report_from_inputs(_ready_inputs(), NOW),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_enqueue_cutover_cur",
+        lambda *_a: pytest.fail("changed boundary was marked strict"),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda config, *, cur=None: calls.append((config, cur)),
+    )
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_store_blocked_cur",
+        lambda _cur, *, cutover_at, report: calls.append((cutover_at, report.blockers)),
+    )
+
+    result = attendance_readiness.activate_due_cutover(NOW)
+
+    assert result.status == "blocked"
+    assert "cutover_boundary_required" in result.blockers
+    assert calls[0][0] == attendance_location_policy.RolloutConfig("shadow", None, None)
+
+
+@pytest.mark.parametrize("display_status_day_offset", [-10, 0, 10])
+def test_due_rollback_with_changed_boundary_restores_active_live_and_opens_one_blocker(
+    monkeypatch,
+    display_status_day_offset,
+):
+    cursor = _ActivationCursor()
+    original_cutover = datetime(2026, 8, 28, 12, tzinfo=UTC)
+    rollback_at = datetime(2026, 8, 31, 12, tzinfo=UTC)
+    gate = attendance_location_policy.LiveGate(
+        checked_at=original_cutover,
+        report_digest="d" * 64,
+        activated_at=original_cutover,
+    )
+    rollback = attendance_location_policy.RolloutConfig("shadow", rollback_at, gate)
+    report = attendance_readiness._report_from_inputs(_ready_inputs(), NOW)
+    calls = []
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(attendance_readiness, "_lock_rollout_config_cur", lambda _cur: rollback)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_cutover_status_cur",
+        lambda _cur: {
+            "status": "active",
+            "cutover_at": (
+                original_cutover + timedelta(days=display_status_day_offset)
+            ).isoformat(),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(attendance_readiness, "_build_report_cur", lambda *_a: report)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_validate_configured_boundary_cur",
+        lambda *_a: (_ for _ in ()).throw(ValueError("cutover_boundary_required")),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "restore_active_after_rejected_rollback",
+        lambda config, *, cur=None: calls.append(("restore", config, cur)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_store_blocked_cur",
+        lambda cur, *, cutover_at, report: calls.append(
+            ("blocked", cur, cutover_at, report.blockers)
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: calls.append(("status", key, value, cur)),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_enqueue_cutover_cur",
+        lambda *_a, **_k: pytest.fail("rejected rollback marked a new strict day"),
+    )
+
+    result = attendance_readiness.activate_due_cutover(NOW)
+
+    assert result.status == "blocked"
+    assert result.blockers == ("cutover_boundary_required",)
+    assert [call[0] for call in calls] == ["restore", "blocked", "status"]
+    restored = calls[0][1]
+    assert restored.mode == "live"
+    assert restored.cutover_at == original_cutover
+    assert restored.live_gate.activated_at == original_cutover
+    assert restored.live_gate.checked_at == NOW
+    assert restored.live_gate.report_digest == attendance_readiness.report_digest(
+        replace(report, ready=False, blockers=result.blockers),
+        original_cutover,
+    )
+    attendance_location_policy._validate_config_shape(restored)
+
+
+def test_due_rollback_with_invalid_status_keeps_live_ownership_and_one_stable_blocker(
+    monkeypatch,
+):
+    cursor = _ActivationCursor()
+    original_cutover = datetime(2026, 8, 28, 12, tzinfo=UTC)
+    rollback_at = datetime(2026, 8, 31, 12, tzinfo=UTC)
+    gate = attendance_location_policy.LiveGate(
+        checked_at=original_cutover,
+        report_digest="d" * 64,
+        activated_at=original_cutover,
+    )
+    rollback = attendance_location_policy.RolloutConfig("shadow", rollback_at, gate)
+    report = attendance_readiness._report_from_inputs(_ready_inputs(), NOW)
+    calls = []
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(attendance_readiness, "_lock_rollout_config_cur", lambda _cur: rollback)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_cutover_status_cur",
+        lambda _cur: {"status": "broken", "cutover_at": "not-a-time"},
+    )
+    monkeypatch.setattr(attendance_readiness, "_build_report_cur", lambda *_a: report)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_validate_configured_boundary_cur",
+        lambda *_a: (_ for _ in ()).throw(ValueError("cutover_boundary_required")),
+    )
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "restore_active_after_rejected_rollback",
+        lambda config, *, cur=None: calls.append(("restore", config, cur)),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_store_blocked_cur",
+        lambda cur, *, cutover_at, report: calls.append(
+            ("blocked", cur, cutover_at, report.blockers)
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: calls.append(("status", key, value, cur)),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_enqueue_cutover_cur",
+        lambda *_a, **_k: pytest.fail("rejected rollback changed strict ownership"),
+    )
+
+    first = attendance_readiness.activate_due_cutover(NOW)
+    second = attendance_readiness.activate_due_cutover(NOW)
+
+    assert first == second
+    assert first.status == "blocked"
+    assert first.blockers == ("cutover_boundary_required",)
+    assert [call[0] for call in calls] == [
+        "restore",
+        "blocked",
+        "status",
+        "restore",
+        "blocked",
+        "status",
+    ]
+    restored = [call[1] for call in calls if call[0] == "restore"]
+    assert {config.mode for config in restored} == {"live"}
+    assert {config.cutover_at for config in restored} == {original_cutover}
+    assert {config.live_gate.activated_at for config in restored} == {original_cutover}
+    blocked = [call for call in calls if call[0] == "blocked"]
+    assert {(call[2], call[3]) for call in blocked} == {
+        (rollback_at, ("cutover_boundary_required",))
+    }
+
+
+def test_cutover_blocked_exception_has_stable_boundary_key_and_urgent_inbox_section(
+    monkeypatch,
+):
+    blocked = {
+        "scheduled_at": NOW,
+        "checked_at": NOW,
+        "report_digest": "c" * 64,
+        "blockers": ("attendance_conflicts_open", "unassigned_production"),
+    }
+    monkeypatch.setattr(attendance_readiness, "blocked_cutover_snapshot", lambda: blocked)
+
+    issue = attendance_exceptions._blocked_cutover_issue(NOW)
+
+    assert issue.kind == "attendance_cutover_blocked"
+    assert issue.item_key == f"attendance_cutover_blocked:{NOW.isoformat()}"
+    assert issue.priority == "urgent"
+    assert "attendance_cutover_blocked" in exception_inbox._ATTENDANCE_SECTION_META
+    assert (
+        inbox_reconcile._SECTION_KIND["attendance_cutover_blocked"] == "attendance_cutover_blocked"
+    )
+    assert inbox_reconcile._KIND_SOURCE["attendance_cutover_blocked"] == "Attendance Timeline"
+
+
+def test_malformed_blocked_cutover_state_keeps_its_source_incomplete(monkeypatch):
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "get_setting",
+        lambda key: (
+            {"scheduled_at": "not-a-timestamp"}
+            if key == attendance_readiness._BLOCKED_SETTING
+            else None
         ),
     )
     monkeypatch.setattr(
         attendance_exceptions,
-        "build_snapshot",
-        lambda *_args, **_kwargs: pytest.fail("pending readiness cannot use inbox snapshot"),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_log_readiness_identifiers",
-        lambda *_args, **_kwargs: None,
-    )
-
-    result = attendance_readiness._collect_inputs(NOW, production_client="meter")
-
-    assert calls == [(NOW.date(), "meter", NOW, snapshot_mapper)]
-    assert result.projection_complete is True
-    assert result.open_missing_required == 1
-    assert result.unassigned_units_today == 4.0
-
-
-def test_historical_source_change_invalidates_saved_complete_shadow_proof(monkeypatch):
-    shadow_day = date(2026, 8, 31)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_db_metrics",
-        lambda _now: {
-            "baseline_complete": True,
-            "mirror_error": None,
-            "mirror_age_seconds": 1.0,
-            "last_full_sweep_age_seconds": 2.0,
-            "open_rows_not_refreshed": 0,
-            "last_sweep_deletion_count": 0,
-            "recalc_queue_age_seconds": None,
-            "recalc_queue_depth": 0,
-            "failed_corrections": 0,
-            "correction_retries_today": 0,
-            "correction_verification_failures_today": 0,
-            "failed_department_repairs": 0,
-            "shadow_day_complete": True,
-            "shadow_source_day": shadow_day,
-            "shadow_source_binding": attendance_readiness._combined_shadow_source_binding(
-                "old-source", "meter-source"
-            ),
-            "shadow_production_fingerprint": "meter-source",
-        },
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_shadow_source_fingerprint",
-        lambda day: "new-source" if day == shadow_day else "unexpected",
-    )
-    strict_inputs = SimpleNamespace(segments=(), location_spans=())
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_inputs_for_day",
-        lambda *_args, **_kwargs: strict_inputs,
-    )
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_attribution_from_inputs",
-        lambda *_args, **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_unassigned_runs_from_inputs",
-        lambda *_args, **_kwargs: (),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_compare_strict_to_current",
-        lambda day, *_args, **_kwargs: attendance_readiness.ShadowComparison(
-            day, NOW, True, 0.0, 0, 0.0, 0.0, None
+        "_policy_snapshot_for_day",
+        lambda *_a, **_k: (
+            attendance_location_policy.RolloutConfig("off", None, None),
+            "legacy",
+            None,
         ),
     )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_log_readiness_identifiers",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_snapshot_work_center_mapper",
-        lambda: lambda _odoo_id: None,
-    )
 
-    inputs = attendance_readiness._collect_inputs(
-        NOW,
-        production_client="meter",
-        frozen_shadow_day=shadow_day,
-        frozen_shadow_fingerprint="meter-source",
-    )
-    report = attendance_readiness._report_from_inputs(
-        inputs,
-        cutover_at=None,
-        now_utc=NOW,
-    )
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
 
-    assert inputs.shadow_day_complete is False
-    assert "shadow_day_incomplete" in report.blockers
-
-
-def test_historical_meter_change_invalidates_saved_complete_shadow_proof(monkeypatch):
-    shadow_day = date(2026, 8, 31)
-    local = "local-source"
-    old_meter = "meter-old"
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_collect_db_metrics",
-        lambda _now: {
-            "baseline_complete": True,
-            "mirror_error": None,
-            "mirror_age_seconds": 1.0,
-            "last_full_sweep_age_seconds": 2.0,
-            "open_rows_not_refreshed": 0,
-            "last_sweep_deletion_count": 0,
-            "recalc_queue_age_seconds": None,
-            "recalc_queue_depth": 0,
-            "failed_corrections": 0,
-            "correction_retries_today": 0,
-            "correction_verification_failures_today": 0,
-            "failed_department_repairs": 0,
-            "shadow_day_complete": True,
-            "shadow_source_day": shadow_day,
-            "shadow_source_binding": attendance_readiness._combined_shadow_source_binding(
-                local, old_meter
-            ),
-            "shadow_production_fingerprint": old_meter,
-        },
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_shadow_source_fingerprint",
-        lambda _day: local,
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_snapshot_work_center_mapper",
-        lambda: lambda _odoo_id: None,
-    )
-    strict_inputs = SimpleNamespace(segments=(), location_spans=())
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_inputs_for_day",
-        lambda *_args, **_kwargs: strict_inputs,
-    )
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_attribution_from_inputs",
-        lambda *_args, **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        attendance_readiness.production_history,
-        "_strict_unassigned_runs_from_inputs",
-        lambda *_args, **_kwargs: (),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_compare_strict_to_current",
-        lambda day, *_args, **_kwargs: attendance_readiness.ShadowComparison(
-            day, NOW, True, 0.0, 0, 0.0, 0.0, None
-        ),
-    )
-    monkeypatch.setattr(
-        attendance_readiness,
-        "_log_readiness_identifiers",
-        lambda *_args, **_kwargs: None,
-    )
-
-    inputs = attendance_readiness._collect_inputs(
-        NOW,
-        production_client="meter",
-        frozen_shadow_day=shadow_day,
-        frozen_shadow_fingerprint="meter-new",
-    )
-
-    assert inputs.shadow_day_complete is False
-
-
-def test_snapshot_work_center_mapper_reads_pinned_db_not_process_cache(monkeypatch):
-    monkeypatch.setattr(
-        attendance_readiness.db,
-        "query",
-        lambda *_args, **_kwargs: [
-            {"name": "Fresh Mapping", "odoo_work_center_id": 71}
+    assert snapshot.complete is False
+    assert snapshot.issues == ()
+    assert snapshot.source_errors == ("Attendance Timeline",)
+    reconciliation_snapshot = {
+        "source_errors": [{"source": "Attendance Timeline"}],
+        "sections": [
+            {
+                "id": "attendance_cutover_blocked",
+                "count": 0,
+                "rows": [],
+                "complete": snapshot.complete,
+            }
         ],
+    }
+    assert "attendance_cutover_blocked" not in inbox_reconcile._complete_kinds(
+        reconciliation_snapshot
     )
+
+
+def test_failed_cutover_retries_reconcile_one_stable_item_without_touching_other_issues(
+    monkeypatch,
+):
+    cutover = NOW - timedelta(minutes=1)
+    stored = {}
+
+    def set_setting(key, value, *, cur=None):
+        stored[key] = value
+
+    monkeypatch.setattr(attendance_readiness.app_settings, "set_setting", set_setting)
     monkeypatch.setattr(
-        attendance_timeline.work_centers_store,
-        "app_work_center_name_for_odoo_id",
-        lambda _odoo_id: pytest.fail("readiness used the process-local TTL cache"),
-    )
-
-    mapper = attendance_readiness._snapshot_work_center_mapper()
-
-    assert mapper(71) == "Fresh Mapping"
-    assert mapper(999) is None
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_snapshot_mapper_ignores_a_stale_process_cache():
-    from zira_dashboard import db, work_centers_store
-
-    db.init_pool()
-    odoo_id = 991399
-    with db.cursor() as cur:
-        cur.execute("DELETE FROM work_centers WHERE odoo_work_center_id = %s", (odoo_id,))
-        cur.execute(
-            "INSERT INTO work_centers (name, category, odoo_work_center_id) "
-            "VALUES ('Task13 Stale Mapping', 'test', %s)",
-            (odoo_id,),
-        )
-    work_centers_store._invalidate_caches()  # noqa: SLF001
-    try:
-        assert (
-            work_centers_store.app_work_center_name_for_odoo_id(odoo_id)
-            == "Task13 Stale Mapping"
-        )
-        db.execute(
-            "UPDATE work_centers SET name = 'Task13 Fresh Mapping' "
-            "WHERE odoo_work_center_id = %s",
-            (odoo_id,),
-        )
-        assert (
-            work_centers_store.app_work_center_name_for_odoo_id(odoo_id)
-            == "Task13 Stale Mapping"
-        )
-
-        with db.read_snapshot():
-            mapper = attendance_readiness._snapshot_work_center_mapper()
-            assert mapper(odoo_id) == "Task13 Fresh Mapping"
-    finally:
-        db.execute("DELETE FROM work_centers WHERE odoo_work_center_id = %s", (odoo_id,))
-        work_centers_store._invalidate_caches()  # noqa: SLF001
-
-
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_postgres_sync_source_read_does_not_reverse_activation_lock_order(monkeypatch):
-    from zira_dashboard import attendance_sync, db
-
-    db.init_pool()
-    source_started = Event()
-    activation_has_rollout = Event()
-    results = []
-    errors = []
-    original_state = db.query(
-        "SELECT last_incremental_started_at, last_incremental_completed_at, "
-        "last_incremental_observed_at, last_error FROM odoo_attendance_sync_state "
-        "WHERE singleton = TRUE"
-    )[0]
-
-    class Source:
-        def fetch_attendance_changes(self, **_kwargs):
-            source_started.set()
-            assert activation_has_rollout.wait(timeout=5)
-            return []
-
-        def fetch_open_attendance_rows(self):
-            return []
-
-    monkeypatch.setattr(attendance_sync, "_source", Source())
-    monkeypatch.setattr(attendance_sync, "_backend", attendance_sync._MirrorBackend())
-    monkeypatch.setattr(
-        attendance_sync,
-        "_enqueue_department_repairs_after_sync",
-        lambda *_args, **_kwargs: None,
-    )
-
-    def sync_run():
-        try:
-            results.append(attendance_sync.run_incremental_sync(now_utc=NOW))
-        except Exception as exc:  # pragma: no cover - asserted in parent thread
-            errors.append(exc)
-
-    def activation_fence():
-        try:
-            assert source_started.wait(timeout=5)
-            with db.cursor() as cur:
-                attendance_location_policy.lock_rollout_decision_cur(cur)
-                activation_has_rollout.set()
-                cur.execute(
-                    "LOCK TABLE odoo_attendance_sync_state IN SHARE MODE"
-                )
-        except Exception as exc:  # pragma: no cover - asserted in parent thread
-            errors.append(exc)
-
-    sync_thread = Thread(target=sync_run)
-    activation_thread = Thread(target=activation_fence)
-    sync_thread.start()
-    activation_thread.start()
-    sync_thread.join(timeout=10)
-    activation_thread.join(timeout=10)
-    try:
-        assert not sync_thread.is_alive()
-        assert not activation_thread.is_alive()
-        assert errors == []
-        assert len(results) == 1 and results[0].success is True
-    finally:
-        with db.cursor() as cur:
-            cur.execute(
-                "UPDATE odoo_attendance_sync_state SET "
-                "last_incremental_started_at = %s, "
-                "last_incremental_completed_at = %s, "
-                "last_incremental_observed_at = %s, last_error = %s "
-                "WHERE singleton = TRUE",
-                (
-                    original_state["last_incremental_started_at"],
-                    original_state["last_incremental_completed_at"],
-                    original_state["last_incremental_observed_at"],
-                    original_state["last_error"],
-                ),
-            )
-
-
-def test_source_fingerprint_covers_names_and_correction_events():
-    source_sql = attendance_readiness._SOURCE_FINGERPRINT_SQL
-    shadow_sql = attendance_readiness._SHADOW_SOURCE_FINGERPRINT_SQL
-    strict_sql = production_history._STRICT_LOCAL_SOURCE_SQL
-
-    assert "employee_name" in strict_sql
-    assert "employee_name" in shadow_sql
-    assert "person_name" in strict_sql
-    assert "person_name" in shadow_sql
-    assert "wage_type" in strict_sql
-    assert "wage_type" in shadow_sql
-    assert "attendance_correction_job_events" in source_sql
-
-
-def test_department_policy_lookup_is_constant_count_for_many_mirror_rows(monkeypatch):
-    rows = [
-        {"odoo_department_name": f"{index % 3 + 1} Production"}
-        for index in range(100)
-    ]
-    query = MagicMock(
-        return_value=[{"name": "Production", "requires_work_center": True}]
-    )
-    monkeypatch.setattr(attendance_timeline.db, "query", query)
-
-    requirement = attendance_timeline._department_requirements_for_rows(rows)
-
-    assert requirement("1 Production") is True
-    assert requirement("2 Production") is True
-    assert query.call_count == 1
-    assert "name = ANY" in query.call_args.args[0]
-
-
-def test_strict_rollout_reader_rejects_malformed_config(monkeypatch):
-    monkeypatch.setattr(
-        attendance_location_policy.app_settings,
+        attendance_readiness.app_settings,
         "get_setting",
-        lambda _key: {"mode": "live", "cutover_at": "broken"},
+        lambda key: stored.get(key),
+    )
+    first_report = attendance_readiness._report_from_inputs(_ready_inputs(open_conflicts=1), NOW)
+    retry_report = attendance_readiness._report_from_inputs(
+        _ready_inputs(open_conflicts=1), NOW + timedelta(seconds=30)
     )
 
-    with pytest.raises(ValueError):
-        attendance_location_policy.get_rollout_config_strict()
+    attendance_readiness._store_blocked_cur(object(), cutover_at=cutover, report=first_report)
+    attendance_readiness._store_blocked_cur(object(), cutover_at=cutover, report=retry_report)
+    first_issue = attendance_exceptions._blocked_cutover_issue(NOW)
+    retry_issue = attendance_exceptions._blocked_cutover_issue(NOW + timedelta(seconds=30))
 
+    blocked_key = f"attendance_cutover_blocked:{cutover.isoformat()}"
+    unrelated_key = "attendance_unmapped_location:11"
+    assert list(stored) == [attendance_readiness._BLOCKED_SETTING]
+    assert first_issue.item_key == retry_issue.item_key == blocked_key
+    assert first_issue.priority == retry_issue.priority == "urgent"
 
-def test_busy_activation_claim_skips_expensive_report(monkeypatch):
-    @contextmanager
-    def busy_claim():
-        yield False
-
-    monkeypatch.setattr(attendance_readiness, "_activation_claim", busy_claim)
-    monkeypatch.setattr(
-        attendance_readiness,
-        "build_report",
-        lambda *_args, **_kwargs: pytest.fail("loser cannot build readiness"),
+    failed_snapshot = {
+        "source_errors": [],
+        "sections": [
+            {
+                "id": "attendance_cutover_blocked",
+                "count": 1,
+                "complete": True,
+                "rows": [{"item_key": blocked_key, "priority": "urgent"}],
+            },
+            {
+                "id": "attendance_unmapped_location",
+                "count": 1,
+                "complete": True,
+                "rows": [{"item_key": unrelated_key, "priority": "urgent"}],
+            },
+        ],
+        "queue": [
+            {
+                "section_id": "attendance_cutover_blocked",
+                "item_key": blocked_key,
+                "priority": "urgent",
+            },
+            {
+                "section_id": "attendance_unmapped_location",
+                "item_key": unrelated_key,
+                "priority": "urgent",
+            },
+        ],
+    }
+    first_open = inbox_reconcile._open_now_from_snapshot(failed_snapshot)
+    retry_actions = inbox_reconcile.plan_reconcile(
+        first_open,
+        first_open,
+        inbox_reconcile._complete_kinds(failed_snapshot),
     )
 
-    assert attendance_readiness.activate_due_cutover(NOW) == "busy"
+    assert set(first_open) == {blocked_key, unrelated_key}
+    assert retry_actions == {
+        "arrivals": [],
+        "still_open": [blocked_key, unrelated_key],
+        "departed": [],
+    }
 
-
-def test_local_cutover_parser_rejects_dst_gap_and_repeated_hour():
-    with pytest.raises(ValueError, match="cutover_invalid_local_time"):
-        attendance_readiness.parse_local_cutover("2026-03-08T02:30")
-    with pytest.raises(ValueError, match="cutover_ambiguous_local_time"):
-        attendance_readiness.parse_local_cutover("2026-11-01T01:30")
-
-
-def test_cutover_rejects_non_workday(monkeypatch):
-    sunday = datetime(2026, 9, 6, 6, 0, tzinfo=attendance_readiness.shift_config.SITE_TZ)
-    monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "shift_start_for",
-        lambda _day: sunday.time().replace(tzinfo=None),
+    recovered_snapshot = {
+        **failed_snapshot,
+        "sections": [
+            {
+                "id": "attendance_cutover_blocked",
+                "count": 0,
+                "complete": True,
+                "rows": [],
+            },
+            failed_snapshot["sections"][1],
+        ],
+        "queue": [failed_snapshot["queue"][1]],
+    }
+    recovered_open = inbox_reconcile._open_now_from_snapshot(recovered_snapshot)
+    recovered_actions = inbox_reconcile.plan_reconcile(
+        recovered_open,
+        first_open,
+        inbox_reconcile._complete_kinds(recovered_snapshot),
     )
-    monkeypatch.setattr(attendance_readiness.shift_config, "is_workday", lambda _day: False)
+
+    assert recovered_actions["departed"] == [blocked_key]
+    assert recovered_actions["still_open"] == [unrelated_key]
+
+
+def test_blocked_cutover_source_failure_is_not_mistaken_for_resolution(monkeypatch):
     monkeypatch.setattr(
-        attendance_readiness.shift_config,
-        "snapshot_for",
-        lambda day, **_kwargs: SimpleNamespace(
-            day=day,
-            shift_start=sunday.time().replace(tzinfo=None),
-            shift_end=datetime.min.time().replace(hour=15),
-            breaks=(),
-            is_workday=False,
+        attendance_exceptions,
+        "_policy_snapshot_for_day",
+        lambda *_a, **_k: (
+            attendance_location_policy.RolloutConfig("off", None, None),
+            "legacy",
+            None,
         ),
     )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "blocked_cutover_snapshot",
+        lambda: (_ for _ in ()).throw(RuntimeError("local blocked state unavailable")),
+    )
 
-    with pytest.raises(ValueError, match="cutover_workday_required"):
-        attendance_readiness.validate_cutover(sunday, now_utc=NOW)
+    snapshot = attendance_exceptions.build_snapshot(DAY, now_utc=NOW)
+
+    assert snapshot.complete is False
+    assert snapshot.source_errors == ("Attendance Timeline",)
+
+
+def test_exactly_one_nonblocking_readiness_warmer_runs_every_30_seconds(monkeypatch):
+    matches = [
+        item for item in app_module._WARMERS if item[1] is app_module._tick_attendance_readiness
+    ]
+    calls = []
+    monkeypatch.setattr(attendance_readiness, "tick", lambda: calls.append("tick"))
+
+    import asyncio
+
+    asyncio.run(app_module._tick_attendance_readiness())
+
+    assert matches == [("attendance readiness", app_module._tick_attendance_readiness, 30)]
+    assert calls == ["tick"]
+
+
+class _FormValues(dict):
+    def getlist(self, key):
+        value = self.get(key, [])
+        return value if isinstance(value, list) else [value]
+
+
+class _FormRequest:
+    def __init__(self, values):
+        self._values = _FormValues(values)
+        self.headers = {"accept": "application/json"}
+        self.state = type("State", (), {})()
+
+    async def form(self):
+        return self._values
+
+
+def test_super_admin_live_save_runs_fresh_scheduler_with_posted_department_policy(
+    monkeypatch,
+):
+    request = _FormRequest(
+        {
+            "rollout_mode": "live",
+            "cutover_at": "2026-09-01T07:00",
+            "departments_present": "1",
+            "department_requires_work_center": ["Production"],
+        }
+    )
+    calls = []
+    monkeypatch.setattr(settings.auth, "request_is_super_admin", lambda _request: True)
+    monkeypatch.setattr(
+        settings.work_centers_store,
+        "synced_departments",
+        lambda: ["Production", "Maintenance"],
+    )
+    monkeypatch.setattr(
+        settings.attendance_readiness,
+        "schedule_live_cutover",
+        lambda cutover, **kwargs: calls.append((cutover, kwargs)) or _pending_live(cutover),
+    )
+
+    import asyncio
+
+    response = asyncio.run(settings.settings_save_attendance_location(request))
+
+    assert response.status_code == 200
+    assert calls[0][1]["department_requirements"] == {
+        "Maintenance": False,
+        "Production": True,
+    }
+
+
+def test_settings_context_and_template_show_plant_local_health_to_all_managers(
+    monkeypatch,
+):
+    report = attendance_readiness._report_from_inputs(
+        _ready_inputs(
+            open_rows_not_refreshed=2,
+            last_sweep_deletion_count=3,
+            open_conflicts=1,
+            conflict_seconds_today=120,
+            open_unmapped=1,
+            unmapped_seconds_today=60,
+            open_missing_required=1,
+            missing_seconds_today=180,
+            unassigned_units_today=4,
+            oldest_unassigned_at=NOW - timedelta(minutes=5),
+            shadow_changed_worker_units=2,
+            correction_retries_today=1,
+        ),
+        NOW,
+    )
+    monkeypatch.setattr(settings.attendance_readiness, "build_report", lambda _now: report)
+    monkeypatch.setattr(settings.attendance_readiness, "cutover_status_snapshot", lambda: None)
+    monkeypatch.setattr(settings.db, "query", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "get_rollout_config",
+        lambda: attendance_location_policy.RolloutConfig("shadow", None, None),
+    )
+    monkeypatch.setattr(settings.attendance_location_policy, "live_is_active", lambda: False)
+
+    context = settings._attendance_location_context()
+    html = Path("src/zira_dashboard/templates/settings.html").read_text()
+
+    assert context["readiness"] is report
+    assert context["readiness_checked_at"].tzinfo == shift_config.SITE_TZ
+    assert context["mirror_freshness"].tzinfo == shift_config.SITE_TZ
+    assert context["last_full_sweep"].tzinfo == shift_config.SITE_TZ
+    for label in (
+        "Readiness",
+        "Cutover status",
+        "Open rows not refreshed",
+        "Last sweep deletions",
+        "Projection lag",
+        "Recalculation queue",
+        "Conflict time",
+        "Unknown location time",
+        "Missing location time",
+        "Unassigned production",
+        "Oldest unassigned age",
+        "Shadow worker-unit changes",
+        "Correction failures",
+        "Correction retries",
+        "Department repair failures",
+        "Why live is blocked",
+    ):
+        assert label in html
+    assert "replace('_', ' ')" in html
+    assert "Live — readiness check required" in html
+    assert 'value="live"' in html and 'value="live"' in html.replace(" disabled", "")
+
+
+def test_settings_health_remains_blocked_and_visible_when_local_state_is_unavailable(
+    monkeypatch,
+):
+    unavailable = attendance_readiness._unavailable_report(NOW)
+    monkeypatch.setattr(settings.attendance_readiness, "build_report", lambda _now: unavailable)
+    monkeypatch.setattr(
+        settings.attendance_readiness.app_settings,
+        "get_setting",
+        lambda _key: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "get_rollout_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+    monkeypatch.setattr(
+        settings.attendance_location_policy,
+        "live_is_active",
+        lambda: pytest.fail("unavailable rollout must not get a second optimistic read"),
+    )
+    monkeypatch.setattr(
+        settings.db,
+        "query",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    context = settings._attendance_location_context()
+
+    assert context["mode"] == "off"
+    assert context["live_active"] is False
+    assert context["readiness"].ready is False
+    assert context["cutover_status"] == {"status": "unavailable"}
+
+
+def test_readiness_cli_and_operator_runbook_are_present_and_read_only():
+    script = Path("scripts/check_attendance_location_readiness.py")
+    assert script.exists()
+    source = script.read_text()
+    assert "build_report" in source
+    assert "report_json" in source
+    assert "set_rollout_config" not in source
+    assert "odoo_client" not in source
+
+    design = Path(
+        "docs/superpowers/specs/2026-08-28-odoo-attendance-live-location-truth-design.md"
+    ).read_text()
+    assert "check_attendance_location_readiness.py" in design
+    assert "schedule rollback to `shadow` at the next clean workday boundary" in design
+
+
+def test_final_child_readable_patch_note_is_exact():
+    changelog = Path("CHANGELOG.md").read_text()
+    note = "### Odoo live locations are ready for a safe start"
+    assert note in changelog
+    assert changelog.index("## 2026-09-01") < changelog.index(note)
+    assert changelog.index(note) < changelog.index("## 2026-08-31")
+    assert (
+        "**Plant Manager can now check that Odoo locations are fresh and complete before "
+        "they control production.** The app can compare the new answer first, start on a "
+        "clean workday, and show clear reasons when it is not safe to start."
+    ) in changelog
+
+
+@pytest.mark.parametrize(
+    ("day_health", "expected_clean", "expected_complete_days"),
+    [
+        (
+            {
+                "workday": False,
+                "conflict_minutes": 0.0,
+                "unmapped_minutes": 0.0,
+                "missing_minutes": 0.0,
+            },
+            False,
+            [],
+        ),
+        (
+            {
+                "workday": True,
+                "conflict_minutes": 5.0,
+                "unmapped_minutes": 0.0,
+                "missing_minutes": 0.0,
+            },
+            False,
+            [],
+        ),
+        (
+            {
+                "workday": True,
+                "conflict_minutes": 0.0,
+                "unmapped_minutes": 0.0,
+                "missing_minutes": 0.0,
+            },
+            True,
+            [DAY.isoformat()],
+        ),
+    ],
+    ids=["closed-day", "dirty-workday", "clean-workday"],
+)
+def test_shadow_complete_day_requires_same_day_workday_and_clean_aggregate(
+    monkeypatch,
+    day_health,
+    expected_clean,
+    expected_complete_days,
+):
+    stored = {}
+    config, _mirror = _install_shadow_refresh_origin(monkeypatch)
+    monkeypatch.setattr(
+        attendance_readiness.attendance_location_policy,
+        "get_rollout_config",
+        lambda: attendance_location_policy.RolloutConfig("shadow", None, None),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: {
+            "changed_worker_units": 0.0,
+            "unassigned_units_today": 0.0,
+            "oldest_unassigned_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_day_health",
+        lambda *_a, **_k: {**day_health, "clean": expected_clean},
+    )
+    monkeypatch.setattr(attendance_readiness.app_settings, "get_setting", lambda _key: None)
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: stored.update({key: value}),
+    )
+    cursor = _ActivationCursor()
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(shift_config, "shift_end_for", lambda _day: time(15, 0))
+    after_shift = datetime.combine(
+        DAY,
+        time(23, 59),
+        tzinfo=shift_config.SITE_TZ,
+    ).astimezone(UTC)
+
+    result = attendance_readiness.refresh_shadow_comparison(
+        after_shift,
+        production_client=object(),
+    )
+
+    value = stored[attendance_readiness._SHADOW_SETTING]
+    assert result.status == "stored"
+    assert value["complete_days"] == expected_complete_days
+    assert value["complete_day_health"] == [
+        {
+            "day": DAY.isoformat(),
+            "completed_at": after_shift.isoformat(),
+            "schedule_digest": config.day_digest,
+            **day_health,
+            "unassigned_units": 0.0,
+            "clean": expected_clean,
+        }
+    ]
+
+
+def test_entering_shadow_after_shift_start_cannot_retroactively_certify_that_day(
+    monkeypatch,
+):
+    base_config = attendance_readiness._shadow_config_snapshot_cur(_ShadowConfigCursor(), DAY)
+    entered_shadow = base_config.shift_end_utc + timedelta(minutes=1)
+    after_shift = entered_shadow + timedelta(minutes=1)
+    stored = {}
+    _install_shadow_refresh_origin(monkeypatch, epoch=entered_shadow)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: {
+            "changed_worker_units": 0.0,
+            "unassigned_units_today": 0.0,
+            "oldest_unassigned_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_day_health",
+        lambda *_a, **_k: {
+            "workday": True,
+            "conflict_minutes": 0.0,
+            "unmapped_minutes": 0.0,
+            "missing_minutes": 0.0,
+            "clean": True,
+        },
+    )
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(_ActivationCursor()))
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: stored.update({key: value}),
+    )
+
+    result = attendance_readiness.refresh_shadow_comparison(
+        after_shift,
+        production_client=object(),
+    )
+
+    assert result.status == "stored"
+    value = stored[attendance_readiness._SHADOW_SETTING]
+    assert value["complete_days"] == []
+    assert value["complete_day_health"] == []
+
+
+def test_shadow_refresh_rejects_mid_compute_config_change_without_replacing_last_good(
+    monkeypatch,
+):
+    cursor = _ActivationCursor()
+    writes = []
+    config, _mirror = _install_shadow_refresh_origin(monkeypatch)
+    monkeypatch.setattr(
+        attendance_readiness.attendance_location_policy,
+        "get_rollout_config",
+        lambda: attendance_location_policy.RolloutConfig("shadow", None, None),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_config_snapshot_cur",
+        lambda _cur, _day: replace(config, digest="b" * 64),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: {
+            "changed_worker_units": 0.0,
+            "unassigned_units_today": 0.0,
+            "oldest_unassigned_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_day_health",
+        lambda *_a, **_k: {
+            "workday": True,
+            "conflict_minutes": 0.0,
+            "unmapped_minutes": 0.0,
+            "missing_minutes": 0.0,
+            "clean": True,
+        },
+    )
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "failed"
+    assert not [row for row in writes if row[0] == attendance_readiness._SHADOW_SETTING]
+    assert writes == [
+        (
+            attendance_readiness._SHADOW_ERROR_SETTING,
+            {
+                "failed_at": NOW.isoformat(),
+                "reason": "configuration_changed",
+                "error_type": "ShadowConfigurationChanged",
+            },
+            cursor,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "current_mirror_origin",
+    [
+        (
+            NOW,
+            NOW - timedelta(minutes=1),
+            7,
+        ),
+        (
+            NOW - timedelta(seconds=1),
+            NOW,
+            8,
+        ),
+    ],
+    ids=["incremental-transfer", "full-sweep-generation"],
+)
+def test_shadow_refresh_rejects_mirror_generation_change_after_detached_snapshot(
+    monkeypatch,
+    current_mirror_origin,
+):
+    cursor = _ActivationCursor()
+    writes = []
+    _install_shadow_refresh_origin(
+        monkeypatch,
+        current_mirror_origin=current_mirror_origin,
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: {
+            "changed_worker_units": 0.0,
+            "unassigned_units_today": 0.0,
+            "oldest_unassigned_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_day_health",
+        lambda *_a, **_k: {
+            "workday": True,
+            "conflict_minutes": 0.0,
+            "unmapped_minutes": 0.0,
+            "missing_minutes": 0.0,
+            "clean": True,
+        },
+    )
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "failed"
+    assert not [row for row in writes if row[0] == attendance_readiness._SHADOW_SETTING]
+    assert writes[0][1]["reason"] == "mirror_changed"
+    assert writes[0][2] is cursor
+
+
+def test_shadow_final_store_serializes_with_mirror_sync_before_snapshot_reads(
+    monkeypatch,
+):
+    original = (NOW - timedelta(seconds=1), NOW - timedelta(minutes=1), 7)
+    changed = (NOW, NOW - timedelta(minutes=1), 7)
+    state = {"origin": original}
+
+    class InterleavingCursor(_ActivationCursor):
+        read_committed = False
+
+        def execute(self, sql, params=None):
+            super().execute(sql, params)
+            if "SET TRANSACTION ISOLATION LEVEL READ COMMITTED" in sql:
+                self.read_committed = True
+            if params == (attendance_mirror._SYNC_ADVISORY_LOCK_KEY,):
+                # Model a sync that held the common lock first and committed
+                # generation B before this final transaction could proceed.
+                state["origin"] = changed
+
+    cursor = InterleavingCursor()
+    writes = []
+    _install_shadow_refresh_origin(monkeypatch)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_mirror_origin_cur",
+        lambda _cur: state["origin"] if cursor.read_committed else original,
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: {
+            "changed_worker_units": 0.0,
+            "unassigned_units_today": 0.0,
+            "oldest_unassigned_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_day_health",
+        lambda *_a, **_k: {
+            "workday": True,
+            "conflict_minutes": 0.0,
+            "unmapped_minutes": 0.0,
+            "missing_minutes": 0.0,
+            "clean": True,
+        },
+    )
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "failed"
+    assert not [row for row in writes if row[0] == attendance_readiness._SHADOW_SETTING]
+    assert writes[0][1]["reason"] == "mirror_changed"
+    assert cursor.operations[:4] == [
+        ("SET TRANSACTION ISOLATION LEVEL READ COMMITTED", None),
+        (
+            "LOCK TABLE global_schedule, saturday_schedule, schedules, company_holidays, "
+            "saturday_recruitments, work_centers, departments, people, "
+            "wc_time_attributions IN SHARE MODE",
+            None,
+        ),
+        ("SELECT pg_advisory_xact_lock(%s)", (attendance_readiness._READINESS_LOCK_ID,)),
+        (
+            "SELECT pg_advisory_xact_lock(%s)",
+            (attendance_mirror._SYNC_ADVISORY_LOCK_KEY,),
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mirror_incremental", "mirror_sweep"),
+    [
+        (NOW + timedelta(microseconds=1), NOW - timedelta(minutes=1)),
+        (NOW - timedelta(seconds=1), NOW + timedelta(microseconds=1)),
+    ],
+    ids=["future-incremental", "future-full-sweep"],
+)
+def test_shadow_refresh_rejects_future_mirror_origin_before_replacing_last_good(
+    monkeypatch,
+    mirror_incremental,
+    mirror_sweep,
+):
+    writes = []
+    _install_shadow_refresh_origin(
+        monkeypatch,
+        mirror_incremental=mirror_incremental,
+        mirror_sweep=mirror_sweep,
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: pytest.fail("future mirror origin reached meter work"),
+    )
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "failed"
+    assert not [row for row in writes if row[0] == attendance_readiness._SHADOW_SETTING]
+    assert writes[0][0] == attendance_readiness._SHADOW_ERROR_SETTING
+    assert writes[0][1]["reason"] == "production_source_unavailable"
+
+
+def test_shadow_refresh_fails_closed_when_strict_attribution_rows_are_unavailable(
+    monkeypatch,
+):
+    writes = []
+
+    class UnavailableAttributionCursor(_ShadowConfigCursor):
+        def __init__(self):
+            super().__init__()
+            self.row = None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            if "FROM app_settings WHERE key" in normalized:
+                key = params[0]
+                value = (
+                    {"mode": "shadow", "cutover_at": None, "live_gate": None}
+                    if key == attendance_readiness._ROLLOUT_SETTING
+                    else {"entered_at": (NOW - timedelta(days=2)).isoformat()}
+                )
+                self.row = {"value": value}
+                return
+            if "FROM wc_time_attributions" in normalized:
+                raise RuntimeError("attribution rows unavailable")
+            self.row = None
+            super().execute(sql, params)
+
+        def fetchone(self):
+            return self.row
+
+    cursor = UnavailableAttributionCursor()
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "failed"
+    assert not [row for row in writes if row[0] == attendance_readiness._SHADOW_SETTING]
+    assert writes[0][0] == attendance_readiness._SHADOW_ERROR_SETTING
+    assert writes[0][1]["reason"] == "configuration_unavailable"
+    assert "attribution rows unavailable" in (result.error or "")
+
+
+def test_shadow_refresh_cannot_store_after_rollout_leaves_shadow_mid_compute(monkeypatch):
+    cursor = _ActivationCursor()
+    writes = []
+    _install_shadow_refresh_origin(
+        monkeypatch,
+        current_rollout=attendance_location_policy.RolloutConfig("off", None, None),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: {
+            "changed_worker_units": 0.0,
+            "unassigned_units_today": 0.0,
+            "oldest_unassigned_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_day_health",
+        lambda *_a, **_k: {
+            "workday": True,
+            "conflict_minutes": 0.0,
+            "unmapped_minutes": 0.0,
+            "missing_minutes": 0.0,
+            "clean": True,
+        },
+    )
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "failed"
+    assert not [row for row in writes if row[0] == attendance_readiness._SHADOW_SETTING]
+    assert writes[0][1]["reason"] == "configuration_changed"
+
+
+def test_shadow_refresh_resets_clean_evidence_when_config_digest_changes(monkeypatch):
+    old_digest = "a" * 64
+    new_digest = "b" * 64
+    old_day = DAY - timedelta(days=1)
+    existing = {
+        **_valid_shadow_health_setting(),
+        "day": old_day.isoformat(),
+        "computed_at": (NOW - timedelta(days=1)).isoformat(),
+        "config_digest": old_digest,
+        "complete_days": [old_day.isoformat()],
+        "complete_day_health": [
+            {
+                "day": old_day.isoformat(),
+                "completed_at": datetime.combine(
+                    old_day,
+                    time(15),
+                    tzinfo=shift_config.SITE_TZ,
+                )
+                .astimezone(UTC)
+                .isoformat(),
+                "schedule_digest": "c" * 64,
+                "workday": True,
+                "conflict_minutes": 0.0,
+                "unmapped_minutes": 0.0,
+                "missing_minutes": 0.0,
+                "unassigned_units": 0.0,
+                "clean": True,
+            }
+        ],
+    }
+
+    class ExistingCursor(_ActivationCursor):
+        def __init__(self):
+            super().__init__()
+            self.row = None
+
+        def execute(self, sql, params=None):
+            super().execute(sql, params)
+            self.row = {"value": existing} if "FROM app_settings" in " ".join(sql.split()) else None
+
+        def fetchone(self):
+            return self.row
+
+    cursor = ExistingCursor()
+    writes = []
+    config, mirror = _install_shadow_refresh_origin(monkeypatch)
+    changed_config = replace(config, digest=new_digest)
+    epoch = NOW - timedelta(days=2)
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_refresh_origin",
+        lambda _day: attendance_readiness._ShadowRefreshOrigin(
+            attendance_location_policy.RolloutConfig("shadow", None, None),
+            epoch,
+            changed_config,
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_config_snapshot_cur",
+        lambda _cur, _day: changed_config,
+    )
+    monkeypatch.setattr(
+        attendance_readiness.attendance_location_policy,
+        "get_rollout_config",
+        lambda: attendance_location_policy.RolloutConfig("shadow", None, None),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: {
+            "changed_worker_units": 0.0,
+            "unassigned_units_today": 0.0,
+            "oldest_unassigned_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_day_health",
+        lambda *_a, **_k: {
+            "workday": True,
+            "conflict_minutes": 0.0,
+            "unmapped_minutes": 0.0,
+            "missing_minutes": 0.0,
+            "clean": True,
+        },
+    )
+    monkeypatch.setattr(shift_config, "shift_end_for", lambda _day: time(23, 59))
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "stored"
+    stored = next(
+        value for key, value, _cur in writes if key == attendance_readiness._SHADOW_SETTING
+    )
+    assert stored["config_digest"] == new_digest
+    assert stored["complete_days"] == []
+    assert stored["complete_day_health"] == []
+
+
+def test_pending_live_keeps_shadow_comparison_fresh_until_boundary(monkeypatch):
+    cutover = NOW + timedelta(days=1)
+    cursor = _ActivationCursor()
+    _install_shadow_refresh_origin(monkeypatch, rollout=_pending_live(cutover))
+    monkeypatch.setattr(
+        attendance_readiness.attendance_location_policy,
+        "get_rollout_config",
+        lambda: _pending_live(cutover),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: {
+            "changed_worker_units": 0.0,
+            "unassigned_units_today": 0.0,
+            "oldest_unassigned_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_day_health",
+        lambda *_a, **_k: {
+            "workday": True,
+            "conflict_minutes": 0.0,
+            "unmapped_minutes": 0.0,
+            "missing_minutes": 0.0,
+            "unassigned_units": 0.0,
+            "clean": True,
+        },
+    )
+    monkeypatch.setattr(attendance_readiness.app_settings, "get_setting", lambda _key: None)
+    writes = []
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+    monkeypatch.setattr(shift_config, "shift_end_for", lambda _day: time(15, 0))
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "stored"
+    assert writes and writes[0][1]["computed_at"] == NOW.isoformat()
+    assert writes[0][2] is cursor
+    assert attendance_readiness._SHADOW_ERROR_SETTING in cursor.operations[-1][1]
+
+
+def test_active_live_keeps_aggregate_health_current_without_production_mutation(
+    monkeypatch,
+):
+    cutover = NOW - timedelta(days=1)
+    active = attendance_location_policy.RolloutConfig(
+        "live",
+        cutover,
+        attendance_location_policy.LiveGate(
+            checked_at=cutover - timedelta(minutes=5),
+            report_digest="a" * 64,
+            activated_at=cutover,
+        ),
+    )
+    cursor = _ActivationCursor()
+    writes = []
+    config, mirror = _install_shadow_refresh_origin(monkeypatch, rollout=active)
+    monkeypatch.setattr(
+        attendance_readiness.attendance_location_policy,
+        "get_rollout_config",
+        lambda: active,
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: {
+            "changed_worker_units": 1.5,
+            "unassigned_units_today": 0.5,
+            "oldest_unassigned_at": NOW - timedelta(minutes=2),
+        },
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_shadow_day_health",
+        lambda *_a, **_k: {
+            "workday": True,
+            "conflict_minutes": 0.0,
+            "unmapped_minutes": 0.0,
+            "missing_minutes": 0.0,
+            "unassigned_units": 0.5,
+            "clean": False,
+        },
+    )
+    monkeypatch.setattr(attendance_readiness.app_settings, "get_setting", lambda _key: None)
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+    monkeypatch.setattr(shift_config, "shift_end_for", lambda _day: time(15, 0))
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "stored"
+    assert len(writes) == 1
+    key, value, write_cursor = writes[0]
+    assert key == attendance_readiness._SHADOW_SETTING
+    assert write_cursor is cursor
+    assert value["config_digest"] == config.digest
+    assert value["day_config_digest"] == config.day_digest
+    assert value["mirror_verified_through"] == (
+        mirror.health.last_incremental_completed_at.isoformat()
+    )
+    assert value["changed_worker_units"] == 1.5
+    assert value["unassigned_units_today"] == 0.5
+    serialized = repr([*writes, *cursor.operations]).lower()
+    assert "production_daily" not in serialized
+    assert "attendance_strict_days" not in serialized
+    assert "attendance_recalc_queue" not in serialized
+    assert "insert into odoo_attendance" not in serialized
+    assert "update odoo_attendance" not in serialized
+    assert "delete from odoo_attendance" not in serialized
+
+
+def test_latest_shadow_failure_is_durable_and_blocks_an_old_good_aggregate(monkeypatch):
+    writes = []
+    _install_shadow_refresh_origin(monkeypatch)
+    monkeypatch.setattr(
+        attendance_readiness.attendance_location_policy,
+        "get_rollout_config",
+        lambda: attendance_location_policy.RolloutConfig("shadow", None, None),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_compute_shadow_aggregate",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("meter timed out")),
+    )
+    monkeypatch.setattr(
+        attendance_readiness.app_settings,
+        "set_setting",
+        lambda key, value, *, cur=None: writes.append((key, value, cur)),
+    )
+
+    result = attendance_readiness.refresh_shadow_comparison(NOW, production_client=object())
+
+    assert result.status == "failed"
+    assert writes == [
+        (
+            attendance_readiness._SHADOW_ERROR_SETTING,
+            {
+                "failed_at": NOW.isoformat(),
+                "reason": "production_source_unavailable",
+                "error_type": "RuntimeError",
+            },
+            None,
+        )
+    ]
+
+
+def test_due_activation_rebinds_gate_to_exact_boundary_report(monkeypatch):
+    cursor = _ActivationCursor()
+    cutover = NOW - timedelta(minutes=1)
+    report = attendance_readiness._report_from_inputs(_ready_inputs(), NOW)
+    saved = []
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_readiness, "_lock_rollout_config_cur", lambda _cur: _pending_live(cutover)
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_validate_configured_boundary_cur",
+        lambda _cur, value: value,
+    )
+    monkeypatch.setattr(attendance_readiness, "_build_report_cur", lambda *_a: report)
+    monkeypatch.setattr(attendance_readiness, "_enqueue_cutover_cur", lambda *_a: None)
+    monkeypatch.setattr(attendance_readiness, "_clear_blocked_cur", lambda *_a: None)
+    monkeypatch.setattr(
+        attendance_location_policy,
+        "set_rollout_config",
+        lambda config, *, cur=None: saved.append(config),
+    )
+    monkeypatch.setattr(attendance_readiness.app_settings, "set_setting", lambda *_a, **_k: None)
+
+    attendance_readiness.activate_due_cutover(NOW)
+
+    assert saved[0].live_gate.checked_at == NOW
+    assert saved[0].live_gate.report_digest == attendance_readiness.report_digest(report, cutover)
+
+
+def test_shadow_comparison_uses_one_strict_source_snapshot(monkeypatch):
+    calls = []
+    cursor = _ShadowConfigCursor()
+    cursor.sources["wc_time_attributions"] = [
+        {
+            "id": 41,
+            "wc_name": "WC A",
+            "person_name": "Testing",
+            "employee_odoo_id": None,
+            "start_utc": NOW - timedelta(minutes=20),
+            "end_utc": NOW - timedelta(minutes=10),
+            "source": "testing",
+            "breakdown_id": None,
+        }
+    ]
+    config = attendance_readiness._shadow_config_snapshot_cur(cursor, DAY)
+    mirror = attendance_mirror.AttendanceMirrorSnapshot(
+        health=attendance_mirror.MirrorHealth(
+            last_incremental_completed_at=NOW,
+            last_full_sweep_completed_at=NOW - timedelta(minutes=1),
+            baseline_completed_at=NOW - timedelta(days=1),
+            oldest_recalc_requested_at=None,
+            last_error=None,
+        ),
+        rows=(),
+    )
+    inputs = SimpleNamespace(
+        segments=(),
+        wc_totals={},
+        samples_by_wc={},
+        active_intervals_by_wc={},
+        excluded_minutes={},
+        break_windows=(),
+        testing_windows={},
+        breakdown_windows={},
+    )
+    monkeypatch.setattr(attendance_readiness.db, "query", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        production_history,
+        "_strict_inputs_for_day",
+        lambda *_a, **kwargs: calls.append(kwargs) or inputs,
+    )
+    monkeypatch.setattr(
+        wc_attributions,
+        "for_day",
+        lambda *_a, **_k: pytest.fail("shadow compute re-read attribution rows"),
+    )
+    monkeypatch.setattr(
+        production_history,
+        "_strict_attribution_for",
+        lambda *_a, **_k: pytest.fail("shadow attribution re-read its source"),
+    )
+    monkeypatch.setattr(
+        wc_attributions,
+        "shadow_unassigned_runs_for_day",
+        lambda *_a, **_k: pytest.fail("unassigned runs re-read their source"),
+    )
+
+    result = attendance_readiness._compute_shadow_aggregate(
+        DAY,
+        NOW,
+        object(),
+        config_snapshot=config,
+        mirror_snapshot=mirror,
+        location_spans=(),
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["attribution_rows"] == config.attribution_rows
+    assert result["changed_worker_units"] == 0.0
+
+
+def test_future_health_timestamp_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_read_inputs",
+        lambda _now: _ready_inputs(last_incremental_completed_at=NOW + timedelta(seconds=1)),
+    )
+
+    report = attendance_readiness.build_report(NOW)
+
+    assert report.ready is False
+    assert "attendance_mirror_invalid" in report.blockers
+
+
+def test_schedule_rejects_a_clock_regression_as_a_stale_report(monkeypatch):
+    marker = _ActivationCursor()
+    cutover = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(7, 0))
+    monkeypatch.setattr(shift_config, "is_workday", lambda _day: True)
+    monkeypatch.setattr(attendance_readiness.db, "cursor", lambda: _cursor(marker))
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_lock_rollout_config_cur",
+        lambda _cur: attendance_location_policy.RolloutConfig("shadow", None, None),
+    )
+    monkeypatch.setattr(
+        attendance_readiness,
+        "_build_report_cur",
+        lambda *_a: attendance_readiness._report_from_inputs(_ready_inputs(), NOW),
+    )
+    monkeypatch.setattr(attendance_readiness, "_utc_now", lambda: NOW - timedelta(seconds=1))
+
+    with pytest.raises(ValueError, match="live_readiness_stale"):
+        attendance_readiness.schedule_live_cutover(cutover, now_utc=NOW)

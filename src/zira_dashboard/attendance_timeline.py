@@ -45,16 +45,6 @@ class LocationSpan:
 
 
 @dataclass(frozen=True)
-class AttendanceTimelineSnapshot:
-    """One coherent mirror generation projected for a dashboard request."""
-
-    spans: tuple[LocationSpan, ...]
-    open_employee_ids: frozenset[int]
-    verified_through_utc: datetime
-    freshness_blockers: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class _SourceRow:
     attendance_id: int
     employee_id: int
@@ -764,119 +754,9 @@ def timeline_for_range(
     return _merge_adjacent(clipped)
 
 
-def _snapshot_freshness_blockers(
-    snapshot: attendance_mirror.AttendanceMirrorSnapshot,
-    *,
-    as_of_utc: datetime,
-) -> tuple[str, ...]:
-    """Return only direct mirror-health blockers, without production reads."""
-    health = snapshot.health
-    blockers: list[str] = []
-    if health.baseline_completed_at is None:
-        blockers.append("baseline_incomplete")
-    completed = health.last_incremental_completed_at
-    if completed is None or as_of_utc - completed > timedelta(seconds=90):
-        blockers.append("mirror_stale")
-    if health.last_error:
-        blockers.append("mirror_sync_failed")
-    observed = health.last_incremental_observed_at
-    if any(
-        row.get("check_out_utc") is None
-        and not _open_row_confirmed(row, observed)
-        for row in snapshot.rows
-    ):
-        blockers.append("open_rows_not_refreshed")
-    full_sweep = health.last_full_sweep_completed_at
-    if full_sweep is None or as_of_utc - full_sweep > timedelta(hours=2):
-        blockers.append("full_sweep_stale")
-    return tuple(blockers)
-
-
-def _open_row_confirmed(
-    row: Mapping[str, object],
-    observed_at: datetime | None,
-) -> bool:
-    if observed_at is None or row.get("last_seen_at") is None:
-        return False
-    observed = _aware_utc(observed_at, "last_incremental_observed_at")
-    seen = _aware_utc(row["last_seen_at"], "last_seen_at")
-    return seen >= observed
-
-
-def snapshot_for_range(
-    start_utc: datetime,
-    end_utc: datetime,
-    *,
-    as_of_utc: datetime | None = None,
-    map_work_center: Callable[[int], str | None] | None = None,
-) -> AttendanceTimelineSnapshot:
-    """Project rows, open identities, and health from one locked generation."""
-    start = _aware_utc(start_utc, "start_utc")
-    end = _aware_utc(end_utc, "end_utc")
-    if end <= start:
-        raise ValueError("end_utc must be after start_utc")
-    as_of = _aware_utc(
-        datetime.now(UTC) if as_of_utc is None else as_of_utc,
-        "as_of_utc",
-    )
-    context_start, _context_end = _plant_day_bounds(
-        start.astimezone(shift_config.SITE_TZ).date()
-    )
-    source = attendance_mirror.snapshot_overlapping(context_start, end)
-    verified = source.health.last_incremental_completed_at
-    if verified is None:
-        raise RuntimeError("attendance mirror has no verified freshness")
-    raw_rows = tuple(source.rows)
-    observed = source.health.last_incremental_observed_at
-    open_employee_ids = frozenset(
-        int(row["employee_odoo_id"])
-        for row in raw_rows
-        if row.get("check_out_utc") is None
-        and _open_row_confirmed(row, observed)
-        and _aware_utc(row["check_in_utc"], "check_in_utc") <= as_of
-    )
-    rows = _rows_with_employee_department_fallback(
-        raw_rows, include_wage_type=True
-    )
-    projected = project_rows(
-        rows,
-        as_of_utc=as_of,
-        verified_through_utc=verified,
-        map_work_center=(
-            map_work_center
-            if map_work_center is not None
-            else work_centers_store.app_work_center_name_for_odoo_id
-        ),
-        requires_work_center=_department_requirements_for_rows(rows),
-        expected_department_id=_expected_department_id_for_app_work_center,
-    ) if rows else ()
-    clipped = tuple(
-        replace(
-            span,
-            start_utc=max(start, span.start_utc),
-            end_utc=min(end, span.end_utc),
-            is_open=(
-                span.is_open
-                and span.employee_odoo_id in open_employee_ids
-                and min(end, span.end_utc) == span.end_utc
-            ),
-        )
-        for span in projected
-        if min(end, span.end_utc) > max(start, span.start_utc)
-    )
-    return AttendanceTimelineSnapshot(
-        spans=_merge_adjacent(clipped),
-        open_employee_ids=open_employee_ids,
-        verified_through_utc=verified,
-        freshness_blockers=_snapshot_freshness_blockers(source, as_of_utc=as_of),
-    )
-
-
 __all__ = [
-    "AttendanceTimelineSnapshot",
     "LocationSpan",
     "LocationStatus",
     "project_rows",
-    "snapshot_for_range",
     "timeline_for_range",
 ]

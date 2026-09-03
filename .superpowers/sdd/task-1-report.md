@@ -1,3 +1,66 @@
+# Shadow restoration addendum — 2026-09-03
+
+## Scope and result
+
+Restored the coherent Task 13 Shadow rollout contract from `15d86881` onto
+`6e0ea66fe2e780473f81865ae1e4c7cdac4d2b26`, using semantic three-way merges
+against `origin/main`. Later unrelated feedback, PTO inbox, forklift, People,
+and production-scoring work remains present.
+
+The restored warmer calls `attendance_readiness.tick()` without arguments.
+`tick()` refreshes Shadow comparison health and then evaluates one due cutover.
+No production setting or production command was changed, and this work does not
+enable or schedule Live or synthesize past Shadow evidence.
+
+## Test-first evidence
+
+- RED: `/Users/dalegruber/Projects/gpi-plant-manager/.venv/bin/python -m pytest tests/test_attendance_readiness.py::test_exactly_one_nonblocking_readiness_warmer_runs_every_30_seconds -q` failed as intended because `attendance_readiness.tick` did not exist.
+- GREEN regression: the same command passed, `1 passed in 0.48s`.
+- RED for the retained People dashboard: after removing the retired timeline
+  snapshot type, `tests/test_people_performance_data.py` failed at collection
+  with its obsolete `AttendanceTimelineSnapshot` import. The replacement
+  adapter test then failed with the expected missing local mirror-health
+  dependency before implementation.
+
+## Three-way restoration
+
+- Restored Task 13 readiness, policy, mirror, correction, strict-production,
+  schema, Settings, and regression-test contracts from `15d86881`.
+- Preserved later unrelated additions separately: feedback review reconciliation,
+  PTO inbox rows, forklift identity Settings, mirror department fields,
+  production scoring, and additive feedback/forklift schema changes.
+- Expanded scope was approved after the first focused run showed the exact Task
+  13 dependencies removed by the later merge (`MirrorHealth.full_sweep_generation`,
+  rollout lock API, strict-production sources, and Settings markup).
+- Restored the remaining retained workers to Task 13 callers: recalculation
+  uses the readiness advisory lock and ordinary prepared-day write; department
+  repair omits the retired policy lock; the mirror worker uses `_sync_state_cur`
+  and records incremental start immediately. The stale warmer/readiness CLI
+  suites were deleted.
+- Removed the retired timeline snapshot API without reviving its obsolete
+  observation field. The later People dashboard now has its own source adapter
+  over `timeline_for_range(...)` and retained mirror-health fields only
+  (baseline, incremental, full sweep, and error).
+
+## Validation
+
+- Final focused Shadow and People-preservation suite:
+  `/Users/dalegruber/Projects/gpi-plant-manager/.venv/bin/python -m pytest tests/test_attendance_readiness.py tests/test_attendance_location_end_to_end.py tests/test_attendance_location_failure_modes.py tests/test_attendance_location_policy.py tests/test_settings_timeclock_layout.py tests/test_attendance_recalc.py tests/test_attendance_sync.py tests/test_attendance_timeline.py tests/test_attendance_mirror.py tests/test_attendance_correction_recovery.py tests/test_precompute.py tests/test_production_history_odoo_strict.py tests/test_people_performance_data.py tests/test_people_performance_end_to_end.py tests/test_production_history.py -q` — `467 passed, 43 skipped`.
+- Focused People adapter suite: `34 passed`.
+- `python -m compileall -q src/zira_dashboard scripts/check_attendance_location_readiness.py` passed.
+- `ruff check` for all restored source and focused test files passed.
+- `git diff --check` passed.
+- Independent final review found no remaining retired 34f callers and confirmed
+  the Task 13 recalculation, repair, mirror-worker, and People-adapter
+  boundaries.
+
+## Delivery
+
+- Commit: `fix: restore Shadow attendance refresh` (created after final validation).
+- Push: `origin/main` (performed after the implementation commit).
+
+---
+
 # Task 1 Report: Durable local celebration queue foundation
 
 ## Summary

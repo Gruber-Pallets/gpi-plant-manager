@@ -328,7 +328,7 @@ def _install_single_cursor_production_backend(monkeypatch):
 
     monkeypatch.setattr(attendance_mirror.db, "cursor", one_connection_only)
     monkeypatch.setattr(
-        attendance_mirror, "_sync_state_read_cur", state_for, raising=False
+        attendance_mirror, "_sync_state_cur", state_for, raising=False
     )
     monkeypatch.setattr(
         attendance_mirror,
@@ -389,6 +389,7 @@ def test_production_incremental_lock_state_and_store_share_one_cursor(
         "checkout",
         "lock",
         "state",
+        "started",
         "incremental_store",
         "commit",
     ]

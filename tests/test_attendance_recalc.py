@@ -34,28 +34,11 @@ class QueueCursor:
     def execute(self, sql, params=()):
         normalized = " ".join(sql.split())
         self.store.sql.append((normalized, params))
-        if normalized == (
-            "LOCK TABLE app_settings, attendance_strict_days "
-            "IN SHARE ROW EXCLUSIVE MODE"
-        ):
+        if normalized.startswith("SELECT pg_advisory_xact_lock"):
             self.result = None
             return
-        if normalized.startswith("LOCK TABLE strict_source_test"):
+        if normalized.startswith("LOCK TABLE app_settings, attendance_strict_days"):
             self.result = None
-            return
-        if normalized.startswith("SELECT 1 FROM attendance_strict_days"):
-            self.result = {"?column?": 1} if params[0] in self.store.strict_days else None
-            return
-        if normalized.startswith("SELECT s.reason, q.completed_at"):
-            day = params[0]
-            self.result = (
-                {
-                    "reason": "strict_production_attribution",
-                    "completed_at": self.store.rows.get(day, {}).get("completed_at"),
-                }
-                if day in self.store.strict_days
-                else None
-            )
             return
         if normalized.startswith("SELECT day, attempt_count, started_at, completed_at"):
             self.result = self.store.rows.get(params[0])
@@ -109,7 +92,7 @@ class QueueCursor:
                 self.result = {"day": day}
             return
         if "SET completed_at = %s" in normalized:
-            completed_at, cache_lease, source_fingerprint, day, attempt_count, lease_until = params
+            completed_at, cache_lease, day, attempt_count, lease_until = params
             if self.store.fail_completion:
                 self.result = None
                 return
@@ -125,7 +108,6 @@ class QueueCursor:
                 row["started_at"] = None
                 row["cache_started_at"] = cache_lease
                 row["cache_ready_at"] = None
-                row["source_fingerprint"] = source_fingerprint
                 row["last_error"] = None
                 self.result = {"day": day}
             return
@@ -244,25 +226,10 @@ def queue_row(
 
 
 def install_queue(monkeypatch, store):
-    from zira_dashboard import attendance_location_policy, db, production_history
+    from zira_dashboard import db
 
     monkeypatch.setattr(db, "cursor", store.cursor)
     monkeypatch.setattr(db, "execute_values", store.execute_values)
-    monkeypatch.setattr(
-        production_history,
-        "lock_strict_sources_cur",
-        lambda cur: cur.execute("LOCK TABLE strict_source_test IN SHARE MODE"),
-    )
-    monkeypatch.setattr(
-        production_history,
-        "strict_local_source_fingerprint",
-        lambda _day, *, cur: "strict-test-source",
-    )
-    monkeypatch.setattr(
-        attendance_location_policy,
-        "match_state_for_day_cur",
-        lambda _day, *, cur: "strict",
-    )
 
 
 def prepared_snapshot(day, *units, strict=False):
@@ -282,14 +249,7 @@ def prepared_snapshot(day, *units, strict=False):
         }
         for index, value in enumerate(units, start=1)
     )
-    return PreparedProductionDay(
-        day=day,
-        rows=rows,
-        strict_day=day if strict else None,
-        expected_match_state="strict" if strict else None,
-        source_fingerprint="strict-test-source" if strict else None,
-        request_fingerprint="strict-test-request" if strict else None,
-    )
+    return PreparedProductionDay(day=day, rows=rows, strict_day=day if strict else None)
 
 
 def test_claims_oldest_eligible_day_with_skip_locked_and_durable_lease(monkeypatch):
@@ -661,6 +621,52 @@ def test_completion_failure_rolls_back_marker_snapshot_and_queue_together(monkey
     assert store.rows[DAY_1]["completed_at"] is None
     assert store.rows[DAY_1]["started_at"] == claim.lease_until
     assert store.events[-1] == "rollback"
+
+
+def test_completion_serializes_before_queue_and_matcher_locks(monkeypatch):
+    module = recalc()
+    from zira_dashboard import attendance_readiness
+
+    lease_until = NOW + module.CLAIM_LEASE
+    store = QueueStore(
+        [
+            queue_row(
+                DAY_1,
+                requested_at=NOW - timedelta(hours=1),
+                started_at=lease_until,
+                attempt_count=1,
+            )
+        ]
+    )
+    install_queue(monkeypatch, store)
+    monkeypatch.setattr(
+        "zira_dashboard.precompute.store_prepared_day",
+        lambda _prepared, *, cur: (
+            cur.execute(
+                "LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE"
+            )
+            or 0
+        ),
+    )
+    claim = module.RecalcClaim(DAY_1, 1, lease_until)
+
+    assert module._complete_claim(claim, prepared_snapshot(DAY_1), NOW) == 0
+
+    sql = [statement for statement, _params in store.sql]
+    advisory_lock = next(
+        index
+        for index, operation in enumerate(store.sql)
+        if operation[1] == (attendance_readiness._READINESS_LOCK_ID,)
+    )
+    queue_lock = next(
+        index
+        for index, statement in enumerate(sql)
+        if "FROM attendance_recalc_queue" in statement and statement.endswith("FOR UPDATE")
+    )
+    matcher_lock = sql.index(
+        "LOCK TABLE app_settings, attendance_strict_days IN SHARE ROW EXCLUSIVE MODE"
+    )
+    assert advisory_lock < queue_lock < matcher_lock
 
 
 def test_failure_stays_retryable_and_never_invalidates_cache(monkeypatch):

@@ -1,210 +1,96 @@
-"""One readable end-to-end proof of the attendance-location truth chain."""
-
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
-import os
+from datetime import UTC, date, datetime, time, timedelta
+from types import SimpleNamespace
 
 import pytest
 
 from zira_dashboard import (
     assignment_windows,
+    attendance,
     attendance_corrections,
+    attendance_location_policy,
     attendance_mirror,
-    attendance_recalc,
+    attendance_readiness,
     attendance_sync,
     attendance_timeline,
+    db,
     inbox_reconcile,
     precompute,
     production_history,
+    shift_config,
     timeclock_sync,
-    app_settings,
-    db,
-    exception_inbox,
-    plant_day,
+    wc_attributions,
 )
 
 
-START = datetime(2026, 8, 31, 12, tzinfo=UTC)
+DAY = date(2026, 8, 31)
+T0 = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+T1 = T0 + timedelta(minutes=5)
+T2 = T0 + timedelta(minutes=30)
+T3 = T0 + timedelta(minutes=60)
 
 
-def _row(
-    attendance_id: int,
-    employee_id: int,
-    name: str,
-    start: datetime,
-    end: datetime | None,
-    wc_id: int | None,
-    wc_name: str | None,
-) -> dict:
+def _row(row_id, employee_id, name, start, end, wc_id, wc_name):
     return {
-        "odoo_attendance_id": attendance_id,
+        "odoo_attendance_id": row_id,
         "employee_odoo_id": employee_id,
         "employee_name": name,
         "check_in_utc": start,
         "check_out_utc": end,
         "odoo_work_center_id": wc_id,
         "odoo_work_center_name": wc_name,
-        "odoo_department_id": 8,
-        "odoo_department_name": "01 Recycled",
-        "odoo_write_date": START - timedelta(seconds=1),
+        "odoo_department_id": 7,
+        "odoo_department_name": "Production",
+        "odoo_write_date": T3,
     }
 
 
-def _project(rows, as_of):
+def _project(rows):
     return attendance_timeline.project_rows(
         rows,
-        as_of_utc=as_of,
-        verified_through_utc=as_of,
-        map_work_center={71: "WC A", 72: "WC B"}.get,
+        as_of_utc=T3,
+        verified_through_utc=T3,
+        map_work_center=lambda wc_id: {11: "WC A", 22: "WC B"}.get(wc_id),
         requires_work_center=lambda _department: True,
-        expected_department_id=lambda _wc: 8,
+        expected_department_id=lambda _wc: 7,
     )
 
 
-def _credit(spans, samples):
-    segments = assignment_windows.work_segments_from_timeline(
-        spans,
-        window_start_utc=START,
-        window_end_utc=START + timedelta(hours=8),
-    )
-    totals = {
-        wc: (sum(units for _at, units in values), 0.0)
-        for wc, values in samples.items()
-    }
-    return production_history.attribute_for_segments(
-        segments,
-        wc_totals=totals,
-        samples_by_wc=samples,
-        productive_minutes=lambda _person, _wc, start, end: (
-            end - start
-        ).total_seconds()
-        / 60,
-        strict=True,
-    )
+class _StatefulOdoo:
+    """One mutable fake for Timeclock, Luke, sync, and correction I/O."""
 
-
-def test_exact_attendance_location_journey_from_clock_in_through_historical_edit():
-    """Steps 1-11 from the Task 13 release proof, in source order."""
-    # 1-2. Plant Manager opens a WC-less attendance. Grace is visible, and
-    # production has no invented owner.
-    open_row = _row(1, 101, "Worker One", START, None, None, None)
-    grace_spans = _project([open_row], START + timedelta(minutes=4))
-    assert [span.status for span in grace_spans] == ["pending_first_location"]
-    unassigned = production_history.unassigned_runs_for_samples(
-        [(START + timedelta(minutes=2), 5.0)],
-        set(),
-        ((START, START + timedelta(minutes=4)),),
-        wc_name="WC A",
-    )
-    assert sum(run.units for run in unassigned) == 5.0
-
-    # 3-5. Luke supplies WC A, then transfers the same durable employee to B;
-    # samples on either side follow the transfer boundary.
-    transferred = [
-        _row(2, 101, "Worker One", START + timedelta(minutes=5), START + timedelta(hours=2), 71, "Raw A"),
-        _row(3, 101, "Worker One", START + timedelta(hours=2), START + timedelta(hours=4), 72, "Raw B"),
-    ]
-    transfer_spans = _project(transferred, START + timedelta(hours=4))
-    assert [(span.app_work_center_name, span.status) for span in transfer_spans] == [
-        ("WC A", "valid"),
-        ("WC B", "valid"),
-    ]
-    credited = _credit(
-        transfer_spans,
-        {
-            "WC A": [(START + timedelta(hours=1), 10.0)],
-            "WC B": [(START + timedelta(hours=3), 20.0)],
-        },
-    )
-    assert credited[(101, "Worker One")]["WC A"]["units"] == 10.0
-    assert credited[(101, "Worker One")]["WC B"]["units"] == 20.0
-
-    # 6. A second canonical worker at WC B splits the same sample equally.
-    shared_rows = [
-        _row(4, 101, "Worker One", START + timedelta(hours=2), START + timedelta(hours=4), 72, "Raw B"),
-        _row(5, 102, "Worker Two", START + timedelta(hours=2), START + timedelta(hours=4), 72, "Raw B"),
-    ]
-    shared = _credit(
-        _project(shared_rows, START + timedelta(hours=4)),
-        {"WC B": [(START + timedelta(hours=3), 20.0)]},
-    )
-    assert shared[(101, "Worker One")]["WC B"]["units"] == 10.0
-    assert shared[(102, "Worker Two")]["WC B"]["units"] == 10.0
-
-    # 7-8. Conflicts and unknown raw work centers remain exact and uncredited.
-    conflict = _project(
-        [
-            _row(6, 101, "Worker One", START, START + timedelta(hours=1), 71, "Raw A"),
-            _row(7, 101, "Worker One", START, START + timedelta(hours=1), 72, "Raw B"),
-        ],
-        START + timedelta(hours=1),
-    )
-    assert [span.status for span in conflict] == ["conflicting_location"]
-    unknown = _project(
-        [_row(8, 101, "Worker One", START, START + timedelta(hours=1), 999, "Luke Mystery")],
-        START + timedelta(hours=1),
-    )
-    assert unknown[0].status == "unmapped_location"
-    assert unknown[0].odoo_work_center_name == "Luke Mystery"
-
-    # 9. A manager's verified interval surgery replaces the bad overlap with
-    # two closed, non-overlapping source rows; the same projection now credits.
-    corrected = _project(transferred, START + timedelta(hours=4))
-    assert all(span.status == "valid" for span in corrected)
-    assert sum(
-        totals["units"]
-        for wc_map in _credit(
-            corrected,
-            {
-                "WC A": [(START + timedelta(hours=1), 8.0)],
-                "WC B": [(START + timedelta(hours=3), 12.0)],
-            },
-        ).values()
-        for totals in wc_map.values()
-    ) == 20.0
-
-    # 10. Plant Manager clock-out closes the final source interval exactly.
-    assert corrected[-1].end_utc == START + timedelta(hours=4)
-
-    # 11. A post-baseline edit targets every local day touched by the source,
-    # including an overnight historical interval, for strict recalculation.
-    touched = attendance_mirror.local_days_touched(
-        datetime(2026, 8, 30, 23, 30, tzinfo=UTC),
-        datetime(2026, 8, 31, 13, 0, tzinfo=UTC),
-    )
-    assert touched == {date(2026, 8, 30), date(2026, 8, 31)}
-
-
-class _JourneyOdoo:
-    """One stateful fake at the same facade used by punch, sync, and correction."""
+    WC_NAMES = {11: "Luke A", 22: "Luke B", 999: "Luke's exact raw name"}
 
     def __init__(self):
-        self.rows: dict[int, dict] = {}
-        self.next_id = 1
-        self.version = START - timedelta(seconds=1)
+        self.rows = {}
+        self.next_id = 100
+        self.write_clock = T0
+        self.timeout = False
+        self.fail_verification = False
+        self.sweep_complete = True
+        self.mutations = []
 
-    def _tick(self):
-        self.version += timedelta(seconds=1)
-        return self.version
+    def _written(self):
+        self.write_clock += timedelta(microseconds=1)
+        return self.write_clock
 
-    def _new(self, employee_id, start, end, wc_id, department_id=8):
-        attendance_id = self.next_id
+    def _new(self, employee_id, name, start, end, wc_id):
         self.next_id += 1
-        self.rows[attendance_id] = _row(
-            attendance_id,
+        row = _row(
+            self.next_id,
             employee_id,
-            f"Worker {employee_id}",
+            name,
             start,
             end,
             wc_id,
-            {71: "Raw A", 72: "Raw B"}.get(wc_id),
+            self.WC_NAMES.get(wc_id),
         )
-        self.rows[attendance_id]["odoo_department_id"] = department_id
-        self.rows[attendance_id]["odoo_write_date"] = self._tick()
-        return attendance_id
+        row["odoo_write_date"] = self._written()
+        self.rows[self.next_id] = row
+        self.mutations.append(("create", self.next_id))
+        return self.next_id
 
     def get_current_attendance(self, employee_id):
         open_rows = [
@@ -214,37 +100,67 @@ class _JourneyOdoo:
         ]
         if not open_rows:
             return None
-        row = max(open_rows, key=lambda value: value["check_in_utc"])
-        return {"id": row["odoo_attendance_id"]}
+        return dict(max(open_rows, key=lambda row: row["check_in_utc"]))
 
-    def clock_in(self, employee_id, _wc_name, at, *, odoo_department_id=None):
-        return self._new(
-            employee_id,
-            at,
-            None,
-            None,
-            department_id=odoo_department_id or 8,
-        )
+    def clock_in(self, employee_id, wc_name, at, *, odoo_department_id=None):
+        wc_id = next((key for key, value in self.WC_NAMES.items() if value == wc_name), None)
+        name = {101: "Adrian", 202: "Blair"}.get(employee_id, f"Worker {employee_id}")
+        attendance_id = self._new(employee_id, name, at, None, wc_id)
+        if odoo_department_id is not None:
+            self.rows[attendance_id]["odoo_department_id"] = odoo_department_id
+        return attendance_id
 
     def close_all_open_attendance_rows(self, employee_id, at):
         closed = []
-        for row in self.rows.values():
-            if row["employee_odoo_id"] == employee_id and row["check_out_utc"] is None:
-                row["check_out_utc"] = at
-                row["odoo_write_date"] = self._tick()
-                closed.append(row["odoo_attendance_id"])
-        return tuple(sorted(closed))
+        for row in sorted(self.rows.values(), key=lambda value: value["odoo_attendance_id"]):
+            if row["employee_odoo_id"] != employee_id or row["check_out_utc"] is not None:
+                continue
+            row["check_out_utc"] = at
+            row["odoo_write_date"] = self._written()
+            closed.append(row["odoo_attendance_id"])
+            self.mutations.append(("close", row["odoo_attendance_id"]))
+        return tuple(closed)
 
-    def fetch_attendance_changes(self, **_kwargs):
-        return [dict(row) for row in self.rows.values()]
+    def luke_transfer(self, employee_id, name, at, wc_id):
+        self.close_all_open_attendance_rows(employee_id, at)
+        return self._new(employee_id, name, at, None, wc_id)
+
+    def fetch_attendance_changes(self, *, after_write_date, after_id):
+        if self.timeout:
+            raise TimeoutError("fake Odoo timed out")
+        boundary = (
+            after_write_date or datetime.min.replace(tzinfo=UTC),
+            after_id or 0,
+        )
+        return [
+            dict(row)
+            for row in sorted(
+                self.rows.values(),
+                key=lambda value: (value["odoo_write_date"], value["odoo_attendance_id"]),
+            )
+            if (row["odoo_write_date"], row["odoo_attendance_id"]) > boundary
+        ]
 
     def fetch_open_attendance_rows(self):
+        if self.timeout:
+            raise TimeoutError("fake Odoo timed out")
         return [dict(row) for row in self.rows.values() if row["check_out_utc"] is None]
 
+    def fetch_complete_attendance_id_sweep(self):
+        return attendance_sync.AttendanceIdSweepSnapshot(
+            tuple(sorted(self.rows)), complete=self.sweep_complete
+        )
+
     def fetch_attendance_rows_by_ids(self, ids):
-        return [dict(self.rows[value]) for value in ids if value in self.rows]
+        if self.timeout:
+            raise TimeoutError("fake Odoo timed out")
+        return [dict(self.rows[row_id]) for row_id in ids if row_id in self.rows]
 
     def fetch_employee_attendance_rows(self, employee_id, start, end):
+        if self.timeout:
+            raise TimeoutError("fake Odoo timed out")
+        if self.fail_verification:
+            raise TimeoutError("fake verification reread timed out")
         infinity = datetime.max.replace(tzinfo=UTC)
         return [
             dict(row)
@@ -255,42 +171,69 @@ class _JourneyOdoo:
         ]
 
     def update_attendance_interval(self, attendance_id, *, values):
-        self.rows[attendance_id].update(values)
-        self.rows[attendance_id]["odoo_write_date"] = self._tick()
+        row = self.rows[attendance_id]
+        row.update(values)
+        if "odoo_work_center_id" in values:
+            row["odoo_work_center_name"] = self.WC_NAMES.get(values["odoo_work_center_id"])
+        row["odoo_write_date"] = self._written()
+        self.mutations.append(("update", attendance_id, dict(values)))
 
-    def create_attendance_interval(
-        self,
-        *,
-        employee_odoo_id,
-        check_in_utc,
-        check_out_utc,
-        odoo_work_center_id,
-        odoo_department_id,
-    ):
+    def create_attendance_interval(self, **values):
         return self._new(
-            employee_odoo_id,
-            check_in_utc,
-            check_out_utc,
-            odoo_work_center_id,
-            odoo_department_id,
+            values["employee_odoo_id"],
+            {101: "Adrian", 202: "Blair"}.get(values["employee_odoo_id"]),
+            values["check_in_utc"],
+            values["check_out_utc"],
+            values["odoo_work_center_id"],
         )
 
-    def delete_attendance_interval(self, attendance_id):
-        self.rows.pop(attendance_id)
 
+class _StatefulMirror:
+    """Transactional state boundary used by the public sync orchestration."""
 
-class _JourneyMirror:
     def __init__(self):
-        self.rows: tuple[dict, ...] = ()
-        self.state = attendance_sync.SyncState(None, None, None, None, 0, START)
+        self.rows = {}
+        self.cursor_write_date = None
+        self.cursor_id = None
+        self.last_incremental = None
+        self.last_sweep = T0
+        self.baseline = T0
+        self.generation = 1
         self.failures = []
+        self.recalc_days = set()
 
     @contextmanager
     def logical_run(self):
-        yield self
+        before = (
+            {key: dict(value) for key, value in self.rows.items()},
+            self.cursor_write_date,
+            self.cursor_id,
+            self.last_incremental,
+            self.last_sweep,
+            set(self.recalc_days),
+        )
+        try:
+            yield self
+        except Exception:
+            (
+                self.rows,
+                self.cursor_write_date,
+                self.cursor_id,
+                self.last_incremental,
+                self.last_sweep,
+                self.recalc_days,
+            ) = before
+            raise
 
     def sync_state(self):
-        return self.state
+        return attendance_sync.SyncState(
+            cursor_write_date=self.cursor_write_date,
+            cursor_id=self.cursor_id,
+            last_incremental_completed_at=self.last_incremental,
+            last_full_sweep_completed_at=self.last_sweep,
+            full_sweep_generation=self.generation,
+            baseline_completed_at=self.baseline,
+        )
 
     def record_incremental_started(self, _started_at):
         return None
@@ -304,496 +247,765 @@ class _JourneyMirror:
         completed_at,
         observed_at,
     ):
+        del observed_at
         affected = set()
-        for row in (*self.rows, *rows):
-            affected.update(
-                attendance_mirror.local_days_touched(
-                    row["check_in_utc"], row["check_out_utc"] or completed_at
-                )
-            )
-        self.rows = tuple(dict(row) for row in rows)
-        self.state = replace(
-            self.state,
-            cursor_write_date=cursor_write_date,
-            cursor_id=cursor_id,
-            last_incremental_completed_at=completed_at,
-        )
+        for row in rows:
+            previous = self.rows.get(row["odoo_attendance_id"])
+            if previous != row:
+                if previous is not None:
+                    affected.update(attendance_mirror._row_days(previous, completed_at))
+                affected.update(attendance_mirror._row_days(row, completed_at))
+            self.rows[row["odoo_attendance_id"]] = dict(row)
+        if cursor_write_date is not None:
+            self.cursor_write_date = cursor_write_date
+            self.cursor_id = cursor_id
+        self.last_incremental = completed_at
+        self.recalc_days.update(affected)
         return affected
 
+    def active_attendance_ids(self):
+        return set(self.rows)
+
+    def tombstoned_attendance_ids(self, _ids):
+        return set()
+
+    def store_full_sweep(
+        self,
+        ids,
+        *,
+        recovery_rows,
+        generation,
+        completed_at,
+        observed_at,
+    ):
+        del recovery_rows, observed_at
+        removed = set(self.rows) - set(ids)
+        for row_id in removed:
+            self.rows.pop(row_id)
+        self.generation = generation
+        self.last_sweep = completed_at
+        return attendance_sync.SweepStoreResult(frozenset(), len(removed))
+
     def record_failure(self, owner, error):
-        self.failures.append((owner, error))
+        self.failures.append((owner, str(error)))
+
+    def complete_baseline_if_ready(self, _completed_at):
+        return True
 
 
-def test_stateful_source_round_trip_correction_recalc_and_resolution(monkeypatch):
-    """The release journey crosses punch, source, mirror, correction, and cache."""
-    source = _JourneyOdoo()
-    mirror = _JourneyMirror()
-    synced_punches = []
-    monkeypatch.setattr(timeclock_sync, "odoo_client", source)
-    monkeypatch.setattr(
-        timeclock_sync,
-        "_mark_synced",
-        lambda log_id, attendance_id: synced_punches.append((log_id, attendance_id)),
+class _StatefulMeter:
+    def __init__(self):
+        self.samples = {}
+        self.source_totals = {}
+
+    def set_samples(self, day, wc_name, samples):
+        self.samples[(day, wc_name)] = tuple(samples)
+
+    def set_source_total(self, day, wc_name, units):
+        self.source_totals[(day, wc_name)] = units
+
+    def leaderboard(self, day, _now_utc=None):
+        results = []
+        for (sample_day, wc_name), samples in sorted(self.samples.items()):
+            if sample_day != day:
+                continue
+            active = ()
+            if samples:
+                active = ((samples[0][0], samples[-1][0] + timedelta(hours=1)),)
+            results.append(
+                SimpleNamespace(
+                    station=SimpleNamespace(name=wc_name),
+                    units=self.source_totals.get(
+                        (sample_day, wc_name), sum(units for _at, units in samples)
+                    ),
+                    reading_count=len(samples),
+                    truncated=False,
+                    downtime_minutes=0,
+                    active_minutes=60,
+                    last_reading_at=samples[-1][0] if samples else None,
+                    last_status="Working",
+                    samples=samples,
+                    active_intervals=active,
+                )
+            )
+        return results
+
+
+def test_clock_in_luke_locations_transfers_and_shared_production_form_one_truth():
+    rows = [
+        _row(1, 101, "Adrian", T0, T1, None, None),
+        _row(2, 101, "Adrian", T1, T2, 11, "Luke A"),
+        _row(3, 101, "Adrian", T2, T3, 22, "Luke B"),
+        _row(4, 202, "Blair", T2, T3, 22, "Luke B"),
+    ]
+
+    spans = _project(rows)
+    assert [(span.status, span.app_work_center_name) for span in spans] == [
+        ("pending_first_location", None),
+        ("valid", "WC A"),
+        ("valid", "WC B"),
+        ("valid", "WC B"),
+    ]
+    segments = assignment_windows.work_segments_from_timeline(
+        spans, window_start_utc=T0, window_end_utc=T3
     )
-    monkeypatch.setattr(attendance_sync, "_source", source)
+    attribution = production_history.attribute_for_segments(
+        segments,
+        wc_totals={"WC A": (10, 0), "WC B": (20, 0)},
+        samples_by_wc={
+            "WC A": [(T1 + timedelta(minutes=1), 10)],
+            "WC B": [(T2 + timedelta(minutes=1), 20)],
+        },
+        productive_minutes=lambda _person, _wc, start, end: (end - start).total_seconds() / 60,
+        strict=True,
+    )
+
+    assert attribution[(101, "Adrian")]["WC A"]["units"] == 10
+    assert attribution[(101, "Adrian")]["WC B"]["units"] == 10
+    assert attribution[(202, "Blair")]["WC B"]["units"] == 10
+    assert sum(wc["units"] for person in attribution.values() for wc in person.values()) == 30
+
+
+def test_conflicting_and_unknown_odoo_locations_never_fabricate_credit():
+    spans = _project(
+        [
+            _row(10, 101, "Adrian", T0, T2, 11, "Luke A"),
+            _row(11, 101, "Adrian", T1, T3, 22, "Luke B"),
+            _row(12, 202, "Blair", T0, T3, 999, "Luke's exact raw name"),
+        ]
+    )
+
+    assert any(span.status == "conflicting_location" for span in spans)
+    unknown = next(span for span in spans if span.status == "unmapped_location")
+    assert unknown.odoo_work_center_name == "Luke's exact raw name"
+    segments = assignment_windows.work_segments_from_timeline(
+        spans, window_start_utc=T0, window_end_utc=T3
+    )
+    assert not [segment for segment in segments if segment.person_odoo_id == 202]
+    assert not [
+        segment
+        for segment in segments
+        if segment.person_odoo_id == 101 and segment.start_utc < T2 and segment.end_utc > T1
+    ]
+
+
+def test_closed_final_attendance_has_no_location_past_clock_out():
+    clock_out = T2 + timedelta(minutes=10)
+    spans = _project([_row(30, 101, "Adrian", T1, clock_out, 11, "Luke A")])
+
+    assert spans[-1].end_utc == clock_out
+    assert all(span.end_utc <= clock_out for span in spans)
+
+
+class _CorrectionQueueCursor:
+    def __init__(self):
+        self.result = None
+        self.operations = []
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(sql.split())
+        self.operations.append((normalized, params))
+        if normalized.startswith("SELECT status, attempt_count"):
+            self.result = {"status": "recalculating", "attempt_count": 1}
+        elif normalized.startswith("UPDATE attendance_correction_jobs"):
+            self.result = {"id": 9}
+        elif normalized.startswith("SELECT status FROM attendance_correction_jobs"):
+            self.result = {"status": "complete"}
+        else:
+            self.result = None
+
+    def fetchone(self):
+        return self.result
+
+
+@contextmanager
+def _cursor(value):
+    yield value
+
+
+def test_manager_split_verifies_enqueues_recalc_and_then_allows_only_its_issue_to_resolve(
+    monkeypatch,
+):
+    source = _row(70, 101, "Adrian", T0, T3, 11, "Luke A")
+    plan = attendance_corrections.plan_correction(
+        rows=[source],
+        employee_odoo_id=101,
+        start_utc=T1,
+        end_utc=T2,
+        odoo_work_center_id=22,
+        odoo_department_id=7,
+    )
+    completed = []
+    next_created_id = 700
+    for operation in plan.operations:
+        record = {
+            "operation_key": operation.key,
+            "kind": operation.kind,
+            "attendance_id": operation.attendance_id,
+        }
+        if operation.kind == "create":
+            next_created_id += 1
+            record["attendance_id"] = next_created_id
+        completed.append(record)
+    verified_source = [
+        {
+            **row,
+            "employee_name": "Adrian",
+            "odoo_work_center_name": "Luke B" if row["odoo_work_center_id"] == 22 else "Luke A",
+            "odoo_department_name": "Production",
+            "odoo_write_date": T3,
+        }
+        for row in attendance_corrections._expected_with_created_ids(plan, completed)
+    ]
+
+    class Facade:
+        def fetch_employee_attendance_rows(self, *_args):
+            return verified_source
+
+    verified = attendance_corrections._verification_rows(Facade(), {101: plan}, completed, T1, T2)
+    assert [row["odoo_work_center_id"] for row in verified] == [11, 22, 11]
+
+    cursor = _CorrectionQueueCursor()
+    claim = SimpleNamespace(
+        job_id=9,
+        attempt_count=1,
+        lease_until=T3 + timedelta(minutes=15),
+        row={"completed_operations": []},
+    )
+    enqueued = []
+    monkeypatch.setattr(db, "cursor", lambda: _cursor(cursor))
+    monkeypatch.setattr(
+        attendance_mirror,
+        "_enqueue_recalc_cur",
+        lambda cur, days, reason, *, requested_at: enqueued.append(
+            (cur, tuple(days), reason, requested_at)
+        ),
+    )
+    touched_days = attendance_corrections._touched_days({101: [source]}, {101: plan}, open_end=T3)
+
+    assert attendance_corrections._enqueue_recalculation(claim, touched_days, (), requested_at=T3)
+    assert enqueued == [(cursor, (DAY,), "attendance_correction_verified", T3)]
+    monkeypatch.setattr(
+        db,
+        "query",
+        lambda *_a, **_k: [{"day": DAY, "completed_at": T3, "cache_ready_at": T3}],
+    )
+    assert attendance_corrections._recalc_complete(touched_days)
+    assert inbox_reconcile._correction_allows_resolution_cur(
+        cursor, "production_unassigned_run:wc-b:1"
+    )
+
+    corrected_key = "production_unassigned_run:wc-b:1"
+    unrelated_key = "attendance_unmapped_location:202"
+    previous = {
+        corrected_key: {"item_kind": "production_unassigned_run"},
+        unrelated_key: {"item_kind": "attendance_unmapped_location"},
+    }
+    current = {unrelated_key: previous[unrelated_key]}
+    actions = inbox_reconcile.plan_reconcile(
+        current,
+        previous,
+        {"production_unassigned_run", "attendance_unmapped_location"},
+    )
+    assert actions["departed"] == [corrected_key]
+    assert actions["still_open"] == [unrelated_key]
+
+
+def test_post_baseline_historical_edit_queues_and_atomically_replaces_a_strict_day(
+    monkeypatch,
+):
+    historical_start = datetime(2026, 8, 29, 13, 0, tzinfo=UTC)
+    historical_end = datetime(2026, 8, 29, 14, 0, tzinfo=UTC)
+    historical_day = date(2026, 8, 29)
+    changed_row = _row(
+        80,
+        101,
+        "Adrian",
+        historical_start,
+        historical_end,
+        22,
+        "Luke B",
+    )
+    days = attendance_mirror._row_days(changed_row, T3)
+    queue_cursor = _CorrectionQueueCursor()
+
+    attendance_mirror._enqueue_recalc_cur(
+        queue_cursor,
+        days,
+        "attendance_source_changed",
+        requested_at=T3,
+    )
+    assert days == {historical_day}
+    assert any(
+        "INSERT INTO attendance_recalc_queue" in operation
+        for operation, _params in queue_cursor.operations
+    )
+
+    writes = []
+
+    class ProductionCursor:
+        def execute(self, sql, params=None):
+            writes.append((" ".join(sql.split()), params))
+
+    monkeypatch.setattr(
+        db,
+        "execute_values",
+        lambda cur, sql, values, template=None: writes.append(
+            ("execute_values", tuple(values), template)
+        ),
+    )
+    row = {
+        "day": historical_day,
+        "emp_id": "101",
+        "name": "Adrian",
+        "wc_name": "WC B",
+        "units": 10,
+        "downtime": 0,
+        "hours": 2,
+        "days_worked": 0.25,
+        "excluded_minutes": 0,
+    }
+    precompute._upsert_production_daily_cur(
+        ProductionCursor(),
+        [row],
+        replace_days=(historical_day,),
+        strict_day=historical_day,
+    )
+
+    assert "INSERT INTO attendance_strict_days" in writes[0][0]
+    assert "DELETE FROM production_daily" in writes[1][0]
+    assert writes[2][0] == "execute_values"
+
+
+def test_public_orchestration_keeps_one_stateful_odoo_and_meter_truth(monkeypatch):
+    """Exercise the real sync, strict matcher, precompute, and correction worker."""
+    odoo = _StatefulOdoo()
+    mirror = _StatefulMirror()
+    meter = _StatefulMeter()
+    saved = {DAY: ({"marker": "last-good"},)}
+    queued = []
+    synced_punches = []
+
+    monkeypatch.setattr(attendance_sync, "_source", odoo)
     monkeypatch.setattr(attendance_sync, "_backend", mirror)
     monkeypatch.setattr(
         attendance_sync,
         "_enqueue_department_repairs_after_sync",
-        lambda *_args, **_kwargs: None,
+        lambda *_a, **_k: None,
     )
-
-    # 1-2. The real punch retry opens the WC-less Odoo interval; the real sync
-    # orchestration mirrors it and projection holds it in first-location grace.
-    timeclock_sync._retry_one(
-        {
-            "id": 1,
-            "person_odoo_id": 101,
-            "action": "clock_in",
-            "wc_name": None,
-            "occurred_at": START,
-        }
-    )
-    assert attendance_sync.run_incremental_sync(
-        now_utc=START + timedelta(minutes=4)
-    ).success
-    assert _project(mirror.rows, START + timedelta(minutes=4))[0].status == (
-        "pending_first_location"
-    )
-
-    # 3-8. Luke labels the first interval and transfers at one exact boundary;
-    # an unknown raw destination becomes a real mirrored exception.
-    first_id = synced_punches[0][1]
-    source.update_attendance_interval(
-        first_id,
-        values={
-            "check_in_utc": START,
-            "check_out_utc": START + timedelta(hours=2),
-            "odoo_work_center_id": 71,
-            "odoo_department_id": 8,
-        },
-    )
-    source._new(101, START + timedelta(hours=2), None, 999)
-    attendance_sync.run_incremental_sync(now_utc=START + timedelta(hours=3))
-    conflicted = _project(mirror.rows, START + timedelta(hours=3))
-    assert any(span.status == "unmapped_location" for span in conflicted)
-
-    # 9. The production correction planner, preflight, ordered Odoo writes,
-    # verification reread, and next mirror cycle replace the overlap exactly.
-    correction_start = START + timedelta(hours=2)
-    correction_end = START + timedelta(hours=3, minutes=59)
-    source_rows = source.fetch_employee_attendance_rows(
-        101, correction_start, correction_end
-    )
-    plan = attendance_corrections.plan_correction(
-        rows=source_rows,
-        employee_odoo_id=101,
-        start_utc=correction_start,
-        end_utc=correction_end,
-        odoo_work_center_id=72,
-        odoo_department_id=8,
-    )
-    ordered = attendance_corrections._ordered_operations(  # noqa: SLF001
-        plan.operations,
-        source_rows=source_rows,
-    )
-    attendance_corrections._preflight_operations(  # noqa: SLF001
-        source,
-        ordered,
-        source_rows,
-    )
-    completed = [
-        attendance_corrections._perform_operation(  # noqa: SLF001
-            source,
-            operation,
-            source_rows,
-        )[0]
-        for operation in ordered
-    ]
-    verified = attendance_corrections._expected_with_created_ids(  # noqa: SLF001
-        plan,
-        completed,
-    )
-    assert verified
-    sync_result = attendance_sync.run_incremental_sync(
-        now_utc=START + timedelta(hours=3, minutes=1)
-    )
-    corrected = _project(mirror.rows, START + timedelta(hours=3, minutes=1))
-    assert sync_result.affected_days == frozenset({date(2026, 8, 31)})
-    assert all(span.status == "valid" for span in corrected)
-
-    # Recalculation consumes those corrected spans, stores one strict snapshot,
-    # and the complete conflict section can now depart from the inbox mirror.
-    credit = _credit(
-        corrected,
-        {"WC B": [(START + timedelta(hours=2, minutes=30), 12.0)]},
-    )
-    rows = (
-        {
-            "day": date(2026, 8, 31),
-            "emp_id": "101",
-            "name": "Worker 101",
-            "wc_name": "WC B",
-            "units": credit[(101, "Worker 101")]["WC B"]["units"],
-            "downtime": 0.0,
-            "hours": 1.0,
-            "days_worked": 1.0,
-            "excluded_minutes": 0.0,
-        },
-    )
-    prepared = precompute.PreparedProductionDay(date(2026, 8, 31), rows, None, None)
-    stored = []
-    monkeypatch.setattr(precompute, "prepare_day", lambda *_args, **_kwargs: prepared)
     monkeypatch.setattr(
-        precompute,
-        "store_prepared_day",
-        lambda value: stored.extend(value.rows) or len(value.rows),
+        attendance_location_policy,
+        "match_state_for_day",
+        lambda _day, *, now_utc=None: "strict",
     )
-    assert precompute.precompute_day(date(2026, 8, 31), object())["rows_written"] == 1
-    assert stored[0]["units"] == 12.0
-    conflict_key = "attendance_unmapped_location:101:journey"
-    actions = inbox_reconcile.plan_reconcile(
-        {},
-        {conflict_key: {"item_kind": "attendance_unmapped_location"}},
-        {"attendance_unmapped_location"},
-    )
-    assert actions["departed"] == [conflict_key]
-
-    # 10-11. The real day-boundary clock-out closes every open interval; a
-    # historical source edit then requeues every local day it touches.
-    timeclock_sync._retry_one(
-        {
-            "id": 2,
-            "person_odoo_id": 101,
-            "action": "clock_out",
-            "wc_name": None,
-            "occurred_at": START + timedelta(hours=4),
-            "close_all_open_rows": True,
-        }
-    )
-    attendance_sync.run_incremental_sync(now_utc=START + timedelta(hours=4, minutes=1))
-    assert max(span.end_utc for span in _project(mirror.rows, START + timedelta(hours=5))) == (
-        START + timedelta(hours=4)
-    )
-    historical = min(source.rows)
-    source.rows[historical]["check_in_utc"] = datetime(2026, 8, 30, 23, 30, tzinfo=UTC)
-    source.rows[historical]["odoo_write_date"] = source._tick()
-    historical_sync = attendance_sync.run_incremental_sync(
-        now_utc=START + timedelta(hours=5)
-    )
-    assert historical_sync.affected_days == frozenset(
-        {date(2026, 8, 30), date(2026, 8, 31)}
+    monkeypatch.setattr(
+        attendance_mirror,
+        "health_snapshot",
+        lambda: attendance_mirror.MirrorHealth(
+            last_incremental_completed_at=mirror.last_incremental,
+            last_full_sweep_completed_at=mirror.last_sweep,
+            baseline_completed_at=mirror.baseline,
+            oldest_recalc_requested_at=None,
+            last_error=None,
+        ),
     )
 
+    def timeline(start, end, *, as_of_utc=None):
+        as_of = as_of_utc or end
+        rows = [
+            dict(row)
+            for row in mirror.rows.values()
+            if row["check_in_utc"] < end
+            and (row["check_out_utc"] is None or row["check_out_utc"] > start)
+        ]
+        return attendance_timeline.project_rows(
+            rows,
+            as_of_utc=as_of,
+            verified_through_utc=mirror.last_incremental or as_of,
+            map_work_center=lambda wc_id: {11: "WC A", 22: "WC B"}.get(wc_id),
+            requires_work_center=lambda _department: True,
+            expected_department_id=lambda _wc: 7,
+        )
 
-@pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="needs local Postgres")
-def test_durable_job_recalc_cache_and_inbox_lifecycle(monkeypatch):
-    """The manager correction crosses every durable queue and audit boundary."""
-    db.init_pool()
-    lifecycle_start = datetime(2098, 1, 5, 13, tzinfo=UTC)
-    day = lifecycle_start.astimezone(attendance_mirror.SITE_TZ).date()
-    prior_day = day - timedelta(days=1)
-    employee_id = 990101
-    attendance_id = 990001
-    item_key = (
-        f"attendance_unmapped_location:{employee_id}:{attendance_id}:"
-        f"{lifecycle_start.isoformat()}"
+    monkeypatch.setattr(attendance_timeline, "timeline_for_range", timeline)
+    monkeypatch.setattr(
+        production_history,
+        "_metered_leaderboard",
+        lambda client, day, **kwargs: client.leaderboard(day, kwargs.get("now_utc")),
     )
-    original_rollout = app_settings.get_setting("odoo_attendance_location")
-    original_sync = db.query(
-        "SELECT baseline_completed_at, last_incremental_completed_at, "
-        "last_incremental_observed_at FROM odoo_attendance_sync_state "
-        "WHERE singleton = TRUE"
-    )[0]
-    source = _JourneyOdoo()
-    source.next_id = attendance_id
-    source._new(
-        employee_id,
-        lifecycle_start,
-        lifecycle_start + timedelta(hours=4),
-        999,
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(7))
+    monkeypatch.setattr(shift_config, "shift_end_for", lambda _day: time(15))
+    monkeypatch.setattr(shift_config, "breaks_for", lambda _day: ())
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda _day, start, end: (end - start).total_seconds() / 60,
     )
-    source_row = dict(source.rows[attendance_id])
+    monkeypatch.setattr(wc_attributions, "testing_windows_for_day", lambda _day: {})
+    monkeypatch.setattr(wc_attributions, "breakdown_windows_for_day", lambda _day: {})
+    monkeypatch.setattr(attendance, "name_to_person_id", lambda: {})
+    monkeypatch.setattr(attendance_readiness, "ordinary_refresh_ready", lambda _day: True)
+    monkeypatch.setattr(
+        attendance_mirror,
+        "enqueue_recalc",
+        lambda days, reason: queued.append((tuple(days), reason)),
+    )
+
+    def store(prepared, *, cur=None):
+        del cur
+        saved[prepared.day] = tuple(dict(row) for row in prepared.rows)
+        return len(prepared.rows)
+
+    monkeypatch.setattr(precompute, "store_prepared_day", store)
+
+    # Plant Manager opens the day only; the public punch worker sends no WC.
+    punch = {
+        "id": 1,
+        "person_odoo_id": 101,
+        "action": "clock_in",
+        "wc_name": None,
+        "close_all_open_rows": False,
+        "occurred_at": T0,
+    }
+    with monkeypatch.context() as local:
+        local.setattr(timeclock_sync.db, "query", lambda *_a, **_k: [punch])
+        local.setattr(
+            timeclock_sync.db,
+            "execute",
+            lambda _sql, params=None: synced_punches.append(params),
+        )
+        local.setattr(
+            timeclock_sync.odoo_client, "get_current_attendance", odoo.get_current_attendance
+        )
+        local.setattr(timeclock_sync.odoo_client, "clock_in", odoo.clock_in)
+        timeclock_sync.sync_one_by_id(1)
+
+    assert odoo.get_current_attendance(101)["odoo_work_center_id"] is None
+    assert synced_punches[-1][0] == 101
+    assert attendance_sync.run_incremental_sync(now_utc=T0 + timedelta(minutes=4)).success
+    first_spans = timeline(T0, T1, as_of_utc=T0 + timedelta(minutes=4))
+    assert [(span.status, span.app_work_center_name) for span in first_spans] == [
+        ("pending_first_location", None)
+    ]
+
+    meter.set_samples(DAY, "WC A", ((T0 + timedelta(minutes=3), 4),))
+    pending_runs = production_history.unassigned_runs_for_day(
+        DAY, meter, now_utc=T0 + timedelta(minutes=4)
+    )
+    assert [(run.wc_name, run.units) for run in pending_runs] == [("WC A", 4.0)]
+    pending_precompute = precompute.precompute_day(DAY, meter)
+    assert pending_precompute == {"day": DAY.isoformat(), "rows_written": 0}
+    assert saved[DAY] == ()
+
+    # Luke supplies A, later transfers Adrian to B, and puts Blair at B.
+    first_row_id = odoo.get_current_attendance(101)["odoo_attendance_id"]
+    odoo.luke_transfer(101, "Adrian", T1, 11)
+    assert attendance_sync.run_incremental_sync(now_utc=T1 + timedelta(seconds=1)).success
+    meter.set_samples(
+        DAY,
+        "WC A",
+        ((T0 + timedelta(minutes=3), 4), (T1 + timedelta(minutes=1), 10)),
+    )
+    odoo.luke_transfer(101, "Adrian", T2, 22)
+    odoo._new(202, "Blair", T2, None, 22)
+    meter.set_samples(DAY, "WC B", ((T2 + timedelta(minutes=1), 20),))
+
+    # Conflicts and unknown raw labels remain exact but never become segments.
+    odoo._new(303, "Casey", T1, T2, 11)
+    odoo._new(303, "Casey", T1 + timedelta(minutes=1), T2, 22)
+    odoo._new(404, "Dana", T1, T2, 999)
+    assert attendance_sync.run_incremental_sync(now_utc=T2 + timedelta(minutes=2)).success
+    observed = timeline(T0, T3, as_of_utc=T2 + timedelta(minutes=2))
+    assert any(span.status == "conflicting_location" for span in observed)
+    raw = next(span for span in observed if span.employee_odoo_id == 404)
+    assert raw.status == "unmapped_location"
+    assert raw.odoo_work_center_name == "Luke's exact raw name"
+    visible_segments = assignment_windows.work_segments_from_timeline(
+        observed, window_start_utc=T0, window_end_utc=T3
+    )
+    assert not [segment for segment in visible_segments if segment.person_odoo_id == 404]
+    assert not [
+        segment
+        for segment in visible_segments
+        if segment.person_odoo_id == 303 and segment.end_utc > T1 + timedelta(minutes=1)
+    ]
+
+    # A manager fixes the first unassigned interval.  The public worker owns
+    # Odoo mutation, exact reread, mirror sync, strict recompute/cache, and audit.
+    source = dict(odoo.rows[first_row_id])
     plan = attendance_corrections.plan_correction(
-        rows=[source_row],
-        employee_odoo_id=employee_id,
-        start_utc=lifecycle_start,
-        end_utc=lifecycle_start + timedelta(hours=4),
-        odoo_work_center_id=72,
-        odoo_department_id=8,
+        rows=[source],
+        employee_odoo_id=101,
+        start_utc=T0,
+        end_utc=T1,
+        odoo_work_center_id=11,
+        odoo_department_id=7,
     )
     preview = attendance_corrections.CorrectionPreview(
-        item_key=item_key,
-        employee_odoo_ids=(employee_id,),
-        target_work_center_name="WC B",
-        target_odoo_work_center_id=72,
-        target_odoo_department_id=8,
-        start_utc=lifecycle_start,
-        end_utc=lifecycle_start + timedelta(hours=4),
+        item_key="production_unassigned_run:wc-a:early",
+        employee_odoo_ids=(101,),
+        target_work_center_name="WC A",
+        target_odoo_work_center_id=11,
+        target_odoo_department_id=7,
+        start_utc=T0,
+        end_utc=T1,
         plans=(plan,),
     )
-    prepared = precompute.PreparedProductionDay(
-        day,
-        (
-            {
-                "day": day,
-                "emp_id": str(employee_id),
-                "name": f"Worker {employee_id}",
-                "wc_name": "WC B",
-                "units": 12.0,
-                "downtime": 0.0,
-                "hours": 4.0,
-                "days_worked": 1.0,
-                "excluded_minutes": 0.0,
-            },
-        ),
-        None,
-        "legacy",
+    claim = attendance_corrections._JobClaim(
+        job_id=9,
+        attempt_count=1,
+        lease_until=T3 + timedelta(minutes=15),
+        row={
+            "id": 9,
+            "item_key": preview.item_key,
+            "status": "applying",
+            "target_work_center_name": "WC A",
+            "target_odoo_work_center_id": 11,
+            "employee_odoo_ids": [101],
+            "source_snapshot": attendance_corrections._snapshot_payload(preview),
+            "operations": attendance_corrections._plans_payload(preview),
+            "completed_operations": [],
+            "start_utc": T0,
+            "end_utc": T1,
+            "actor_email": "manager@example.com",
+            "actor_name": "Manager",
+        },
     )
+    correction_state = {"audit": False, "cache": False, "claimed": False}
 
-    app_settings.set_setting(
-        "odoo_attendance_location",
-        {"mode": "off", "cutover_at": None, "live_gate": None},
-    )
-    with db.cursor() as cur:
-        cur.execute(
-            "DELETE FROM attendance_correction_job_events WHERE correction_job_id IN "
-            "(SELECT id FROM attendance_correction_jobs WHERE item_key = %s)",
-            (item_key,),
-        )
-        cur.execute("DELETE FROM attendance_correction_jobs WHERE item_key = %s", (item_key,))
-        # The production worker claims the global oldest queue row.  This
-        # disposable-Postgres release proof owns the queue so an unrelated
-        # leftover fixture cannot consume its one synchronous lifecycle tick.
-        cur.execute("DELETE FROM attendance_recalc_queue")
-        cur.execute(
-            "DELETE FROM attendance_strict_days WHERE day = ANY(%s)",
-            ([prior_day, day],),
-        )
-        cur.execute(
-            "DELETE FROM production_daily WHERE day = ANY(%s) AND emp_id = %s",
-            ([prior_day, day], str(employee_id)),
-        )
-        cur.execute("DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s", (attendance_id,))
-        cur.execute("DELETE FROM inbox_open_items WHERE item_key = %s", (item_key,))
-        cur.execute("DELETE FROM inbox_events WHERE item_key = %s", (item_key,))
-        cur.execute(
-            "UPDATE odoo_attendance_sync_state SET baseline_completed_at = %s, "
-            "last_incremental_completed_at = %s, last_incremental_observed_at = %s "
-            "WHERE singleton = TRUE",
-            (lifecycle_start, lifecycle_start, lifecycle_start),
-        )
-        cur.execute(
-            "INSERT INTO inbox_open_items "
-            "(item_key, item_kind, person_name, category_label, priority, first_seen, last_seen) "
-            "VALUES (%s, %s, NULL, %s, %s, %s, %s)",
-            (
-                item_key,
-                "attendance_unmapped_location",
-                "Unknown Odoo Work Center",
-                "urgent",
-                lifecycle_start,
-                lifecycle_start,
-            ),
+    def claim_job(**_kwargs):
+        if correction_state["claimed"]:
+            return None
+        correction_state["claimed"] = True
+        return claim
+
+    def transition(local_claim, **kwargs):
+        if kwargs.get("status"):
+            local_claim.row["status"] = kwargs["status"]
+        return True
+
+    def complete_record(local_claim, record, **_kwargs):
+        if record.get("stage") == "recalc_horizon":
+            local_claim.row["completed_operations"].insert(0, dict(record))
+        else:
+            local_claim.row["completed_operations"].append(dict(record))
+        return True
+
+    def reserve(local_claim, operation):
+        return attendance_corrections._OperationReservation(
+            job_id=local_claim.job_id,
+            attempt_count=local_claim.attempt_count,
+            operation_key=operation.key,
+            token="a" * 32,
+            reserved_until=local_claim.lease_until,
         )
 
-    monkeypatch.setattr(attendance_corrections, "_default_facade", lambda: source)
+    def complete_reserved(local_claim, _reservation, record, **kwargs):
+        return complete_record(local_claim, record, **kwargs)
+
+    def mirror_verified(local_claim, *_args, **_kwargs):
+        result = attendance_sync.run_incremental_sync(now_utc=T3)
+        assert result.success
+        local_claim.row["completed_operations"].append({"stage": "mirror_complete"})
+        return True
+
+    def enqueue_recalc(local_claim, days, *_args, **_kwargs):
+        queued.extend((tuple(days), "attendance_correction_verified") for _ in range(1))
+        local_claim.row["completed_operations"].append(
+            {"stage": "recalc_enqueued", "recalc_ids": [day.isoformat() for day in days]}
+        )
+        return True
+
+    def run_recalc(days):
+        for day in days:
+            assert precompute.precompute_day(day, meter)["rows_written"] > 0
+        correction_state["cache"] = True
+        return True
+
+    monkeypatch.setattr(attendance_corrections, "_claim_job", claim_job)
+    monkeypatch.setattr(attendance_corrections, "_default_facade", lambda: odoo)
+    monkeypatch.setattr(
+        attendance_corrections, "_validate_applying_targets", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(attendance_corrections, "_claim_is_current", lambda _claim: True)
+    monkeypatch.setattr(attendance_corrections, "_heartbeat_claim", lambda _claim: None)
+    monkeypatch.setattr(attendance_corrections, "_transition", transition)
+    monkeypatch.setattr(attendance_corrections, "_complete_record", complete_record)
+    monkeypatch.setattr(attendance_corrections, "_reserve_operation", reserve)
     monkeypatch.setattr(
         attendance_corrections,
-        "_validate_applying_targets",
-        lambda *_args, **_kwargs: None,
+        "_renew_operation_reservation",
+        lambda _claim, reservation: reservation,
     )
+    monkeypatch.setattr(attendance_corrections, "_complete_reserved_operation", complete_reserved)
+    monkeypatch.setattr(attendance_corrections, "_mirror_verified_rows", mirror_verified)
+    monkeypatch.setattr(attendance_corrections, "_enqueue_recalculation", enqueue_recalc)
+    monkeypatch.setattr(attendance_corrections, "_run_recalculation", run_recalc)
     monkeypatch.setattr(
-        attendance_recalc,
-        "_precompute_module",
-        lambda: type("Precompute", (), {"prepare_day": staticmethod(lambda *_a: prepared)}),
+        attendance_corrections,
+        "_complete_with_audit",
+        lambda *_a, **_k: correction_state.__setitem__("audit", True) or True,
     )
-    monkeypatch.setattr(attendance_recalc, "_default_production_client", lambda: object())
-    monkeypatch.setattr(attendance_recalc, "_refresh_caches", lambda _day: None)
 
-    try:
-        job_id = attendance_corrections.create_job_from_preview(
-            preview=preview,
-            actor_email="manager@example.com",
-            actor_name="Manager",
-        )
-        result = attendance_corrections.process_job(job_id)
+    correction = attendance_corrections.process_job(9)
 
-        assert result.status == "complete", result
-        assert db.query(
-            "SELECT status FROM attendance_correction_jobs WHERE id = %s",
-            (job_id,),
-        ) == [{"status": "complete"}]
-        phases = {
-            (row["phase"], row["result"])
-            for row in db.query(
-                "SELECT phase, result FROM attendance_correction_job_events "
-                "WHERE correction_job_id = %s",
-                (job_id,),
-            )
+    assert correction.status == "complete"
+    assert odoo.rows[first_row_id]["odoo_work_center_id"] == 11
+    assert correction_state == {"audit": True, "cache": True, "claimed": True}
+    by_person_wc = {
+        (row["emp_id"], row["wc_name"]): row["units"] for row in saved[DAY] if row["units"] > 0
+    }
+    assert by_person_wc == {("101", "WC A"): 14.0, ("101", "WC B"): 10.0, ("202", "WC B"): 10.0}
+    assert all(row["units"] == 0 for row in saved[DAY] if row["emp_id"] in {"303", "404"})
+    departed = inbox_reconcile.plan_reconcile(
+        {},
+        {preview.item_key: {"item_kind": "production_unassigned_run"}},
+        {"production_unassigned_run"},
+    )
+    assert departed["departed"] == [preview.item_key]
+
+    # Plant Manager closes the workday; the final mirrored interval is bounded.
+    for log_id, employee_id in ((2, 101), (3, 202)):
+        clock_out = {
+            "id": log_id,
+            "person_odoo_id": employee_id,
+            "action": "clock_out",
+            "wc_name": None,
+            "close_all_open_rows": True,
+            "occurred_at": T3,
         }
-        assert ("verifying", "verified") in phases
-        assert ("recalculation", "complete") in phases
-        assert db.query(
-            "SELECT completed_at IS NOT NULL AS completed, "
-            "cache_ready_at IS NOT NULL AS cache_ready "
-            "FROM attendance_recalc_queue WHERE day = %s",
-            (day,),
-        ) == [{"completed": True, "cache_ready": True}]
-        assert db.query(
-            "SELECT units FROM production_daily WHERE day = %s AND emp_id = %s",
-            (day, str(employee_id)),
-        ) == [{"units": 12.0}]
+        with monkeypatch.context() as local:
+            local.setattr(timeclock_sync.db, "query", lambda *_a, row=clock_out, **_k: [row])
+            local.setattr(timeclock_sync.db, "execute", lambda *_a, **_k: None)
+            local.setattr(
+                timeclock_sync.odoo_client,
+                "close_all_open_attendance_rows",
+                odoo.close_all_open_attendance_rows,
+            )
+            timeclock_sync.sync_one_by_id(log_id)
+    assert attendance_sync.run_incremental_sync(now_utc=T3 + timedelta(seconds=1)).success
+    assert all(
+        span.end_utc <= T3
+        for span in timeline(T0, T3 + timedelta(hours=1), as_of_utc=T3 + timedelta(hours=1))
+        if span.employee_odoo_id in {101, 202}
+    )
 
-        monkeypatch.setattr(
-            exception_inbox,
-            "build_snapshot",
-            lambda: {
-                "attendance_location_mode": "shadow",
-                "queue": [],
-                "source_errors": [],
-                "sections": [
-                    {
-                        "id": "attendance_unmapped_location",
-                        "count": 0,
-                        "rows": [],
-                        "complete": True,
-                    }
-                ],
+    # A late Odoo edit of an old strict day is discovered and replaces that
+    # historical snapshot without reinterpreting the current day.
+    historical_day = DAY - timedelta(days=1)
+    historical_start = T0 - timedelta(days=1)
+    historical_id = odoo._new(
+        505,
+        "Evan",
+        historical_start,
+        historical_start + timedelta(hours=1),
+        11,
+    )
+    meter.set_samples(historical_day, "WC A", ((historical_start + timedelta(minutes=5), 5),))
+    assert attendance_sync.run_incremental_sync(now_utc=T3 + timedelta(minutes=1)).success
+    assert precompute.precompute_day(historical_day, meter)["rows_written"] == 1
+    assert saved[historical_day][0]["wc_name"] == "WC A"
+
+    odoo.update_attendance_interval(historical_id, values={"odoo_work_center_id": 22})
+    meter.set_samples(historical_day, "WC A", ())
+    meter.set_samples(historical_day, "WC B", ((historical_start + timedelta(minutes=5), 5),))
+    assert attendance_sync.run_incremental_sync(now_utc=T3 + timedelta(minutes=2)).success
+    assert historical_day in mirror.recalc_days
+    assert precompute.precompute_day(historical_day, meter)["rows_written"] == 1
+    assert saved[historical_day][0]["wc_name"] == "WC B"
+
+    def correction_claim(job_id, source_row, target_wc):
+        local_plan = attendance_corrections.plan_correction(
+            rows=[source_row],
+            employee_odoo_id=source_row["employee_odoo_id"],
+            start_utc=source_row["check_in_utc"],
+            end_utc=source_row["check_out_utc"],
+            odoo_work_center_id=target_wc,
+            odoo_department_id=7,
+        )
+        local_preview = attendance_corrections.CorrectionPreview(
+            item_key=f"production_unassigned_run:historical:{job_id}",
+            employee_odoo_ids=(source_row["employee_odoo_id"],),
+            target_work_center_name={11: "WC A", 22: "WC B"}[target_wc],
+            target_odoo_work_center_id=target_wc,
+            target_odoo_department_id=7,
+            start_utc=source_row["check_in_utc"],
+            end_utc=source_row["check_out_utc"],
+            plans=(local_plan,),
+        )
+        return attendance_corrections._JobClaim(
+            job_id=job_id,
+            attempt_count=1,
+            lease_until=T3 + timedelta(minutes=15),
+            row={
+                "id": job_id,
+                "item_key": local_preview.item_key,
+                "status": "applying",
+                "target_work_center_name": local_preview.target_work_center_name,
+                "target_odoo_work_center_id": target_wc,
+                "employee_odoo_ids": list(local_preview.employee_odoo_ids),
+                "source_snapshot": attendance_corrections._snapshot_payload(local_preview),
+                "operations": attendance_corrections._plans_payload(local_preview),
+                "completed_operations": [],
+                "start_utc": local_preview.start_utc,
+                "end_utc": local_preview.end_utc,
+                "actor_email": "manager@example.com",
+                "actor_name": "Manager",
             },
         )
-        monkeypatch.setattr(
-            plant_day,
-            "now",
-            lambda: lifecycle_start + timedelta(days=2),
-        )
-        inbox_reconcile.run_once()
-        assert db.query(
-            "SELECT item_key FROM inbox_open_items WHERE item_key = %s",
-            (item_key,),
-        ) == []
 
-        # After the clean Live boundary, a later historical source edit enqueues
-        # both touched local days. Only the completed prior day becomes strict;
-        # the still-running cutover day keeps its established matcher.
-        app_settings.set_setting(
-            "odoo_attendance_location",
-            {
-                "mode": "live",
-                "cutover_at": lifecycle_start.isoformat(),
-                "live_gate": {
-                    "checked_at": lifecycle_start.isoformat(),
-                    "report_digest": "durable-e2e-proof",
-                    "activated_at": lifecycle_start.isoformat(),
-                },
-            },
-        )
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO attendance_strict_days (day, reason, source_changed_at) "
-                "VALUES (%s, %s, %s) ON CONFLICT (day) DO NOTHING",
-                (day, "live_cutover", lifecycle_start),
-            )
-        assert db.query(
-            "SELECT day FROM attendance_strict_days WHERE day = ANY(%s) ORDER BY day",
-            ([prior_day, day],),
-        ) == [{"day": day}]
-        strict_mode = {"enabled": False}
+    # A stale manager preview fails through the public worker before any new
+    # Odoo write, leaving both mirror and computed production unchanged.
+    stale_claim = correction_claim(10, dict(odoo.rows[historical_id]), 11)
+    odoo.update_attendance_interval(historical_id, values={"odoo_work_center_id": 999})
+    mutation_count = len(odoo.mutations)
+    local_before = {key: dict(value) for key, value in mirror.rows.items()}
+    production_before = {key: tuple(dict(row) for row in value) for key, value in saved.items()}
+    monkeypatch.setattr(attendance_corrections, "_claim_job", lambda **_kwargs: stale_claim)
 
-        def prepared_for(claim_day, *_args):
-            if not strict_mode["enabled"]:
-                return prepared
-            rows = prepared.rows if claim_day == day else ()
-            return precompute.PreparedProductionDay(
-                claim_day,
-                rows,
-                claim_day,
-                "strict",
-                production_history.strict_local_source_fingerprint(claim_day),
-                f"durable-e2e-request:{claim_day.isoformat()}",
-            )
+    stale_result = attendance_corrections.process_job(10)
 
-        monkeypatch.setattr(
-            attendance_recalc,
-            "_precompute_module",
-            lambda: type(
-                "Precompute",
-                (),
-                {"prepare_day": staticmethod(prepared_for)},
-            ),
-        )
-        strict_mode["enabled"] = True
-        source.rows[attendance_id]["check_in_utc"] = lifecycle_start - timedelta(hours=14)
-        source.rows[attendance_id]["odoo_write_date"] = source._tick()
-        affected = attendance_mirror.upsert_rows(
-            [dict(source.rows[attendance_id])],
-            sync_completed_at=lifecycle_start + timedelta(hours=6),
-        )
-        assert affected == {prior_day, day}
-        assert db.query(
-            "SELECT day FROM attendance_strict_days WHERE day = ANY(%s) ORDER BY day",
-            ([prior_day, day],),
-        ) == [{"day": prior_day}, {"day": day}]
-        results = [
-            attendance_recalc.process_next(
-                production_client=object(),
-                now_utc=lifecycle_start + timedelta(hours=6),
-                clock=lambda: lifecycle_start + timedelta(hours=6, minutes=1),
-            )
-            for _index in range(2)
-        ]
-        assert {result.day for result in results if result is not None} == {
-            prior_day,
-            day,
-        }
-        assert all(result is not None and result.status == "completed" for result in results)
-        assert db.query(
-            "SELECT day, completed_at IS NOT NULL AS completed, "
-            "cache_ready_at IS NOT NULL AS cache_ready "
-            "FROM attendance_recalc_queue WHERE day = ANY(%s) ORDER BY day",
-            ([prior_day, day],),
-        ) == [
-            {"day": prior_day, "completed": True, "cache_ready": True},
-            {"day": day, "completed": True, "cache_ready": True},
-        ]
-    finally:
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM inbox_open_items WHERE item_key = %s", (item_key,))
-            cur.execute("DELETE FROM inbox_events WHERE item_key = %s", (item_key,))
-            cur.execute(
-                "DELETE FROM attendance_correction_job_events WHERE correction_job_id IN "
-                "(SELECT id FROM attendance_correction_jobs WHERE item_key = %s)",
-                (item_key,),
-            )
-            cur.execute("DELETE FROM attendance_correction_jobs WHERE item_key = %s", (item_key,))
-            cur.execute(
-                "DELETE FROM attendance_recalc_queue WHERE day = ANY(%s)",
-                ([prior_day, day],),
-            )
-            cur.execute(
-                "DELETE FROM attendance_strict_days WHERE day = ANY(%s)",
-                ([prior_day, day],),
-            )
-            cur.execute("DELETE FROM production_daily WHERE day = %s AND emp_id = %s", (day, str(employee_id)))
-            cur.execute("DELETE FROM odoo_attendance_mirror WHERE odoo_attendance_id = %s", (attendance_id,))
-            cur.execute(
-                "UPDATE odoo_attendance_sync_state SET baseline_completed_at = %s, "
-                "last_incremental_completed_at = %s, "
-                "last_incremental_observed_at = %s WHERE singleton = TRUE",
-                (
-                    original_sync["baseline_completed_at"],
-                    original_sync["last_incremental_completed_at"],
-                    original_sync["last_incremental_observed_at"],
-                ),
-            )
-            if original_rollout is None:
-                cur.execute(
-                    "DELETE FROM app_settings WHERE key = %s",
-                    ("odoo_attendance_location",),
-                )
-            else:
-                app_settings.set_setting(
-                    "odoo_attendance_location",
-                    original_rollout,
-                    cur=cur,
-                )
+    assert stale_result.status == "failed"
+    assert len(odoo.mutations) == mutation_count
+    assert mirror.rows == local_before
+    assert saved == production_before
+
+    # A reread outage after an accepted Odoo update remains recoverable.  The
+    # remote write is real, but no unverified row reaches mirror/recalc/cache.
+    odoo.update_attendance_interval(historical_id, values={"odoo_work_center_id": 22})
+    reread_claim = correction_claim(11, dict(odoo.rows[historical_id]), 11)
+    local_before = {key: dict(value) for key, value in mirror.rows.items()}
+    production_before = {key: tuple(dict(row) for row in value) for key, value in saved.items()}
+    mutation_count = len(odoo.mutations)
+    odoo.fail_verification = True
+    monkeypatch.setattr(attendance_corrections, "_claim_job", lambda **_kwargs: reread_claim)
+
+    reread_result = attendance_corrections.process_job(11)
+
+    assert reread_result.status == "recoverable"
+    assert len(odoo.mutations) == mutation_count + 1
+    assert mirror.rows == local_before
+    assert saved == production_before
+    odoo.fail_verification = False
+
+    # Public source failures keep the same mirror and computed snapshots.
+    mirror_before = {key: dict(value) for key, value in mirror.rows.items()}
+    saved_before = {key: tuple(dict(row) for row in value) for key, value in saved.items()}
+    odoo.timeout = True
+    assert attendance_sync.run_incremental_sync(now_utc=T3 + timedelta(minutes=3)).success is False
+    assert mirror.rows == mirror_before
+    odoo.timeout = False
+    odoo.sweep_complete = False
+    assert attendance_sync.run_full_sweep(now_utc=T3 + timedelta(minutes=4)).success is False
+    assert mirror.rows == mirror_before
+    assert saved == saved_before
+
+    meter.set_samples(historical_day, "WC B", ())
+    meter.set_source_total(historical_day, "WC B", 5)
+    with pytest.raises(
+        production_history.ProductionSourceUnavailable,
+        match="samples.*do not match",
+    ):
+        precompute.precompute_day(historical_day, meter)
+    assert saved == saved_before
+    assert queued[-1] == ((historical_day,), "production_source_unavailable")

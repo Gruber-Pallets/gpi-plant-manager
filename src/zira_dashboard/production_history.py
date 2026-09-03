@@ -16,8 +16,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, UTC
-import hashlib
-import json
 import math
 from numbers import Real
 from typing import TypeAlias
@@ -35,210 +33,6 @@ class ProductionSourceUnavailable(RuntimeError):
     """Raised when a precompute cannot safely replace saved production."""
 
 
-@dataclass(frozen=True)
-class StrictSourceSnapshot:
-    day: date
-    shift_start_utc: datetime
-    shift_end_utc: datetime
-    break_windows: tuple[tuple[datetime, datetime], ...]
-    shift_by_day: dict
-    stations: tuple
-    work_center_by_odoo_id: dict[int, str]
-    source_fingerprint: str
-
-
-_STRICT_LOCAL_SOURCE_SQL = """
-SELECT md5(concat_ws('|',
-  (SELECT COALESCE(jsonb_agg(jsonb_build_array(
-       odoo_attendance_id, employee_odoo_id, employee_name,
-       check_in_utc, check_out_utc, odoo_work_center_id,
-       odoo_work_center_name, odoo_department_id, odoo_department_name,
-       odoo_write_date
-     ) ORDER BY odoo_attendance_id)::text, '[]')
-     FROM odoo_attendance_mirror
-    WHERE deleted_at IS NULL
-      AND (check_out_utc IS NULL OR check_out_utc > check_in_utc)
-      AND check_in_utc < %s
-      AND (check_out_utc IS NULL OR check_out_utc > %s)),
-  (SELECT COALESCE(jsonb_agg(jsonb_build_array(
-       singleton,
-       CASE WHEN last_incremental_completed_at IS NULL THEN NULL
-            ELSE LEAST(last_incremental_completed_at, %s) END,
-       baseline_completed_at IS NOT NULL
-     ) ORDER BY singleton)::text, '[]')
-     FROM odoo_attendance_sync_state),
-  (SELECT COALESCE(jsonb_agg(jsonb_build_array(
-       id, name, meter_id, category, cell, odoo_work_center_id,
-       odoo_work_center_name, department
-     ) ORDER BY id)::text, '[]') FROM work_centers),
-  (SELECT COALESCE(jsonb_agg(jsonb_build_array(name, requires_work_center)
-     ORDER BY name)::text, '[]') FROM departments),
-  (SELECT COALESCE(jsonb_agg(jsonb_build_array(
-       id, odoo_id, department_name, wage_type, active)
-     ORDER BY id)::text, '[]') FROM people
-    WHERE odoo_id IN (
-      SELECT employee_odoo_id FROM odoo_attendance_mirror
-       WHERE deleted_at IS NULL
-         AND (check_out_utc IS NULL OR check_out_utc > check_in_utc)
-         AND check_in_utc < %s
-         AND (check_out_utc IS NULL OR check_out_utc > %s)
-    )),
-  (SELECT COALESCE(jsonb_agg(jsonb_build_array(
-       id, day, wc_name, employee_odoo_id, person_name,
-       start_utc, end_utc, source, breakdown_id
-     ) ORDER BY id)::text, '[]')
-     FROM wc_time_attributions WHERE day = %s),
-  (SELECT COALESCE(jsonb_agg(jsonb_build_array(
-       id, day, wc_name, detected_stop_utc, source,
-       resolved_at, resolution, resume_utc
-     ) ORDER BY id)::text, '[]')
-     FROM machine_breakdowns WHERE day = %s)
-)) AS source_fingerprint
-"""
-
-
-def lock_strict_sources_cur(cur) -> None:
-    cur.execute(
-        "LOCK TABLE odoo_attendance_mirror, odoo_attendance_sync_state, "
-        "work_centers, departments, people, schedules, global_schedule, "
-        "saturday_schedule, company_holidays, saturday_recruitments, "
-        "wc_time_attributions, machine_breakdowns IN SHARE MODE"
-    )
-
-
-def strict_local_source_fingerprint(
-    day: date,
-    *,
-    cur=None,
-    source_snapshot: StrictSourceSnapshot | None = None,
-) -> str:
-    from . import db, shift_config
-
-    source = source_snapshot or strict_source_snapshot(day, cur=cur)
-    local_midnight = datetime.combine(
-        day, datetime.min.time(), tzinfo=shift_config.SITE_TZ,
-    ).astimezone(UTC)
-    params = (
-        source.shift_end_utc,
-        local_midnight,
-        source.shift_end_utc,
-        source.shift_end_utc,
-        local_midnight,
-        day,
-        day,
-    )
-
-    if cur is None:
-        rows = db.query(_STRICT_LOCAL_SOURCE_SQL, params)
-        row = rows[0] if rows else None
-    else:
-        cur.execute(_STRICT_LOCAL_SOURCE_SQL, params)
-        row = cur.fetchone()
-    if not row or not row.get("source_fingerprint"):
-        raise ProductionSourceUnavailable("strict local source fingerprint unavailable")
-    exact = f"{source.source_fingerprint}:{row['source_fingerprint']}"
-    return hashlib.sha256(exact.encode("utf-8")).hexdigest()
-
-
-def strict_source_snapshot(day: date, *, cur=None) -> StrictSourceSnapshot:
-    """Capture exact shift and station inputs from the current DB snapshot."""
-    from . import db, shift_config
-    from .stations import Station
-
-    shift_by_day = {}
-    snapshots = {}
-    for resolved_day in (day - timedelta(days=1), day, day + timedelta(days=1)):
-        snapshot = shift_config.snapshot_for(resolved_day, cur=cur)
-        snapshots[resolved_day] = snapshot
-        shift_by_day[resolved_day] = (
-            snapshot.is_workday,
-            snapshot.shift_start,
-            snapshot.shift_end,
-            snapshot.breaks,
-        )
-    sql = (
-        "SELECT name, meter_id, category, cell, odoo_work_center_id "
-        "FROM work_centers ORDER BY name"
-    )
-    if cur is None:
-        rows = db.query(sql)
-    else:
-        cur.execute(sql)
-        rows = list(cur.fetchall())
-    stations = tuple(
-        Station(
-            meter_id=str(row["meter_id"]),
-            name=str(row["name"]),
-            category=str(row.get("category") or "Other"),
-            cell=str(row.get("cell") or ""),
-        )
-        for row in rows
-        if row.get("meter_id") is not None and str(row["meter_id"]) != ""
-    )
-    work_center_by_odoo_id = {
-        int(row["odoo_work_center_id"]): str(row["name"])
-        for row in rows
-        if row.get("odoo_work_center_id") is not None
-    }
-    target = snapshots[day]
-    start = datetime.combine(
-        day, target.shift_start, tzinfo=shift_config.SITE_TZ
-    ).astimezone(UTC)
-    end = datetime.combine(
-        day, target.shift_end, tzinfo=shift_config.SITE_TZ
-    ).astimezone(UTC)
-    if end <= start:
-        raise ProductionSourceUnavailable(
-            f"strict production has an invalid shift window for {day.isoformat()}"
-        )
-    breaks = tuple(
-        (
-            datetime.combine(
-                day, item.start, tzinfo=shift_config.SITE_TZ
-            ).astimezone(UTC),
-            datetime.combine(
-                day, item.end, tzinfo=shift_config.SITE_TZ
-            ).astimezone(UTC),
-        )
-        for item in target.breaks
-        if item.end > item.start
-    )
-    payload = {
-        "version": 1,
-        "days": [
-            [
-                resolved_day.isoformat(),
-                snapshot.is_workday,
-                snapshot.shift_start.isoformat(),
-                snapshot.shift_end.isoformat(),
-                [
-                    [item.start.isoformat(), item.end.isoformat(), item.name]
-                    for item in snapshot.breaks
-                ],
-            ]
-            for resolved_day, snapshot in sorted(snapshots.items())
-        ],
-        "stations": [
-            [item.meter_id, item.name, item.category, item.cell] for item in stations
-        ],
-        "odoo_work_centers": [
-            [odoo_id, name]
-            for odoo_id, name in sorted(work_center_by_odoo_id.items())
-        ],
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return StrictSourceSnapshot(
-        day=day,
-        shift_start_utc=start,
-        shift_end_utc=end,
-        break_windows=breaks,
-        shift_by_day=shift_by_day,
-        stations=stations,
-        work_center_by_odoo_id=work_center_by_odoo_id,
-        source_fingerprint=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
-    )
-
-
 Attribution: TypeAlias = dict[PersonAttributionKey, dict[str, dict[str, float]]]
 SAMPLE_TOTAL_TOLERANCE = 1e-6
 
@@ -246,18 +40,9 @@ SAMPLE_TOTAL_TOLERANCE = 1e-6
 class AttributionResult(dict):
     """Backwards-compatible mapping carrying the already-resolved matcher."""
 
-    def __init__(
-        self,
-        values: Mapping | None = None,
-        *,
-        is_strict: bool,
-        source_fingerprint: str | None = None,
-        request_fingerprint: str | None = None,
-    ):
+    def __init__(self, values: Mapping | None = None, *, is_strict: bool):
         super().__init__(values or {})
         self.is_strict = bool(is_strict)
-        self.source_fingerprint = source_fingerprint
-        self.request_fingerprint = request_fingerprint
 
 
 @dataclass(frozen=True)
@@ -270,11 +55,6 @@ class _StrictDayInputs:
     break_windows: tuple[tuple[datetime, datetime], ...]
     testing_windows: dict[str, list[tuple[datetime, datetime]]]
     breakdown_windows: dict[tuple, list[tuple[datetime, datetime | None]]]
-    location_spans: tuple = ()
-    shift_start_utc: datetime | None = None
-    shift_end_utc: datetime | None = None
-    source_fingerprint: str | None = None
-    request_fingerprint: str | None = None
 
 
 def attribute_for_day(
@@ -678,42 +458,29 @@ def _metered_leaderboard(
     day: date,
     *,
     now_utc: datetime | None = None,
-    stations=None,
-    shift_by_day=None,
-    cache_variant: str | None = None,
-    persist: bool = True,
+    locations=None,
 ):
     """cached_leaderboard results for all metered WCs, or [] if none.
     Shared by _fetch_wc_totals and _fetch_wc_samples so the station-building
     block can't drift between them."""
     from . import staffing  # local import — staffing imports leaderboard.Station
-    from .leaderboard import leaderboard as uncached_leaderboard
+    from .leaderboard import (
+        cached_leaderboard as leaderboard,
+    )  # local — leaderboard pulls shift_config/tzdata
+    from .stations import Station
 
-    frozen_inputs = bool(
-        stations is not None
-        or shift_by_day is not None
-        or cache_variant is not None
-        or not persist
-    )
-    if not frozen_inputs:
-        return metered_station_totals(client, day, now_utc)
-    if stations is None:
-        from .stations import Station
-
-        metered = [loc for loc in staffing.LOCATIONS if loc.meter_id]
-        if not metered:
-            return []
-        stations = [
-            Station(meter_id=loc.meter_id, name=loc.name, category=loc.skill, cell=loc.bay)
-            for loc in metered
-        ]
-    return uncached_leaderboard(
-        client,
-        list(stations),
-        day,
-        now_utc,
-        shift_by_day=shift_by_day,
-    )
+    metered = [
+        loc for loc in (staffing.LOCATIONS if locations is None else locations) if loc.meter_id
+    ]
+    if not metered:
+        return []
+    stations = [
+        Station(meter_id=loc.meter_id, name=loc.name, category=loc.skill, cell=loc.bay)
+        for loc in metered
+    ]
+    if now_utc is None:
+        return leaderboard(client, stations, day)
+    return leaderboard(client, stations, day, now_utc)
 
 
 def _fetch_wc_totals(client, day: date) -> dict[str, tuple[int, int]]:
@@ -807,6 +574,8 @@ def _breakdown_window_identity(key: tuple) -> tuple[int | None, str, str]:
 def _excluded_minutes_by_person_wc(
     day: date,
     now: datetime,
+    *,
+    breakdown_windows=None,
     productive_minutes_in_window=None,
 ) -> dict[PersonAttributionKey, dict[str, float]]:
     """{person: {wc_name: minutes}} of machine-breakdown-excluded minutes for
@@ -818,7 +587,11 @@ def _excluded_minutes_by_person_wc(
     if productive_minutes_in_window is None:
         from .shift_config import productive_minutes_in_window
 
-    windows_by_key = wc_attributions.breakdown_windows_for_day(day)
+    windows_by_key = (
+        wc_attributions.breakdown_windows_for_day(day)
+        if breakdown_windows is None
+        else breakdown_windows
+    )
     out: dict[PersonAttributionKey, dict[str, float]] = {}
     for raw_key, windows in windows_by_key.items():
         employee_odoo_id, person, wc = _breakdown_window_identity(raw_key)
@@ -956,66 +729,6 @@ def _normalize_strict_leaderboard(
     return wc_totals, samples_by_wc, active_by_wc
 
 
-def _strict_meter_fingerprint(
-    wc_totals: Mapping[str, tuple[float, float]],
-    samples_by_wc: Mapping[str, Sequence[tuple[datetime, float]]],
-    active_intervals_by_wc: Mapping[
-        str, Sequence[tuple[datetime, datetime]]
-    ],
-) -> str:
-    """Hash the normalized meter facts that strict attribution actually used."""
-
-    payload = {
-        "version": 1,
-        "totals": [
-            [wc_name, float(values[0]).hex(), float(values[1]).hex()]
-            for wc_name, values in sorted(wc_totals.items())
-        ],
-        "samples": [
-            [wc_name, timestamp.astimezone(UTC).isoformat(), float(units).hex()]
-            for wc_name, samples in sorted(samples_by_wc.items())
-            for timestamp, units in samples
-        ],
-        "active": [
-            [
-                wc_name,
-                start.astimezone(UTC).isoformat(),
-                end.astimezone(UTC).isoformat(),
-            ]
-            for wc_name, intervals in sorted(active_intervals_by_wc.items())
-            for start, end in intervals
-        ],
-    }
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def _strict_request_fingerprint(
-    local_source_fingerprint: str,
-    wc_totals: Mapping[str, tuple[float, float]],
-    samples_by_wc: Mapping[str, Sequence[tuple[datetime, float]]],
-    active_intervals_by_wc: Mapping[
-        str, Sequence[tuple[datetime, datetime]]
-    ],
-) -> str:
-    meter = _strict_meter_fingerprint(
-        wc_totals,
-        samples_by_wc,
-        active_intervals_by_wc,
-    )
-    encoded = json.dumps(
-        {"version": 1, "local": local_source_fingerprint, "meter": meter},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
 def _validate_strict_sample_totals(
     wc_totals: Mapping[str, tuple[float, float]],
     samples_by_wc: Mapping[str, Sequence[tuple[datetime, float]]],
@@ -1095,72 +808,14 @@ def _strict_inputs_for_day(
     client,
     *,
     now_utc: datetime,
-    leaderboard_rows=None,
-    map_work_center=None,
+    location_spans=None,
+    mirror_health=None,
     shift_bounds: tuple[datetime, datetime] | None = None,
     break_windows: tuple[tuple[datetime, datetime], ...] | None = None,
-    source_config_fingerprint: str | None = None,
-) -> _StrictDayInputs:
-    from . import db
-
-    source_snapshot = None
-    if shift_bounds is None or break_windows is None or leaderboard_rows is None:
-        with db.read_snapshot() as cur:
-            source_snapshot = strict_source_snapshot(day, cur=cur)
-        source_config_fingerprint = source_snapshot.source_fingerprint
-        shift_bounds = (
-            source_snapshot.shift_start_utc,
-            source_snapshot.shift_end_utc,
-        )
-        break_windows = source_snapshot.break_windows
-        if map_work_center is None:
-            mapping = dict(source_snapshot.work_center_by_odoo_id)
-            map_work_center = lambda odoo_id: mapping.get(odoo_id)
-    if leaderboard_rows is None:
-        assert source_snapshot is not None
-        leaderboard_rows = _metered_leaderboard(
-            client,
-            day,
-            now_utc=now_utc,
-            stations=source_snapshot.stations,
-            shift_by_day=source_snapshot.shift_by_day,
-            cache_variant=source_snapshot.source_fingerprint,
-            persist=False,
-        )
-    with db.read_snapshot() as cur:
-        current_source = strict_source_snapshot(day, cur=cur)
-        if (
-            source_config_fingerprint is not None
-            and current_source.source_fingerprint != source_config_fingerprint
-        ):
-            raise ProductionSourceUnavailable(
-                "strict production configuration changed during collection"
-            )
-        local_source_fingerprint = strict_local_source_fingerprint(
-            day,
-            cur=cur,
-            source_snapshot=current_source,
-        )
-        return _strict_inputs_for_day_in_snapshot(
-            day,
-            now_utc=now_utc,
-            leaderboard_rows=leaderboard_rows,
-            map_work_center=map_work_center,
-            shift_bounds=shift_bounds,
-            break_windows=break_windows,
-            source_fingerprint=local_source_fingerprint,
-        )
-
-
-def _strict_inputs_for_day_in_snapshot(
-    day: date,
-    *,
-    now_utc: datetime,
-    leaderboard_rows,
-    map_work_center,
-    shift_bounds: tuple[datetime, datetime],
-    break_windows: tuple[tuple[datetime, datetime], ...],
-    source_fingerprint: str,
+    metered_locations=None,
+    attribution_rows=None,
+    productive_minutes_in_window=None,
+    effective_now_utc: datetime | None = None,
 ) -> _StrictDayInputs:
     from . import (
         assignment_windows,
@@ -1169,7 +824,7 @@ def _strict_inputs_for_day_in_snapshot(
         wc_attributions,
     )
 
-    health = attendance_mirror.health_snapshot()
+    health = mirror_health or attendance_mirror.health_snapshot()
     if health.baseline_completed_at is None:
         raise ProductionSourceUnavailable(
             f"Odoo attendance mirror baseline is unavailable for {day.isoformat()}"
@@ -1179,106 +834,86 @@ def _strict_inputs_for_day_in_snapshot(
             f"Odoo attendance has no verified snapshot for {day.isoformat()}"
         )
 
-    shift_start, shift_end = shift_bounds
-    resolved_break_windows = tuple(break_windows)
-    timeline_kwargs = {
-        "as_of_utc": now_utc,
-        "health_snapshot": health,
-    }
-    if map_work_center is not None:
-        timeline_kwargs["map_work_center"] = map_work_center
-    spans = attendance_timeline.timeline_for_range(
-        shift_start,
-        shift_end,
-        **timeline_kwargs,
+    shift_start, shift_end = shift_bounds or _strict_shift_bounds(day)
+    spans = (
+        attendance_timeline.timeline_for_range(shift_start, shift_end, as_of_utc=now_utc)
+        if location_spans is None
+        else tuple(location_spans)
     )
     segments = assignment_windows.work_segments_from_timeline(
         spans,
         window_start_utc=shift_start,
         window_end_utc=shift_end,
     )
+    leaderboard_rows = _metered_leaderboard(
+        client,
+        day,
+        now_utc=now_utc,
+        locations=metered_locations,
+    )
     wc_totals, samples_by_wc, active_by_wc = _normalize_strict_leaderboard(
         leaderboard_rows,
         shift_start_utc=shift_start,
         shift_end_utc=shift_end,
     )
-    testing = wc_attributions.testing_windows_for_day(day)
+    testing = (
+        wc_attributions.testing_windows_for_day(day)
+        if attribution_rows is None
+        else wc_attributions.testing_windows_for_day(day, rows=attribution_rows)
+    )
     if testing:
         wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)
         samples_by_wc = _without_testing_samples(samples_by_wc, testing)
     _validate_strict_sample_totals(wc_totals, samples_by_wc)
-    request_fingerprint = _strict_request_fingerprint(
-        source_fingerprint,
-        wc_totals,
-        samples_by_wc,
-        active_by_wc,
+
+    effective_now = (
+        _effective_now(day, now_utc) if effective_now_utc is None else effective_now_utc
     )
-
-    try:
-        def productive_minutes(_day, start, end):
-            total = int(max(0.0, (end - start).total_seconds()) // 60)
-            for break_start, break_end in resolved_break_windows:
-                lo = max(start, break_start)
-                hi = min(end, break_end)
-                if hi > lo:
-                    total -= int((hi - lo).total_seconds() // 60)
-            return max(0, total)
-
+    breakdown = (
+        wc_attributions.breakdown_windows_for_day(day)
+        if attribution_rows is None
+        else wc_attributions.breakdown_windows_for_day(day, rows=attribution_rows)
+    )
+    if attribution_rows is None:
+        try:
+            excluded_by_identity = _excluded_minutes_by_person_wc(day, effective_now)
+        except Exception:
+            excluded_by_identity = {}
+    else:
         excluded_by_identity = _excluded_minutes_by_person_wc(
             day,
-            min(now_utc, shift_end),
-            productive_minutes,
+            effective_now,
+            breakdown_windows=breakdown,
+            productive_minutes_in_window=productive_minutes_in_window,
         )
-    except Exception:
-        excluded_by_identity = {}
     excluded = _identity_safe_excluded_minutes(segments, excluded_by_identity)
-    breakdown = wc_attributions.breakdown_windows_for_day(day)
     return _StrictDayInputs(
         segments=tuple(segments),
         wc_totals=wc_totals,
         samples_by_wc=samples_by_wc,
         active_intervals_by_wc=active_by_wc,
         excluded_minutes=excluded,
-        break_windows=resolved_break_windows,
+        break_windows=(
+            _strict_break_windows(day) if break_windows is None else tuple(break_windows)
+        ),
         testing_windows=testing,
         breakdown_windows=breakdown,
-        location_spans=tuple(spans),
-        shift_start_utc=shift_start,
-        shift_end_utc=shift_end,
-        source_fingerprint=source_fingerprint,
-        request_fingerprint=request_fingerprint,
     )
 
 
-def _strict_attribution_from_inputs(day: date, inputs: _StrictDayInputs) -> Attribution:
-    def productive_minutes(_person, _wc_name, start, end):
-        total = int(max(0.0, (end - start).total_seconds()) // 60)
-        for break_start, break_end in inputs.break_windows:
-            lo = max(start, break_start)
-            hi = min(end, break_end)
-            if hi > lo:
-                total -= int((hi - lo).total_seconds() // 60)
-        return max(0, total)
+def _strict_attribution_for(day: date, client, *, now_utc: datetime) -> Attribution:
+    from . import shift_config
 
+    inputs = _strict_inputs_for_day(day, client, now_utc=now_utc)
     return attribute_for_segments(
         inputs.segments,
         wc_totals=inputs.wc_totals,
         samples_by_wc=inputs.samples_by_wc,
-        productive_minutes=productive_minutes,
+        productive_minutes=lambda _person, _wc_name, start, end: (
+            shift_config.productive_minutes_in_window(day, start, end)
+        ),
         excluded_minutes=inputs.excluded_minutes,
         strict=True,
-    )
-
-
-def _strict_attribution_for(
-    day: date, client, *, now_utc: datetime
-) -> AttributionResult:
-    inputs = _strict_inputs_for_day(day, client, now_utc=now_utc)
-    return AttributionResult(
-        _strict_attribution_from_inputs(day, inputs),
-        is_strict=True,
-        source_fingerprint=inputs.source_fingerprint,
-        request_fingerprint=inputs.request_fingerprint,
     )
 
 
@@ -1314,17 +949,26 @@ def _assigned_sample_times(
     }
 
 
-def _strict_unassigned_runs_from_inputs(
+def unassigned_runs_for_day(
     day: date,
-    inputs: _StrictDayInputs,
+    client,
     *,
-    now_utc: datetime,
+    now_utc: datetime | None = None,
 ) -> tuple[UnassignedRun, ...]:
-    now = _aware_utc(now_utc, "now_utc")
+    """Return uncovered sample runs only when the strict matcher owns the day."""
+    from . import attendance_location_policy
+
+    now = _aware_utc(now_utc or datetime.now(UTC), "now_utc")
+    state = attendance_location_policy.match_state_for_day(day, now_utc=now)
+    if state == "pending":
+        raise ProductionSourceUnavailable(
+            f"strict production cutover is pending for {day.isoformat()}"
+        )
+    if state == "legacy":
+        return ()
+    inputs = _strict_inputs_for_day(day, client, now_utc=now)
     runs: list[UnassignedRun] = []
-    shift_end = inputs.shift_end_utc
-    if shift_end is None:
-        _shift_start, shift_end = _strict_shift_bounds(day)
+    _shift_start, shift_end = _strict_shift_bounds(day)
     for wc_name, samples in inputs.samples_by_wc.items():
         exclusions = [*inputs.break_windows]
         exclusions.extend(inputs.testing_windows.get(wc_name, ()))
@@ -1349,27 +993,6 @@ def _strict_unassigned_runs_from_inputs(
     return tuple(sorted(runs, key=lambda run: (run.start_utc, run.wc_name)))
 
 
-def unassigned_runs_for_day(
-    day: date,
-    client,
-    *,
-    now_utc: datetime | None = None,
-) -> tuple[UnassignedRun, ...]:
-    """Return uncovered sample runs only when the strict matcher owns the day."""
-    from . import attendance_location_policy
-
-    now = _aware_utc(now_utc or datetime.now(UTC), "now_utc")
-    state = attendance_location_policy.match_state_for_day(day, now_utc=now)
-    if state == "pending":
-        raise ProductionSourceUnavailable(
-            f"strict production cutover is pending for {day.isoformat()}"
-        )
-    if state == "legacy":
-        return ()
-    inputs = _strict_inputs_for_day(day, client, now_utc=now)
-    return _strict_unassigned_runs_from_inputs(day, inputs, now_utc=now)
-
-
 def attribution_for(d: date, client, *, now_utc: datetime | None = None) -> AttributionResult:
     """Choose the matcher once, before loading any attribution source."""
     from . import attendance_location_policy
@@ -1388,7 +1011,8 @@ def attribution_for(d: date, client, *, now_utc: datetime | None = None) -> Attr
             f"strict production cutover is pending for {d.isoformat()}"
         )
     if state == "strict":
-        return _strict_attribution_for(d, client, now_utc=now)
+        values = _strict_attribution_for(d, client, now_utc=now)
+        return AttributionResult(values, is_strict=True)
     return AttributionResult(_legacy_attribution_for(d, client), is_strict=False)
 
 

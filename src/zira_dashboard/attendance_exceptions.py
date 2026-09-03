@@ -8,7 +8,6 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Literal
 
 from . import (
-    app_settings,
     attendance_location_policy,
     attendance_mirror,
     attendance_timeline,
@@ -17,8 +16,6 @@ from . import (
     shift_config,
     wc_attributions,
 )
-
-_CUTOVER_BLOCKED_SETTING_KEY = "odoo_attendance_cutover_blocked"
 
 
 ExceptionPriority = Literal["urgent", "warn", "muted"]
@@ -564,41 +561,43 @@ def _strict_source_problem(
     )
 
 
-def _cutover_blocked_issue(day: date) -> AttendanceException | None:
-    payload = app_settings.get_setting(_CUTOVER_BLOCKED_SETTING_KEY)
-    if not isinstance(payload, dict):
-        return None
+def _blocked_cutover_issue(
+    now_utc: datetime,
+    *,
+    source_errors: list[str] | None = None,
+) -> AttendanceException | None:
+    """Expose one stable local urgent item for a rejected live boundary."""
+    from . import attendance_readiness
+
     try:
-        cutover = _aware_utc(datetime.fromisoformat(str(payload["cutover_at"])), "cutover")
-        checked = _aware_utc(datetime.fromisoformat(str(payload["checked_at"])), "checked")
-        blocker_values = payload.get("blockers")
-        if not isinstance(blocker_values, list) or not blocker_values:
-            return None
-        blockers = tuple(
-            value for value in blocker_values if isinstance(value, str) and 0 < len(value) <= 80
-        )
-        if not blockers:
-            return None
-    except (KeyError, TypeError, ValueError):
+        blocked = attendance_readiness.blocked_cutover_snapshot()
+    except Exception as exc:  # noqa: BLE001 - uncertainty must not resolve an open item
+        if source_errors is not None and not _is_database_less(exc):
+            source_errors.append(_TIMELINE_SOURCE)
+        blocked = None
+    if blocked is None:
         return None
+    scheduled_at = blocked["scheduled_at"]
+    blockers = tuple(blocked["blockers"])
     return AttendanceException(
         kind="attendance_cutover_blocked",
-        item_key=inbox_keys.attendance_cutover_blocked(cutover),
+        item_key=f"attendance_cutover_blocked:{scheduled_at.isoformat()}",
         employee_odoo_id=None,
         employee_name=None,
         attendance_ids=(),
-        start_utc=checked,
-        end_utc=checked,
+        start_utc=scheduled_at,
+        end_utc=now_utc,
         raw_work_center_labels=(),
         odoo_work_center_ids=(),
         affected_workers=(),
         app_work_center_name=None,
         units=None,
         sample_count=None,
-        reason="Readiness blockers: " + ", ".join(blockers),
+        reason=",".join(blockers),
         priority="urgent",
         comparison_only=False,
         target_odoo_department_id=None,
+        end_is_open=True,
     )
 
 
@@ -614,17 +613,21 @@ def build_snapshot(
     now = _aware_utc(now_utc, "now_utc")
     config, match_state, policy_error = _policy_snapshot_for_day(day, now_utc=now)
     production_mode = _production_mode_for(config, match_state)
-    if config.mode == "off" and match_state == "legacy":
-        return AttendanceExceptionSnapshot(day, "off", "legacy", False, False, False, (), ())
-
-    issues: list[AttendanceException] = []
-    try:
-        blocked_issue = _cutover_blocked_issue(day)
-    except Exception:  # noqa: BLE001 - corrupt optional alert never hides core issues
-        blocked_issue = None
-    if blocked_issue is not None:
-        issues.append(blocked_issue)
     source_errors: list[str] = []
+    blocked_cutover = _blocked_cutover_issue(now, source_errors=source_errors)
+    if config.mode == "off" and match_state == "legacy":
+        return AttendanceExceptionSnapshot(
+            day,
+            "off",
+            "legacy",
+            False,
+            blocked_cutover is not None,
+            blocked_cutover is not None,
+            (blocked_cutover,) if blocked_cutover is not None else (),
+            tuple(dict.fromkeys(source_errors)),
+        )
+
+    issues: list[AttendanceException] = [blocked_cutover] if blocked_cutover is not None else []
     if policy_error is not None:
         issues.append(_strict_source_problem(day, now, policy_error))
         source_errors.append(_PRODUCTION_SOURCE)
