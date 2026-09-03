@@ -18,7 +18,7 @@
 
 ---
 
-### Task 1: Lock the real background-worker contract with a RED test
+### Task 1: Test-first restoration of the coherent rollout
 
 **Files:**
 
@@ -61,7 +61,7 @@ Run:
 
 Expected: failure because the regressed module has no `tick` API and the app calls the incompatible older warmer method.
 
-### Task 2: Restore the coherent rollout implementation
+**Continue Task 1: Restore the coherent rollout implementation**
 
 **Files:**
 
@@ -142,7 +142,7 @@ Run:
 
 Expected: all focused tests pass; PostgreSQL-specific tests may skip only when the local database is unavailable.
 
-### Task 3: Verify, document, deploy, and observe Shadow safely
+### Task 2: Verify, document, deploy, and observe Shadow safely
 
 **Files:**
 
@@ -194,4 +194,3 @@ railway ssh "python scripts/check_attendance_location_readiness.py"
 ```
 
 Expected: the deployed Shadow aggregate becomes current, the mirror remains healthy, and the rollout remains `shadow` until a valid completed day makes the normal readiness report ready.
-
