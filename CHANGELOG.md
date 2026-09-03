@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-03
 
+### Send feedback asks what you are reporting first
+
+- **Send feedback now starts with a simple list.** You pick Bug, New Feature, Floor Issue, Floor Suggestion, Repair, or 2S Improvement. Repair opens GPI Maintenance. The others still ask for a short description next.
+
 ### Keep timeclock checks safe
 
 - **Timeclock checks now keep watching in the background. The app can tell when its shadow copy is healthy without turning on the new live matching.**

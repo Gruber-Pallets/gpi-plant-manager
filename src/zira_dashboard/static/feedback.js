@@ -92,6 +92,23 @@
     }
   }
 
+  function setChooserChrome() {
+    var title = $('fb-title');
+    var step = $('fb-step-label');
+    if (title) title.textContent = 'What are you reporting?';
+    if (step) step.textContent = 'Step 1 of 2';
+  }
+
+  function setDetailChrome(button) {
+    var title = $('fb-title');
+    var step = $('fb-step-label');
+    var behavior = button ? button.getAttribute('data-behavior') : '';
+    if (title) {
+      title.textContent = behavior === 'review' ? 'Send to Dale for review' : 'Send feedback';
+    }
+    if (step) step.textContent = 'Step 2 of 2';
+  }
+
   function resetSendForm() {
     revokeScreenshotUrl();
     screenshot = null;
@@ -120,10 +137,10 @@
     Array.prototype.forEach.call(buttons, function (btn) {
       var active = btn.getAttribute('data-type') === currentType;
       btn.classList.toggle('is-active', active);
-      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
     var desc = $('fb-desc');
     if (desc) desc.placeholder = selectedButton.getAttribute('data-placeholder') || '';
+    setDetailChrome(selectedButton);
     showDetailStep();
   }
 
@@ -141,6 +158,7 @@
     var detailStep = $('fb-detail-step');
     if (typeStep) typeStep.hidden = false;
     if (detailStep) detailStep.hidden = true;
+    setChooserChrome();
     if (restoreFocus === false) return;
     var chosen = document.querySelector(
       '.fb-type-btn[data-type="' + currentType + '"]'

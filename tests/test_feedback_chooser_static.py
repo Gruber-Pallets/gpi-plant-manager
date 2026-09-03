@@ -93,7 +93,8 @@ def test_repair_is_an_ordinary_protected_anchor_primary_action():
     repair = re.search(r'<a\b(?=[^>]*data-type="repair")(?P<attrs>[^>]*)>', html)
     assert repair is not None
     attrs = repair.group("attrs")
-    assert 'class="fb-type-btn fb-type-card"' in attrs
+    assert "fb-type-btn" in attrs
+    assert "fb-type-card" in attrs
     assert 'data-behavior="external"' in attrs
     assert 'href="https://www.gpimaintenance.com/request"' in attrs
     assert 'target="_blank"' in attrs

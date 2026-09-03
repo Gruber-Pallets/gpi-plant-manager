@@ -62,6 +62,7 @@ def test_shared_feedback_component_keeps_modal_contract():
     assert "feedback_types_for_chooser()" in html
     assert 'id="fb-file-input"' in html
     assert 'id="fb-status" class="fb-status" role="status" aria-live="polite"' in html
+    assert 'id="fb-title"' in html
     assert "/static/feedback.css" in html
     assert "/static/feedback.js" in html
 
@@ -72,6 +73,14 @@ def test_feedback_panel_renders_catalog_types_in_two_steps():
     assert "for item in group_types" in html
     assert "{{ item.label }}" in html
     assert "{{ item.description }}" in html
+    assert "What are you reporting?" in html
+    assert "Step 1 of 2" in html
+    assert "Ready to create work — straight to the floor team" in html
+    assert "opens GPI Maintenance" in html
+    assert (
+        "App bugs and ideas become a coding task. Floor reports and 2S "
+        "improvements go to Dale to review first. A repair is filed in GPI Maintenance."
+    ) in html
     assert 'id="fb-type-step"' in html
     assert 'id="fb-detail-step"' in html
     assert 'id="fb-back"' in html
@@ -103,9 +112,13 @@ def test_feedback_assets_use_rendered_choice_metadata_and_step_styles():
         ".fb-type-subtitle",
         ".fb-type-btn.is-active",
         ".fb-type-btn:focus-visible",
+        ".fb-type-divider",
+        ".fb-type-repair",
+        ".fb-type-improve",
+        ".fb-type-footnote",
     ):
         assert selector in css
-    assert "@media (max-width:" in css
+    assert "grid-template-columns: repeat(2" not in css
 
 
 def test_footer_css_has_whatsnew_trigger_and_card_styles():
