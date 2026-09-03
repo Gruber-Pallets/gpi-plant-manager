@@ -15,6 +15,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Send feedback asks what you are reporting first
 
 - **Send feedback now starts with a simple list.** You pick Bug, New Feature, Floor Issue, Floor Suggestion, Repair, or 2S Improvement. Repair opens GPI Maintenance. The others still ask for a short description next.
+- **Repair and 2S Improvement now show in that list.** They were written down but hidden before. Repair still opens GPI Maintenance. 2S Improvement still asks for a short description next.
 
 ### Keep timeclock checks safe
 

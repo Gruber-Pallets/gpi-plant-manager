@@ -36,7 +36,7 @@ def test_shared_partial_still_renders_in_a_bare_template_environment():
     assert 'class="fb-type-btn' not in html
 
 
-def test_default_off_catalog_preserves_only_the_current_four_live_choices():
+def test_chooser_shows_all_six_choices_while_review_actions_stay_dark():
     selector = getattr(feedback_types, "feedback_types_for_chooser", lambda: ())
 
     assert feedback_types.REVIEW_WORKFLOW_ENABLED is False
@@ -45,6 +45,8 @@ def test_default_off_catalog_preserves_only_the_current_four_live_choices():
         "New Feature",
         "Floor Issue",
         "Floor Suggestion",
+        "Repair",
+        "2s Improvement",
     ]
 
 

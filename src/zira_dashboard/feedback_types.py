@@ -117,7 +117,5 @@ def feedback_type_or_legacy_bug(value: object) -> FeedbackType:
 
 
 def feedback_types_for_chooser() -> tuple[FeedbackType, ...]:
-    """Return only chooser entries that are safe for the current rollout."""
-    if REVIEW_WORKFLOW_ENABLED:
-        return FEEDBACK_TYPES
-    return tuple(item for item in FEEDBACK_TYPES if not item.rollout_gated)
+    """Return every light-bulb choice, including Repair and 2s Improvement."""
+    return FEEDBACK_TYPES
