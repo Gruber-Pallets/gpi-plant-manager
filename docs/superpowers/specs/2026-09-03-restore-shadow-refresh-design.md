@@ -24,7 +24,11 @@ The owned runtime files are `attendance_readiness.py`,
 `attendance_location_policy.py`, `attendance_exceptions.py`,
 `exception_inbox.py`, `inbox_reconcile.py`, `precompute.py`,
 `routes/settings.py`, the attendance-readiness adapter in `app.py`, and the
-readiness CLI. Restore the matching Task 13 tests as one coherent suite.
+readiness CLI. The same merge also regressed dependencies that provide the
+Task 13 mirror-generation lock and Shadow source snapshot:
+`attendance_mirror.py`, `attendance_corrections.py`, `production_history.py`,
+`_schema.py`, and `templates/settings.html`. Restore the matching Task 13
+tests as one coherent suite.
 
 Do not adapt the older module with a compatibility wrapper. That would leave
 older readiness rules and state formats in production. Do not force Live or

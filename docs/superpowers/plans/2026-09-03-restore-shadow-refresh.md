@@ -71,14 +71,20 @@ Expected: failure because the regressed module has no `tick` API and the app cal
 - Modify: `src/zira_dashboard/exception_inbox.py`
 - Modify: `src/zira_dashboard/inbox_reconcile.py`
 - Modify: `src/zira_dashboard/precompute.py`
+- Modify: `src/zira_dashboard/attendance_mirror.py`
+- Modify: `src/zira_dashboard/attendance_corrections.py`
+- Modify: `src/zira_dashboard/production_history.py`
+- Modify: `src/zira_dashboard/_schema.py`
 - Modify: `src/zira_dashboard/routes/settings.py`
 - Modify: `src/zira_dashboard/app.py`
+- Modify: `src/zira_dashboard/templates/settings.html`
 - Modify: `scripts/check_attendance_location_readiness.py`
 - Modify: `tests/test_attendance_readiness.py`
 - Modify: `tests/test_attendance_location_end_to_end.py`
 - Modify: `tests/test_attendance_location_failure_modes.py`
 - Modify: `tests/test_attendance_location_policy.py`
 - Modify: `tests/test_settings_timeclock_layout.py`
+- Modify: matching Task 13 mirror, correction, precompute, and production-history test files
 
 **Interfaces:**
 
@@ -125,7 +131,7 @@ def tick(now_utc: datetime | None = None) -> CutoverActivationResult:
     return activate_due_cutover(now)
 ```
 
-Use the matching Task 13 tests from `15d86881`, then retain any later tests that cover unrelated feedback behavior.
+Use the matching Task 13 tests from `15d86881`, then retain any later tests that cover unrelated feedback behavior. Restore the required mirror generation field and lock API, correction/cache-readiness hooks, strict-production Shadow snapshot inputs, additive schema state, and Settings explanation markup as one compatible Task 13 boundary.
 
 - [ ] **Step 3: Run focused GREEN tests**
 
