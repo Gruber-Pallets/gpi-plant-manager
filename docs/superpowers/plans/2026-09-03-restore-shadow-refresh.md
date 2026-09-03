@@ -78,6 +78,7 @@ Expected: failure because the regressed module has no `tick` API and the app cal
 - Modify: `src/zira_dashboard/attendance_department_repair.py`
 - Modify: `src/zira_dashboard/attendance_sync.py`
 - Modify: `src/zira_dashboard/attendance_timeline.py`
+- Modify: `src/zira_dashboard/people_performance_data.py`
 - Modify: `src/zira_dashboard/_schema.py`
 - Modify: `src/zira_dashboard/routes/settings.py`
 - Modify: `src/zira_dashboard/app.py`
@@ -91,6 +92,7 @@ Expected: failure because the regressed module has no `tick` API and the app cal
 - Modify: matching Task 13 mirror, correction, precompute, and production-history test files
 - Modify: `tests/test_attendance_recalc.py`, `tests/test_attendance_sync.py`, and
   `tests/test_attendance_timeline.py`
+- Modify: `tests/test_people_performance_data.py`
 - Delete: `tests/test_attendance_readiness_warmer.py` (a post-Task-13 suite
   tied only to the retired `run_warmer_tick(...)` interface; its useful
   warmer-registration coverage is retained in `tests/test_attendance_readiness.py`)
@@ -151,8 +153,10 @@ recalculation completion path uses the readiness advisory lock and ordinary
 prepared-day write (without retired strict-source locks or a fingerprint queue
 column); department repair omits the retired policy lock; the mirror worker
 uses `_sync_state_cur` and records its incremental start immediately; and the
-unused timeline snapshot API that requires the retired
-`last_incremental_observed_at` field is removed. Do not add compatibility
+timeline snapshot API that requires the retired `last_incremental_observed_at`
+field is removed. Preserve the later People dashboard by replacing that API
+with its own adapter over `timeline_for_range(...)` and retained mirror-health
+fields (baseline, incremental, full sweep, and error). Do not add compatibility
 wrappers for these retired interfaces.
 
 - [ ] **Step 3: Run focused GREEN tests**
@@ -168,7 +172,8 @@ Run:
   tests/test_settings_timeclock_layout.py \
   tests/test_attendance_recalc.py \
   tests/test_attendance_sync.py \
-  tests/test_attendance_timeline.py -q
+  tests/test_attendance_timeline.py \
+  tests/test_people_performance_data.py -q
 ```
 
 Expected: all focused tests pass; PostgreSQL-specific tests may skip only when the local database is unavailable.
