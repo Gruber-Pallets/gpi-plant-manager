@@ -17,7 +17,11 @@ from datetime import datetime
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from .feedback_types import IMPROVEMENT_STATUS_VALUES, IMPROVEMENT_TYPE_VALUES
+from .feedback_types import (
+    IMPROVEMENT_STATUS_VALUES,
+    IMPROVEMENT_TYPE_VALUES,
+    REVIEW_IMPROVEMENT_TYPES,
+)
 
 
 TARGET_MODEL = "x_2s_improvements"
@@ -40,6 +44,7 @@ WRITABLE_TARGET_FIELDS = frozenset(
     }
 )
 LINKED_TARGET_FIELDS = frozenset({"x_studio_linked_task", "x_studio_linked_wo"})
+CREATE_ONLY_TARGET_FIELDS = frozenset({"x_studio_linked_task"})
 TARGET_FIELDS = WRITABLE_TARGET_FIELDS | LINKED_TARGET_FIELDS
 
 ALLOWED = frozenset(
@@ -425,6 +430,8 @@ def _validate_field_value(field_name: str, value: object, feedback_id: int) -> N
     elif field_name == "x_studio_source":
         if type(value) is not str or value != SOURCE_VALUE:
             raise ContractError("x_studio_source is outside this app's namespace")
+    elif field_name == "x_studio_linked_task":
+        _positive_integer(value, field_name)
 
 
 def _normalize_selection(metadata: dict[str, Any], field_name: str) -> frozenset[str]:
@@ -539,6 +546,7 @@ class ImprovementsClient:
         fields: object,
         *,
         feedback_id: int,
+        method: str,
         require_identity: bool = False,
     ) -> dict[str, Any]:
         _positive_integer(feedback_id, "feedback id")
@@ -551,7 +559,10 @@ class ImprovementsClient:
                 raise ContractError("token fields are forbidden")
             if field_name == "active":
                 raise ContractError("active is not writable")
-            if field_name not in WRITABLE_TARGET_FIELDS:
+            allowed_fields = WRITABLE_TARGET_FIELDS
+            if method == "create":
+                allowed_fields |= CREATE_ONLY_TARGET_FIELDS
+            if field_name not in allowed_fields:
                 raise ContractError("target payload contains a forbidden field")
             _validate_field_value(field_name, value, feedback_id)
         if require_identity and (
@@ -559,6 +570,11 @@ class ImprovementsClient:
             or fields.get("x_studio_source_id") != f"GPI-PM-FB-{feedback_id}"
         ):
             raise ContractError("create payload requires exact compound identity")
+        if require_identity:
+            review_create = fields.get("x_studio_type") in REVIEW_IMPROVEMENT_TYPES
+            has_task_link = "x_studio_linked_task" in fields
+            if review_create != has_task_link:
+                raise ContractError("review create payload requires one exact task link")
         return dict(fields)
 
     def _validate_mutation_operation(
@@ -581,6 +597,7 @@ class ImprovementsClient:
         safe_fields = self._validate_target_fields(
             fields,
             feedback_id=safe_feedback_id,
+            method=method,
             require_identity=method == "create",
         )
         return _MutationBinding(
@@ -735,6 +752,77 @@ class ImprovementsClient:
         )
         if result is not True:
             raise MalformedMutationResponse("write response was not exactly true")
+
+    @staticmethod
+    def _linked_id(value: object, *, label: str) -> int | None:
+        if value is False or value is None:
+            return None
+        if (
+            type(value) is not list
+            or len(value) != 2
+            or not _is_positive_identifier(value[0])
+            or type(value[1]) is not str
+        ):
+            raise ContractError(f"{label} readback was malformed")
+        return value[0]
+
+    def link_task_once(
+        self,
+        remote_id: int,
+        task_id: int,
+        *,
+        feedback_id: int,
+        expected_contract: ImprovementContract,
+    ) -> None:
+        """Compare-and-set one Plant reference task link without ever replacing it."""
+        safe_remote_id = _positive_integer(remote_id, "remote id")
+        safe_task_id = _positive_integer(task_id, "task id")
+        safe_feedback_id = _positive_integer(feedback_id, "feedback id")
+        if type(expected_contract) is not ImprovementContract:
+            raise ContractError("expected contract must be immutable contract metadata")
+        self.assert_mutation_allowed(safe_feedback_id)
+        if self.verify_target_identity() != expected_contract:
+            raise TargetIdentityError("target contract changed before task link")
+
+        source_id = f"GPI-PM-FB-{safe_feedback_id}"
+        rows = self.find_exact(source_id)
+        if len(rows) > 1:
+            raise ContractError("duplicate reference blocks linked task")
+        if not rows or rows[0].get("id") != safe_remote_id:
+            raise ContractError("reference identity changed before linked task")
+
+        read_fields = [
+            "x_studio_source",
+            "x_studio_source_id",
+            "x_studio_linked_task",
+            "x_studio_linked_wo",
+        ]
+        before = self.read_improvement(safe_remote_id, read_fields, full_binary=False)
+        if (
+            before.get("x_studio_source") != SOURCE_VALUE
+            or before.get("x_studio_source_id") != source_id
+        ):
+            raise ContractError("reference identity changed before linked task")
+        linked_task_id = self._linked_id(
+            before.get("x_studio_linked_task"), label="linked task"
+        )
+        linked_work_order_id = self._linked_id(
+            before.get("x_studio_linked_wo"), label="linked work order"
+        )
+        if linked_work_order_id is not None:
+            raise ContractError("review reference has a conflicting linked work order")
+        if linked_task_id is None:
+            raise ContractError("empty linked task cannot be filled safely")
+        if linked_task_id != safe_task_id:
+            raise ContractError("conflicting linked task cannot be replaced")
+
+        task_rows = _row_list(
+            self._execute("project.task", "read", [safe_task_id], fields=["id"]),
+            label="linked task",
+            maximum=1,
+        )
+        if len(task_rows) != 1 or task_rows[0].get("id") != safe_task_id:
+            raise ContractError("linked task readback did not match")
 
     def read_improvement(
         self,
@@ -983,7 +1071,7 @@ class ImprovementsClient:
         if missing:
             raise ContractError("target contract is missing required fields")
 
-        for field_name in WRITABLE_TARGET_FIELDS:
+        for field_name in WRITABLE_TARGET_FIELDS | CREATE_ONLY_TARGET_FIELDS:
             metadata = result.get(field_name)
             if type(metadata) is not dict or metadata.get("readonly") is not False:
                 raise ContractError(f"{field_name} must be writable")

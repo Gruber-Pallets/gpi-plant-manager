@@ -97,6 +97,7 @@ _NONBINARY_FIELDS = frozenset(
         "x_studio_date_stop",
         "x_studio_completed_by",
         "x_studio_notes",
+        "x_studio_linked_task",
     }
 )
 
@@ -251,6 +252,14 @@ def _canonical_manifest(
     match = _SOURCE_ID_RE.fullmatch(source_id)
     if match is None or int(match.group(1)) != feedback_id or source != "GPI Plant Manager":
         raise ValueError("manifest source identity is malformed")
+    linked_task = fields.get("x_studio_linked_task")
+    if linked_task is not None and (
+        type(linked_task) is not int
+        or not 0 < linked_task <= MAX_SIGNED_64
+        or fields.get("x_studio_type")
+        not in {"Physical - Issue", "Physical - Suggestion", "2s Improvement"}
+    ):
+        raise ValueError("manifest task link is malformed")
     canonical_evidence: dict[str, dict[str, object]] = {}
     for field_name, item in evidence.items():
         if type(field_name) is not str or field_name not in _BINARY_FIELDS:

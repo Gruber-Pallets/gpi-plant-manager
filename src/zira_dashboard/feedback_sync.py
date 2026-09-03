@@ -13,11 +13,14 @@ from uuid import uuid4
 
 from . import feedback_store
 from . import feedback_sync_store as sync_store
+from . import feedback_task_delivery as task_delivery
 from .feedback_projection import (
     BinaryEvidence,
     Projection,
     ReadbackMismatch,
     build_projection_from_snapshot,
+    is_review_projection,
+    with_review_task_link,
     verify_readback,
 )
 from .odoo_improvements import (
@@ -318,6 +321,58 @@ def _verify_rpc_succeeded(
     return "verified"
 
 
+def _recover_ambiguous_mutation(
+    claim: sync_store.Claim,
+    attempt: sync_store.Attempt,
+    projection: Projection,
+    *,
+    client: ImprovementsClient,
+    now: datetime,
+) -> str:
+    """Resolve an uncertain acknowledgement only from exact remote readback."""
+    if attempt.mutation_kind == "create":
+        try:
+            rows = client.find_exact(projection.source_id)
+            if type(rows) is not list or len(rows) != 1:
+                raise ContractError("ambiguous create did not yield one exact row")
+            remote_id = _positive_remote_id(rows[0].get("id"))
+        except (TimeoutError, ConnectionError, OSError, xmlrpc.client.Error, ContractError):
+            return _quarantine(
+                claim,
+                "ambiguous_mutation",
+                now,
+                attempt=attempt,
+            )
+    else:
+        remote_id = _positive_remote_id(attempt.remote_id)
+    try:
+        succeeded = sync_store.mark_rpc_succeeded(
+            claim,
+            attempt,
+            remote_id,
+            now,
+        )
+    except Exception:
+        try:
+            sync_store.quarantine(
+                claim,
+                "ambiguous_mutation",
+                now,
+                attempt=attempt,
+            )
+        except Exception:
+            pass
+        raise
+    return _verify_rpc_succeeded(
+        claim,
+        succeeded,
+        projection,
+        remote_id,
+        client=client,
+        now=now,
+    )
+
+
 def _dispatch_prepared_once(
     claim: sync_store.Claim,
     attempt: sync_store.Attempt,
@@ -387,6 +442,11 @@ def _dispatch_prepared_once(
                 expected_contract=contract,
             )
             remote_id = _positive_remote_id(remote_id, mutation_acknowledgement=True)
+        elif is_review_projection(projection):
+            # Existing review references are Odoo-owned after creation. A retry
+            # verifies and adopts the row but never pushes Plant's local lifecycle
+            # back over the shared review task.
+            remote_id = _positive_remote_id(attempt.remote_id)
         else:
             remote_id = _positive_remote_id(attempt.remote_id)
             client.write_improvement(
@@ -417,11 +477,12 @@ def _dispatch_prepared_once(
             attempt=dispatched,
         )
     except _AMBIGUOUS_MUTATION_ERRORS:
-        return _quarantine(
+        return _recover_ambiguous_mutation(
             claim,
-            "ambiguous_mutation",
-            now,
-            attempt=dispatched,
+            dispatched,
+            projection,
+            client=client,
+            now=now,
         )
 
     try:
@@ -571,6 +632,17 @@ def process_claim(
     else:
         remote_id = None
         mutation_kind = "create"
+
+    if mutation_kind == "create" and is_review_projection(projection):
+        task_id = task_delivery.task_id_for_review_reference(claim.feedback_id)
+        if task_id is None:
+            sync_store.defer_unprepared_read_failure(
+                claim,
+                "identity_read_failed",
+                now,
+            )
+            return "deferred"
+        projection = with_review_task_link(projection, task_id)
 
     try:
         prepared = sync_store.prepare_attempt(

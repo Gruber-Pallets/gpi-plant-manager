@@ -170,6 +170,9 @@ FEEDBACK_STAGES = _odoo_feedback.FEEDBACK_STAGES
 FEEDBACK_DONE_STAGE = _odoo_feedback.FEEDBACK_DONE_STAGE
 FEEDBACK_REJECTED_STAGE = _odoo_feedback.FEEDBACK_REJECTED_STAGE
 OdooTaskPayloadError = _odoo_feedback.OdooTaskPayloadError
+OdooUserPayloadError = _odoo_feedback.OdooUserPayloadError
+REVIEW_PROJECT_NAME = "GPI OS Manager - TASKS"
+REVIEW_STAGE_NAMES = frozenset({"General", "L10"})
 
 _feedback_project_id: int | None = None
 
@@ -1389,6 +1392,162 @@ def ensure_feedback_project() -> int:
     return _feedback_project_id
 
 
+def _review_positive_id(value: object, label: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise OdooTaskPayloadError(f"Odoo {label} payload was malformed")
+    return value
+
+
+def ensure_review_project() -> int:
+    """Resolve the one active OS task project without creating or caching it."""
+    rows = execute(
+        "project.project",
+        "search_read",
+        [("name", "=", REVIEW_PROJECT_NAME), ("active", "=", True)],
+        fields=["id"],
+        order="id asc",
+        limit=3,
+    )
+    if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
+        raise OdooTaskPayloadError("Odoo review project is missing or ambiguous")
+    return _review_positive_id(rows[0].get("id"), "review project")
+
+
+def ensure_review_stage(project_id: int, name: str) -> int:
+    """Resolve one active General or L10 stage associated with the review project."""
+    safe_project_id = _review_positive_id(project_id, "review project")
+    if type(name) is not str or name not in REVIEW_STAGE_NAMES:
+        raise ValueError("review stage name is unsupported")
+    rows = execute(
+        "project.task.type",
+        "search_read",
+        [
+            ("project_ids", "in", [safe_project_id]),
+            ("name", "=", name),
+            ("active", "=", True),
+        ],
+        fields=["id", "name"],
+        order="id asc",
+        limit=3,
+    )
+    if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
+        raise OdooTaskPayloadError("Odoo review stage is missing or ambiguous")
+    if rows[0].get("name") != name:
+        raise OdooTaskPayloadError("Odoo review stage payload was malformed")
+    return _review_positive_id(rows[0].get("id"), "review stage")
+
+
+def find_review_task_ids(project_id: int, name: str) -> list[int]:
+    """Return up to three exact-name review task IDs, including archived tasks."""
+    safe_project_id = _review_positive_id(project_id, "review project")
+    if type(name) is not str or not name.startswith("[GPI-PM-FB-"):
+        raise ValueError("review task name is malformed")
+    rows = execute(
+        "project.task",
+        "search_read",
+        [("project_id", "=", safe_project_id), ("name", "=", name)],
+        fields=["id"],
+        order="id asc",
+        limit=3,
+        context={"active_test": False},
+    )
+    if type(rows) is not list or len(rows) > 3:
+        raise OdooTaskPayloadError("Odoo review task lookup payload was malformed")
+    task_ids: list[int] = []
+    for row in rows:
+        if type(row) is not dict:
+            raise OdooTaskPayloadError("Odoo review task lookup payload was malformed")
+        task_ids.append(_review_positive_id(row.get("id"), "review task"))
+    if len(task_ids) != len(set(task_ids)):
+        raise OdooTaskPayloadError("Odoo review task lookup payload was malformed")
+    return task_ids
+
+
+def create_feedback_review_task(
+    *,
+    project_id: int,
+    stage_id: int,
+    name: str,
+    description_html: str,
+    assignee_uid: int,
+) -> int:
+    """Create exactly one open General review task assigned to one Odoo user."""
+    safe_project_id = _review_positive_id(project_id, "review project")
+    safe_stage_id = _review_positive_id(stage_id, "review stage")
+    safe_user_id = _review_positive_id(assignee_uid, "review assignee")
+    if type(name) is not str or not name.startswith("[GPI-PM-FB-"):
+        raise ValueError("review task name is malformed")
+    if type(description_html) is not str or not description_html:
+        raise ValueError("review task description is malformed")
+    result = execute(
+        "project.task",
+        "create",
+        {
+            "project_id": safe_project_id,
+            "stage_id": safe_stage_id,
+            "name": name,
+            "description": description_html,
+            "user_ids": [(6, 0, [safe_user_id])],
+            "state": "01_in_progress",
+        },
+    )
+    return _review_positive_id(result, "created review task")
+
+
+def read_feedback_review_task(task_id: int) -> dict[str, Any]:
+    """Read the complete creation contract for one exact review task."""
+    safe_task_id = _review_positive_id(task_id, "review task")
+    rows = execute(
+        "project.task",
+        "read",
+        [safe_task_id],
+        fields=[
+            "id",
+            "name",
+            "project_id",
+            "stage_id",
+            "user_ids",
+            "state",
+            "active",
+            "description",
+        ],
+    )
+    if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
+        raise OdooTaskPayloadError("Odoo review task readback payload was malformed")
+    row = rows[0]
+    project = row.get("project_id")
+    stage = row.get("stage_id")
+    users = row.get("user_ids")
+    if (
+        row.get("id") != safe_task_id
+        or type(row.get("name")) is not str
+        or type(project) is not list
+        or len(project) != 2
+        or type(project[1]) is not str
+        or type(stage) is not list
+        or len(stage) != 2
+        or type(stage[1]) is not str
+        or type(users) is not list
+        or any(type(user_id) is not int or user_id <= 0 for user_id in users)
+        or len(users) != len(set(users))
+        or type(row.get("state")) is not str
+        or type(row.get("active")) is not bool
+        or type(row.get("description")) is not str
+    ):
+        raise OdooTaskPayloadError("Odoo review task readback payload was malformed")
+    return {
+        "id": safe_task_id,
+        "name": row["name"],
+        "project_id": _review_positive_id(project[0], "review task project"),
+        "stage_id": _review_positive_id(stage[0], "review task stage"),
+        "stage_name": stage[1],
+        "user_ids": list(users),
+        "state": row["state"],
+        "active": row["active"],
+        "description": row["description"],
+    }
+
+
 def ensure_feedback_tag(name: str) -> int:
     return _odoo_feedback.ensure_feedback_tag(execute, name)
 
@@ -1429,6 +1588,10 @@ def read_feedback_task(task_id: int) -> dict[str, Any] | None:
 
 def find_feedback_attachment_ids(task_id: int, name: str) -> list[int]:
     return _odoo_feedback.find_feedback_attachment_ids(execute, task_id, name)
+
+
+def read_feedback_attachment(attachment_id: int) -> dict[str, Any]:
+    return _odoo_feedback.read_feedback_attachment(execute, attachment_id)
 
 
 def create_feedback_task(

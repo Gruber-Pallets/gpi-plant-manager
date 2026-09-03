@@ -13,6 +13,7 @@ import pytest
 from zira_dashboard import feedback_store
 from zira_dashboard import feedback_sync
 from zira_dashboard import feedback_sync_store as sync_store
+from zira_dashboard import feedback_task_delivery as task_delivery
 from zira_dashboard.feedback_image import MAX_OUTPUT_BYTES, NormalizedImage
 from zira_dashboard.feedback_projection import BinaryEvidence, Projection
 from zira_dashboard.feedback_sync import BatchResult, _recover_active, process_claim, run_batch
@@ -91,12 +92,13 @@ def projection(
     raw: bytes | None = None,
     start_value: str = "2026-08-20",
     include_optionals: bool = False,
+    type_value: str = "Digital",
 ) -> Projection:
     fields = {
         "x_name": "Safe",
         "x_studio_source_id": "GPI-PM-FB-17",
         "x_studio_date_start": start_value,
-        "x_studio_type": "Digital",
+        "x_studio_type": type_value,
         "x_studio_status": "Requested",
         "x_studio_source": "GPI Plant Manager",
     }
@@ -269,6 +271,11 @@ class FakeClient:
         remote = {"id": remote_id, **values}
         for field_name in {"x_studio_submitted_by", "x_studio_completed_by"} & remote.keys():
             remote[field_name] = [remote[field_name], "Safe Employee"]
+        if "x_studio_linked_task" in remote:
+            remote["x_studio_linked_task"] = [
+                remote["x_studio_linked_task"],
+                "Review task",
+            ]
         if not self.remote_matches:
             remote.pop("x_name", None)
         return remote
@@ -427,6 +434,79 @@ def test_one_match_adopts_and_updates_without_clearing_absent_optionals(flow):
         binaries=flow.selected.binaries,
         now=aware_now(),
     )
+
+
+def test_one_matching_review_reference_is_adopted_without_writing_local_lifecycle(flow):
+    selected = projection(type_value="Physical - Issue")
+    flow.build.return_value = selected
+    flow.prepared = attempt(
+        "prepared", selected=selected, mutation_kind="update", remote_id=901
+    )
+    flow.dispatched = attempt(
+        "dispatch_marked", selected=selected, mutation_kind="update", remote_id=901
+    )
+    flow.succeeded = attempt(
+        "rpc_succeeded", selected=selected, mutation_kind="update", remote_id=901
+    )
+    flow.prepare.return_value = flow.prepared
+    flow.mark_dispatch.return_value = flow.dispatched
+    flow.mark_rpc.return_value = flow.succeeded
+    row = {
+        "id": 901,
+        "x_studio_source": "GPI Plant Manager",
+        "x_studio_source_id": "GPI-PM-FB-17",
+    }
+    client = FakeClient(exact_rows=[row])
+    client.remote_values = selected.dispatch_fields()
+
+    assert process_claim(claim(), client=client, now=aware_now()) == "verified"
+
+    assert client.mutation_calls == []
+
+
+def test_new_review_reference_is_created_with_durable_task_link(flow, monkeypatch):
+    selected = projection(type_value="Physical - Issue")
+    flow.build.return_value = selected
+    monkeypatch.setattr(
+        task_delivery,
+        "task_id_for_review_reference",
+        MagicMock(return_value=902),
+        raising=False,
+    )
+    client = FakeClient()
+
+    assert process_claim(claim(), client=client, now=aware_now()) == "verified"
+
+    assert client.mutation_calls == ["create"]
+    assert client.create_fields["x_studio_linked_task"] == 902
+    assert "x_studio_linked_wo" not in client.create_fields
+
+
+def test_ambiguous_review_reference_create_ack_adopts_and_reads_exact_row(
+    flow, monkeypatch
+):
+    selected = projection(type_value="Physical - Issue")
+    flow.build.return_value = selected
+    monkeypatch.setattr(
+        task_delivery,
+        "task_id_for_review_reference",
+        MagicMock(return_value=902),
+    )
+    row = {
+        "id": 901,
+        "x_studio_source": "GPI Plant Manager",
+        "x_studio_source_id": "GPI-PM-FB-17",
+    }
+    client = FakeClient(
+        create_error=MalformedMutationResponse("uncertain create acknowledgement")
+    )
+    client.find_exact = MagicMock(side_effect=[[], [], [row]])
+
+    assert process_claim(claim(), client=client, now=aware_now()) == "verified"
+
+    assert client.find_exact.call_count == 3
+    assert client.read_count == 1
+    flow.mark_rpc.assert_called_once()
 
 
 def test_saved_id_exact_match_updates_only_owned_record(flow):

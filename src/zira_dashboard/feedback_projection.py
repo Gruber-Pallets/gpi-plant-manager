@@ -15,7 +15,11 @@ from zoneinfo import ZoneInfo
 
 from . import feedback_store
 from .feedback_image import MAX_OUTPUT_BYTES, OUTPUT_LONG_SIDE, NormalizedImage
-from .feedback_types import FEEDBACK_TYPES, feedback_type_or_legacy_bug
+from .feedback_types import (
+    FEEDBACK_TYPES,
+    REVIEW_IMPROVEMENT_TYPES,
+    feedback_type_or_legacy_bug,
+)
 from .odoo_improvements import ContractError, ImprovementContract
 
 
@@ -50,10 +54,13 @@ _NONBINARY_FIELD_NAMES = frozenset(
         "x_studio_date_stop",
         "x_studio_completed_by",
         "x_studio_notes",
+        "x_studio_linked_task",
     }
 )
 _PROJECTION_TYPE_VALUES = frozenset(TYPE_VALUES.values())
-_EMPLOYEE_FIELDS = frozenset({"x_studio_submitted_by", "x_studio_completed_by"})
+_MANY2ONE_FIELDS = frozenset(
+    {"x_studio_submitted_by", "x_studio_completed_by", "x_studio_linked_task"}
+)
 _EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+", re.ASCII)
 _SOURCE_ID_RE = re.compile(r"GPI-PM-FB-([1-9][0-9]*)", re.ASCII)
 _CHICAGO = ZoneInfo("America/Chicago")
@@ -146,6 +153,13 @@ class Projection:
             type(projection_type) is not str or projection_type not in _PROJECTION_TYPE_VALUES
         ):
             raise ValueError("projection type is not writable")
+        linked_task = copied_fields.get("x_studio_linked_task")
+        if linked_task is not None and (
+            type(linked_task) is not int
+            or not 0 < linked_task <= MAX_SIGNED_64
+            or projection_type not in REVIEW_IMPROVEMENT_TYPES
+        ):
+            raise ValueError("projection task link is not a review task identity")
         try:
             fields_json = _canonical_json(copied_fields)
         except (TypeError, ValueError):
@@ -487,6 +501,9 @@ def build_projection_from_snapshot(
     projection_version = _positive_signed_64(
         snapshot.feedback.get("projection_version"), "projection version"
     )
+    canonical_type = feedback_type_or_legacy_bug(snapshot.feedback.get("task_type"))
+    if canonical_type.odoo_value == "2s Improvement" and contract.version < 2:
+        raise ContractError("2s Improvement is missing from the active type selection")
 
     def employee_resolver(email: object) -> int | None:
         return resolve_employee_id(
@@ -504,6 +521,31 @@ def build_projection_from_snapshot(
         start_type=contract.start_type,
         stop_type=contract.stop_type,
         employee_resolver=employee_resolver,
+    )
+
+
+def is_review_projection(projection: Projection) -> bool:
+    """Return whether the immutable projection belongs to an Odoo-owned review."""
+    if type(projection) is not Projection:
+        raise ValueError("review ownership requires an immutable projection")
+    return projection.fields.get("x_studio_type") in REVIEW_IMPROVEMENT_TYPES
+
+
+def with_review_task_link(projection: Projection, task_id: int) -> Projection:
+    """Bind one verified durable review task into an immutable create projection."""
+    if not is_review_projection(projection):
+        raise ValueError("task links are only valid for review projections")
+    safe_task_id = _positive_signed_64(task_id, "review task id")
+    fields = projection.fields
+    fields["x_studio_linked_task"] = safe_task_id
+    binaries = projection.binaries
+    manifest, digest = _manifest(fields, binaries)
+    return Projection(
+        source_id=projection.source_id,
+        fields=fields,
+        binaries=binaries,
+        manifest=manifest,
+        manifest_digest=digest,
     )
 
 
@@ -525,7 +567,7 @@ def readback_mismatched_fields(
             mismatches.add(field_name)
             continue
         actual = remote[field_name]
-        if field_name in _EMPLOYEE_FIELDS:
+        if field_name in _MANY2ONE_FIELDS:
             if (
                 type(actual) is not list
                 or len(actual) != 2

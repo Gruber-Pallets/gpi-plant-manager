@@ -334,6 +334,39 @@ def find_feedback_attachment_ids(
     return [int(row["id"]) for row in rows]
 
 
+def read_feedback_attachment(
+    execute_fn: Callable[..., Any], attachment_id: int
+) -> dict[str, Any]:
+    """Read the exact identity contract for one task attachment."""
+    safe_attachment_id = _positive_id(attachment_id, label="attachment")
+    rows = execute_fn(
+        "ir.attachment",
+        "read",
+        [safe_attachment_id],
+        fields=["id", "name", "res_model", "res_id", "mimetype"],
+    )
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise OdooTaskPayloadError("Odoo attachment readback payload was malformed")
+    row = rows[0]
+    if (
+        row.get("id") != safe_attachment_id
+        or not isinstance(row.get("name"), str)
+        or not isinstance(row.get("res_model"), str)
+        or isinstance(row.get("res_id"), bool)
+        or not isinstance(row.get("res_id"), int)
+        or row["res_id"] <= 0
+        or not isinstance(row.get("mimetype"), str)
+    ):
+        raise OdooTaskPayloadError("Odoo attachment readback payload was malformed")
+    return {
+        "id": safe_attachment_id,
+        "name": row["name"],
+        "res_model": row["res_model"],
+        "res_id": row["res_id"],
+        "mimetype": row["mimetype"],
+    }
+
+
 def create_feedback_task(
     execute_fn: Callable[..., Any],
     project_id: int,
@@ -597,7 +630,7 @@ def add_task_attachment(
     raw_bytes: bytes,
 ) -> int:
     """Attach a file to a project.task as an ir.attachment."""
-    return execute_fn(
+    result = execute_fn(
         "ir.attachment",
         "create",
         {
@@ -608,6 +641,7 @@ def add_task_attachment(
             "mimetype": mimetype or "application/octet-stream",
         },
     )
+    return _positive_id(result, label="created attachment")
 
 
 def fetch_task_stage_names(

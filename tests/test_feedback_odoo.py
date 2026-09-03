@@ -168,6 +168,126 @@ def test_ensure_feedback_project_uses_facade_stage_helper(monkeypatch):
     assert seeded_project_ids == [7]
 
 
+def test_ensure_review_project_requires_one_exact_active_project(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append([{"id": 81}])
+
+    assert odoo_client.ensure_review_project() == 81
+    assert calls == [
+        (
+            "project.project",
+            "search_read",
+            ([
+                ("name", "=", "GPI OS Manager - TASKS"),
+                ("active", "=", True),
+            ],),
+            {"fields": ["id"], "order": "id asc", "limit": 3},
+        )
+    ]
+
+
+@pytest.mark.parametrize("rows", [[], [{"id": 81}, {"id": 82}]])
+def test_ensure_review_project_fails_closed_when_missing_or_duplicated(monkeypatch, rows):
+    _calls, responses = _stub(monkeypatch)
+    responses.append(rows)
+
+    with pytest.raises(odoo_client.OdooTaskPayloadError, match="review project"):
+        odoo_client.ensure_review_project()
+
+
+def test_ensure_review_stage_requires_one_exact_active_associated_stage(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append([{"id": 91, "name": "General"}])
+
+    assert odoo_client.ensure_review_stage(81, "General") == 91
+    assert calls == [
+        (
+            "project.task.type",
+            "search_read",
+            ([
+                ("project_ids", "in", [81]),
+                ("name", "=", "General"),
+                ("active", "=", True),
+            ],),
+            {"fields": ["id", "name"], "order": "id asc", "limit": 3},
+        )
+    ]
+
+
+def test_find_review_task_ids_is_exact_project_scoped_and_archived_inclusive(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append([{"id": 901}])
+    name = "[GPI-PM-FB-42] [Floor Issue] Save fails"
+
+    assert odoo_client.find_review_task_ids(81, name) == [901]
+    assert calls == [
+        (
+            "project.task",
+            "search_read",
+            ([('project_id', '=', 81), ('name', '=', name)],),
+            {
+                "fields": ["id"],
+                "order": "id asc",
+                "limit": 3,
+                "context": {"active_test": False},
+            },
+        )
+    ]
+
+
+def test_create_feedback_review_task_sets_general_stage_dale_and_open_state(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append(901)
+
+    assert odoo_client.create_feedback_review_task(
+        project_id=81,
+        stage_id=91,
+        name="[GPI-PM-FB-42] [Floor Issue] Save fails",
+        description_html="<p>Safe</p>",
+        assignee_uid=17,
+    ) == 901
+
+    model, method, args, kwargs = calls[0]
+    assert (model, method, kwargs) == ("project.task", "create", {})
+    assert args[0] == {
+        "project_id": 81,
+        "stage_id": 91,
+        "name": "[GPI-PM-FB-42] [Floor Issue] Save fails",
+        "description": "<p>Safe</p>",
+        "user_ids": [(6, 0, [17])],
+        "state": "01_in_progress",
+    }
+
+
+def test_read_feedback_review_task_returns_exact_contract_fields(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append([
+        {
+            "id": 901,
+            "name": "[GPI-PM-FB-42] [Floor Issue] Save fails",
+            "project_id": [81, "GPI OS Manager - TASKS"],
+            "stage_id": [91, "General"],
+            "user_ids": [17],
+            "state": "01_in_progress",
+            "active": True,
+            "description": "<p>Source: GPI Plant Manager</p>",
+        }
+    ])
+
+    assert odoo_client.read_feedback_review_task(901) == {
+        "id": 901,
+        "name": "[GPI-PM-FB-42] [Floor Issue] Save fails",
+        "project_id": 81,
+        "stage_id": 91,
+        "stage_name": "General",
+        "user_ids": [17],
+        "state": "01_in_progress",
+        "active": True,
+        "description": "<p>Source: GPI Plant Manager</p>",
+    }
+    assert calls[0][0:2] == ("project.task", "read")
+
+
 def test_stage_failure_leaves_project_uncached_and_retries(monkeypatch):
     import pytest
 
@@ -386,6 +506,37 @@ def test_add_task_attachment_creates_ir_attachment(monkeypatch):
     assert vals["mimetype"] == "image/png"
     import base64
     assert base64.b64decode(vals["datas"]) == b"abc"
+
+
+def test_read_feedback_attachment_returns_exact_identity_contract(monkeypatch):
+    calls, responses = _stub(monkeypatch)
+    responses.append(
+        [
+            {
+                "id": 500,
+                "name": "shot.png",
+                "res_model": "project.task",
+                "res_id": 900,
+                "mimetype": "image/png",
+            }
+        ]
+    )
+
+    assert odoo_client.read_feedback_attachment(500) == {
+        "id": 500,
+        "name": "shot.png",
+        "res_model": "project.task",
+        "res_id": 900,
+        "mimetype": "image/png",
+    }
+    assert calls == [
+        (
+            "ir.attachment",
+            "read",
+            ([500],),
+            {"fields": ["id", "name", "res_model", "res_id", "mimetype"]},
+        )
+    ]
 
 
 def test_fetch_task_stage_names_maps_id_to_name(monkeypatch):

@@ -102,6 +102,22 @@ def test_owner_task_contract_excludes_external_repair_type():
     assert "two_s_improvement" in delivery._FEEDBACK_TYPE_VALUES
 
 
+def test_review_reference_waits_for_optional_attachment_readback(monkeypatch):
+    cursor = use_cursor(
+        monkeypatch,
+        [
+            {
+                "odoo_task_id": 55,
+                "before_attachment_id": None,
+                "has_before_image": True,
+            }
+        ],
+    )
+
+    assert delivery.task_id_for_review_reference(42) is None
+    assert "feedback_images" in normalized_sql(cursor, 0)
+
+
 def test_claim_due_uses_skip_locked_and_returns_two_minute_lease(monkeypatch):
     monkeypatch.setattr(delivery, "uuid4", lambda: TOKEN)
     cursor = use_cursor(
@@ -197,6 +213,7 @@ def test_existing_lifecycle_reconciliation_is_bounded_and_retains_task_identity(
     assert "FOR UPDATE OF td SKIP LOCKED" in sql
     assert "td.odoo_task_id IS NOT NULL" in sql
     assert "td.state <> 'blocked'" in sql
+    assert "f.task_type = ANY(%s)" in sql
     assert "desired_version = candidates.projection_version" in sql
     assert "desired_status = candidates.status" in sql
     assert "td.desired_contract_version < %s" in sql
@@ -204,6 +221,7 @@ def test_existing_lifecycle_reconciliation_is_bounded_and_retains_task_identity(
     assert "desired_contract_version = %s" in sql
     assert "odoo_task_id" not in sql.split(" SET ", 1)[1].split(" FROM ", 1)[0]
     assert cursor.calls[0][1] == (
+        ["bug", "feature"],
         delivery.TASK_SYNC_CONTRACT_VERSION,
         delivery.TASK_SYNC_CONTRACT_VERSION,
         100,

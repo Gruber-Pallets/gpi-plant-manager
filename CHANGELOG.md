@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-02
 
+### Share each floor review once
+
+- **Each floor review now gets one shared Odoo task assigned to Dale. Retries find the same task instead of making another one.**
+
 ### Make the light-bulb choices clear
 
 - **The light-bulb menu now shows all six clear choices. Repair opens the Maintenance request page, and floor reviews ask only for a description and optional picture.**

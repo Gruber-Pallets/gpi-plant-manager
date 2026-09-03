@@ -913,6 +913,22 @@ def test_build_projection_from_snapshot_binds_warning_to_immutable_version(
     assert "employee_missing" not in serialized
 
 
+def test_two_s_projection_requires_the_active_v2_type_selection(monkeypatch):
+    install_snapshot_cursor(
+        monkeypatch,
+        feedback(task_type="two_s_improvement", lifecycle_origin="local"),
+        [],
+    )
+    snapshot = feedback_store.projection_snapshot(12345, 1)
+
+    with pytest.raises(ContractError, match="2s Improvement.*selection"):
+        build_projection_from_snapshot(
+            snapshot,
+            client=EmployeeClient(),
+            contract=ImprovementContract(start_type="date", stop_type="date", version=1),
+        )
+
+
 def test_verify_readback_accepts_exact_scalars_many2one_and_binary():
     projection = build_projection(
         feedback(),

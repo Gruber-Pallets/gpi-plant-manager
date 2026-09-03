@@ -575,6 +575,35 @@ def test_prepare_attempt_persists_canonical_manifest_then_guard_sets_active(monk
     assert "claim_token = %s" in update_sql
 
 
+def test_prepare_attempt_persists_review_task_link_in_create_manifest(monkeypatch):
+    manifest, _digest, binaries = manifest_values()
+    manifest["fields"]["x_studio_type"] = "Physical - Issue"
+    manifest["fields"]["x_studio_linked_task"] = 902
+    encoded = json.dumps(
+        manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    digest = hashlib.sha256(encoded).hexdigest()
+    use_cursor(
+        monkeypatch,
+        [claimed_row()],
+        [],
+        [{"feedback_id": 17}],
+    )
+
+    saved = store.prepare_attempt(
+        claim=claim(),
+        attempt_id=ATTEMPT_ID,
+        mutation_kind="create",
+        remote_id=None,
+        manifest=manifest,
+        manifest_digest=digest,
+        binaries=binaries,
+        now=aware_now(),
+    )
+
+    assert saved.manifest["fields"]["x_studio_linked_task"] == 902
+
+
 def test_prepare_attempt_validates_binary_evidence_against_manifest(monkeypatch):
     raw = b"safe jpeg bytes"
     evidence = BinaryEvidence(raw, hashlib.sha256(raw).hexdigest(), len(raw))

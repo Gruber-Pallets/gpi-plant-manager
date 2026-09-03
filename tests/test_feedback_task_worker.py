@@ -17,6 +17,7 @@ from zira_dashboard import feedback_task_delivery as delivery
 from zira_dashboard import feedback_task_worker as worker
 from zira_dashboard import app as app_module
 from zira_dashboard.feedback_image import NormalizedImage
+from zira_dashboard.odoo_improvements import ImprovementContract
 
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
@@ -102,6 +103,20 @@ def stub_odoo(monkeypatch, *, task_ids=None, attachment_ids=None):
     monkeypatch.setattr(worker.odoo_client, "ensure_feedback_tag", MagicMock(return_value=4))
     monkeypatch.setattr(worker.odoo_client, "create_feedback_task", MagicMock(return_value=55))
     monkeypatch.setattr(worker.odoo_client, "add_task_attachment", MagicMock(return_value=66))
+    monkeypatch.setattr(
+        worker.odoo_client,
+        "read_feedback_attachment",
+        MagicMock(
+            return_value={
+                "id": 66,
+                "name": "GPI-PM-FB-42-before.jpg",
+                "res_model": "project.task",
+                "res_id": 55,
+                "mimetype": "image/jpeg",
+            }
+        ),
+        raising=False,
+    )
     monkeypatch.setattr(worker.odoo_client, "find_active_feedback_project_ids", MagicMock(return_value=[3]))
     monkeypatch.setattr(worker.odoo_client, "find_feedback_stage_ids", MagicMock(return_value=[7]))
     monkeypatch.setattr(
@@ -122,6 +137,63 @@ def stub_odoo(monkeypatch, *, task_ids=None, attachment_ids=None):
     monkeypatch.setattr(worker.odoo_client, "find_task_message_ids", MagicMock(return_value=[]))
     monkeypatch.setattr(worker.odoo_client, "post_task_message", MagicMock())
     return find_tasks, find_attachments
+
+
+def stub_review_odoo(monkeypatch, *, task_ids=None, reference_rows=None, contract_version=2):
+    stub_odoo(monkeypatch, attachment_ids=[])
+    monkeypatch.setattr(worker.odoo_client, "ensure_review_project", MagicMock(return_value=81), raising=False)
+    monkeypatch.setattr(worker.odoo_client, "ensure_review_stage", MagicMock(return_value=91), raising=False)
+    monkeypatch.setattr(
+        worker.odoo_client,
+        "find_review_task_ids",
+        MagicMock(return_value=[] if task_ids is None else task_ids),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker.odoo_client,
+        "create_feedback_review_task",
+        MagicMock(return_value=55),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker.odoo_client,
+        "read_feedback_review_task",
+        MagicMock(
+            return_value={
+                "id": 55,
+                "name": worker.task_name(worker.task_delivery.load_snapshot.return_value),
+                "project_id": 81,
+                "stage_id": 91,
+                "stage_name": "General",
+                "user_ids": [17],
+                "state": "01_in_progress",
+                "active": True,
+                "description": worker.review_task_description(
+                    worker.task_delivery.load_snapshot.return_value
+                ),
+            }
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker.odoo_client,
+        "find_active_users_by_login",
+        MagicMock(return_value=[{"id": 17, "login": "dale@gruberpallets.com"}]),
+    )
+    reference = MagicMock()
+    reference.read_contract.return_value = ImprovementContract(
+        start_type="date", stop_type="date", version=contract_version
+    )
+    reference.find_exact.return_value = (
+        [{"id": 71}] if reference_rows is None else reference_rows
+    )
+    monkeypatch.setattr(
+        worker.ImprovementsClient,
+        "from_env",
+        MagicMock(return_value=reference),
+        raising=False,
+    )
+    return reference
 
 
 def test_task_stage_mapping_and_terminal_note_are_deterministic():
@@ -284,6 +356,185 @@ def test_process_claim_creates_feature_task_for_the_same_authenticated_owner(mon
 
 
 @pytest.mark.parametrize(
+    "task_type", ["floor_issue", "floor_suggestion", "two_s_improvement"]
+)
+def test_task_owner_routes_only_review_types_to_review(task_type):
+    assert worker.task_owner(snapshot(task_type=task_type)) == "review"
+
+
+def test_task_owner_keeps_digital_types_on_coding_path():
+    assert worker.task_owner(snapshot(task_type="bug")) == "coding"
+    assert worker.task_owner(snapshot(task_type="feature")) == "coding"
+
+
+def test_review_delivery_creates_one_general_task_for_dale_and_links_it(monkeypatch):
+    item = snapshot(task_type="floor_issue")
+    stub_delivery(monkeypatch, item)
+    reference = stub_review_odoo(monkeypatch)
+    work_order = MagicMock(side_effect=AssertionError("review delivery cannot create work orders"))
+    monkeypatch.setattr(worker.odoo_client, "create_work_order", work_order, raising=False)
+
+    assert worker.process_claim(CLAIM, now=NOW) == "delivered"
+
+    worker.odoo_client.ensure_review_project.assert_called_once_with()
+    worker.odoo_client.ensure_review_stage.assert_called_once_with(81, "General")
+    worker.odoo_client.find_active_users_by_login.assert_called_once_with(
+        "dale@gruberpallets.com", limit=2
+    )
+    worker.odoo_client.create_feedback_review_task.assert_called_once_with(
+        project_id=81,
+        stage_id=91,
+        name="[GPI-PM-FB-42] [Floor Issue] Save fails",
+        description_html=ANY,
+        assignee_uid=17,
+    )
+    description = worker.odoo_client.create_feedback_review_task.call_args.kwargs[
+        "description_html"
+    ]
+    assert "<strong>Source:</strong> GPI Plant Manager" in description
+    assert "<strong>Source ID:</strong> GPI-PM-FB-42" in description
+    reference.link_task_once.assert_called_once_with(
+        71,
+        55,
+        feedback_id=42,
+        expected_contract=reference.read_contract.return_value,
+    )
+    worker.odoo_client.read_feedback_review_task.assert_called_once_with(55)
+    worker.odoo_client.update_task.assert_not_called()
+    worker.odoo_client.post_task_message.assert_not_called()
+    work_order.assert_not_called()
+
+
+def test_review_delivery_adopts_exact_task_without_creating_another(monkeypatch):
+    item = snapshot(task_type="floor_suggestion")
+    stub_delivery(monkeypatch, item)
+    stub_review_odoo(monkeypatch, task_ids=[55])
+
+    assert worker.process_claim(CLAIM, now=NOW) == "delivered"
+
+    worker.odoo_client.create_feedback_review_task.assert_not_called()
+    worker.task_delivery.record_task_id.assert_called_once_with(CLAIM, task_id=55, now=NOW)
+
+
+def test_review_delivery_unknown_create_adopts_exact_task_after_timeout(monkeypatch):
+    item = snapshot(task_type="floor_issue")
+    stub_delivery(monkeypatch, item)
+    stub_review_odoo(monkeypatch)
+    worker.odoo_client.find_review_task_ids.side_effect = [[], [55]]
+    worker.odoo_client.create_feedback_review_task.side_effect = TimeoutError("unknown result")
+
+    assert worker.process_claim(CLAIM, now=NOW) == "delivered"
+
+    assert worker.odoo_client.find_review_task_ids.call_count == 2
+    worker.task_delivery.record_task_id.assert_called_once_with(CLAIM, task_id=55, now=NOW)
+
+
+def test_review_delivery_blocks_duplicate_exact_tasks_without_linking(monkeypatch):
+    item = snapshot(task_type="floor_issue")
+    stub_delivery(monkeypatch, item)
+    reference = stub_review_odoo(monkeypatch, task_ids=[54, 55])
+
+    assert worker.process_claim(CLAIM, now=NOW) == "blocked"
+
+    worker.odoo_client.create_feedback_review_task.assert_not_called()
+    reference.link_task_once.assert_not_called()
+
+
+def test_saved_review_task_survives_an_edited_title_when_source_markers_match(monkeypatch):
+    item = snapshot(task_type="floor_issue")
+    stub_delivery(monkeypatch, item)
+    stub_review_odoo(monkeypatch)
+    remote = worker.odoo_client.read_feedback_review_task.return_value
+    remote["name"] = "Dale renamed this review"
+    remote["description"] = (
+        "<p>Edited details</p><p><strong>Source:</strong> GPI Plant Manager<br>"
+        "<strong>Source ID:</strong> GPI-PM-FB-42<br>"
+        "<strong>Submitted by:</strong> operator@example.com</p>"
+    )
+
+    assert worker.process_claim(saved_claim(), now=NOW) == "delivered"
+
+    worker.odoo_client.find_review_task_ids.assert_called_once_with(
+        81, "[GPI-PM-FB-42] [Floor Issue] Save fails"
+    )
+    worker.task_delivery.block.assert_not_called()
+
+
+def test_saved_renamed_review_blocks_a_new_competing_exact_title_task(monkeypatch):
+    item = snapshot(task_type="floor_issue")
+    stub_delivery(monkeypatch, item)
+    reference = stub_review_odoo(monkeypatch, task_ids=[54])
+    remote = worker.odoo_client.read_feedback_review_task.return_value
+    remote["name"] = "Dale renamed this review"
+
+    assert worker.process_claim(saved_claim(), now=NOW) == "blocked"
+
+    worker.odoo_client.read_feedback_review_task.assert_not_called()
+    reference.link_task_once.assert_not_called()
+
+
+def test_review_source_substrings_in_user_body_cannot_replace_metadata_element(monkeypatch):
+    item = snapshot(task_type="floor_issue")
+    stub_delivery(monkeypatch, item)
+    reference = stub_review_odoo(monkeypatch)
+    remote = worker.odoo_client.read_feedback_review_task.return_value
+    remote["description"] = (
+        "<p>User wrote Source: GPI Plant Manager and "
+        "Source ID: GPI-PM-FB-42 here.</p>"
+        "<p><strong>Source:</strong> GPI Plant Manager<br>"
+        "<strong>Source ID:</strong> GPI-PM-FB-99<br>"
+        "<strong>Submitted by:</strong> operator@example.com</p>"
+    )
+
+    assert worker.process_claim(saved_claim(), now=NOW) == "blocked"
+
+    reference.link_task_once.assert_not_called()
+
+
+def test_malformed_review_task_create_ack_is_recovered_by_exact_adoption(monkeypatch):
+    item = snapshot(task_type="floor_issue")
+    stub_delivery(monkeypatch, item)
+    stub_review_odoo(monkeypatch)
+    worker.odoo_client.find_review_task_ids.side_effect = [[], [55]]
+    worker.odoo_client.create_feedback_review_task.side_effect = (
+        worker.odoo_client.OdooTaskPayloadError("malformed create acknowledgement")
+    )
+
+    assert worker.process_claim(CLAIM, now=NOW) == "delivered"
+
+    assert worker.odoo_client.find_review_task_ids.call_count == 2
+    worker.task_delivery.record_task_id.assert_called_once_with(CLAIM, task_id=55, now=NOW)
+
+
+def test_malformed_review_user_payload_blocks_before_task_create(monkeypatch):
+    item = snapshot(task_type="floor_issue")
+    stub_delivery(monkeypatch, item)
+    stub_review_odoo(monkeypatch)
+    worker.odoo_client.find_active_users_by_login.side_effect = (
+        worker.odoo_client.OdooUserPayloadError("malformed user payload")
+    )
+
+    assert worker.process_claim(CLAIM, now=NOW) == "blocked"
+
+    worker.odoo_client.create_feedback_review_task.assert_not_called()
+    worker.task_delivery.block.assert_called_once_with(
+        CLAIM, "The Odoo review setup is missing or ambiguous.", now=NOW
+    )
+
+
+def test_two_s_review_stops_for_setup_before_creating_anything(monkeypatch):
+    item = snapshot(task_type="two_s_improvement")
+    stub_delivery(monkeypatch, item)
+    reference = stub_review_odoo(monkeypatch, contract_version=1)
+
+    assert worker.process_claim(CLAIM, now=NOW) == "blocked"
+
+    worker.odoo_client.ensure_review_project.assert_not_called()
+    worker.odoo_client.create_feedback_review_task.assert_not_called()
+    reference.find_exact.assert_not_called()
+
+
+@pytest.mark.parametrize(
     ("task_type", "label"),
     [
         ("floor_issue", "Floor Issue"),
@@ -296,20 +547,14 @@ def test_task_name_uses_canonical_physical_label(task_type, label):
     )
 
 
-@pytest.mark.parametrize(
-    ("task_type", "tag"),
-    [
-        ("floor_issue", "Floor Issue"),
-        ("floor_suggestion", "Floor Suggestion"),
-    ],
-)
-def test_process_claim_uses_canonical_physical_tag(monkeypatch, task_type, tag):
+@pytest.mark.parametrize("task_type", ["floor_issue", "floor_suggestion"])
+def test_review_delivery_does_not_create_a_coding_tag(monkeypatch, task_type):
     stub_delivery(monkeypatch, snapshot(task_type=task_type))
-    stub_odoo(monkeypatch)
+    stub_review_odoo(monkeypatch)
 
     assert worker.process_claim(CLAIM, now=NOW) == "delivered"
 
-    worker.odoo_client.ensure_feedback_tag.assert_called_once_with(tag)
+    worker.odoo_client.ensure_feedback_tag.assert_not_called()
 
 
 def test_process_claim_rejects_unknown_type_before_odoo_work(monkeypatch):
@@ -358,6 +603,7 @@ def test_process_claim_creates_and_persists_one_before_image_attachment(monkeypa
     worker.odoo_client.add_task_attachment.assert_called_once_with(
         55, "GPI-PM-FB-42-before.jpg", "image/jpeg", b"jpeg"
     )
+    worker.odoo_client.read_feedback_attachment.assert_called_once_with(66)
     worker.task_delivery.record_before_attachment.assert_called_once_with(
         existing_task, attachment_id=66, now=NOW
     )
@@ -471,10 +717,45 @@ def test_attachment_timeout_adopts_matching_attachment_after_renewing_lease(monk
     worker.odoo_client.add_task_attachment.assert_called_once_with(
         55, "GPI-PM-FB-42-before.jpg", "image/jpeg", b"jpeg"
     )
+    worker.odoo_client.read_feedback_attachment.assert_called_once_with(66)
     worker.task_delivery.record_before_attachment.assert_called_once_with(
         existing_task, attachment_id=66, now=NOW
     )
     worker.task_delivery.schedule_retry.assert_not_called()
+
+
+def test_attachment_create_readback_mismatch_blocks_before_local_persistence(monkeypatch):
+    existing_task = saved_claim()
+    stub_delivery(monkeypatch, snapshot(before_image=_image()))
+    stub_odoo(monkeypatch)
+    worker.odoo_client.read_feedback_attachment.return_value = {
+        "id": 66,
+        "name": "other.jpg",
+        "res_model": "project.task",
+        "res_id": 55,
+        "mimetype": "image/jpeg",
+    }
+
+    assert worker.process_claim(existing_task, now=NOW) == "blocked"
+
+    worker.task_delivery.record_before_attachment.assert_not_called()
+
+
+def test_malformed_attachment_create_ack_rechecks_and_reads_exact_attachment(monkeypatch):
+    existing_task = saved_claim()
+    stub_delivery(monkeypatch, snapshot(before_image=_image()))
+    _find_tasks, find_attachments = stub_odoo(monkeypatch)
+    find_attachments.side_effect = [[], [66]]
+    worker.odoo_client.add_task_attachment.side_effect = (
+        worker.odoo_client.OdooTaskPayloadError("malformed attachment acknowledgement")
+    )
+
+    assert worker.process_claim(existing_task, now=NOW) == "delivered"
+
+    worker.odoo_client.read_feedback_attachment.assert_called_once_with(66)
+    worker.task_delivery.record_before_attachment.assert_called_once_with(
+        existing_task, attachment_id=66, now=NOW
+    )
 
 
 def test_lost_lease_before_task_create_prevents_remote_write(monkeypatch):

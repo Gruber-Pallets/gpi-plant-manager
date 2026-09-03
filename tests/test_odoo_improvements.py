@@ -155,6 +155,80 @@ def test_linked_fields_are_readable_but_not_app_writable():
     )
 
 
+def _link_client(monkeypatch, *, linked_task=False, linked_wo=False, duplicate=False):
+    calls = []
+    reference = {
+        "id": 71,
+        "x_studio_source": SOURCE_VALUE,
+        "x_studio_source_id": "GPI-PM-FB-17",
+        "x_studio_linked_task": linked_task,
+        "x_studio_linked_wo": linked_wo,
+    }
+
+    def executor(model, method, *args, **kwargs):
+        calls.append((model, method, args, kwargs))
+        if (model, method) == (TARGET_MODEL, "search_read"):
+            rows = [dict(reference)]
+            if duplicate:
+                rows.append({**reference, "id": 72})
+            return rows
+        if (model, method) == (TARGET_MODEL, "read"):
+            return [dict(reference)]
+        if (model, method) == (TARGET_MODEL, "write"):
+            assert args == ([71], {"x_studio_linked_task": 902})
+            reference["x_studio_linked_task"] = [902, "Review task"]
+            return True
+        if (model, method) == ("project.task", "read"):
+            return [{"id": 902}]
+        pytest.fail(f"unexpected RPC: {(model, method)}")
+
+    client = client_with(monkeypatch, executor, uid=4)
+    open_gates(monkeypatch)
+    contract = ImprovementContract(start_type="date", stop_type="date", version=2)
+    monkeypatch.setattr(client, "verify_target_identity", lambda: contract)
+    return client, contract, calls
+
+
+def test_link_task_once_rejects_preexisting_empty_link_without_writing(monkeypatch):
+    client, contract, calls = _link_client(monkeypatch)
+
+    with pytest.raises(ContractError, match="empty linked task cannot be filled safely"):
+        client.link_task_once(71, 902, feedback_id=17, expected_contract=contract)
+
+    writes = [call for call in calls if call[0:2] == (TARGET_MODEL, "write")]
+    assert writes == []
+
+
+def test_link_task_once_accepts_same_link_without_writing(monkeypatch):
+    client, contract, calls = _link_client(
+        monkeypatch, linked_task=[902, "Review task"]
+    )
+
+    client.link_task_once(71, 902, feedback_id=17, expected_contract=contract)
+
+    assert not any(call[0:2] == (TARGET_MODEL, "write") for call in calls)
+
+
+def test_link_task_once_rejects_conflicting_existing_link(monkeypatch):
+    client, contract, calls = _link_client(
+        monkeypatch, linked_task=[903, "Other task"]
+    )
+
+    with pytest.raises(ContractError, match="conflicting linked task"):
+        client.link_task_once(71, 902, feedback_id=17, expected_contract=contract)
+
+    assert not any(call[0:2] == (TARGET_MODEL, "write") for call in calls)
+
+
+def test_link_task_once_rejects_duplicate_reference_without_writing(monkeypatch):
+    client, contract, calls = _link_client(monkeypatch, duplicate=True)
+
+    with pytest.raises(ContractError, match="duplicate reference"):
+        client.link_task_once(71, 902, feedback_id=17, expected_contract=contract)
+
+    assert not any(call[0:2] == (TARGET_MODEL, "write") for call in calls)
+
+
 def client_with(monkeypatch, executor, *, uid=None):
     set_config(monkeypatch)
     return ImprovementsClient.from_env(executor=executor, uid=uid)
@@ -171,6 +245,27 @@ def create_fields(**changes):
     }
     fields.update(changes)
     return fields
+
+
+def test_review_reference_create_includes_exact_task_link_in_one_rpc(monkeypatch):
+    calls = []
+    fields = create_fields(
+        x_studio_type="Physical - Issue",
+        x_studio_linked_task=902,
+    )
+    client = mutation_client(monkeypatch, 71, calls=calls)
+    open_gates(monkeypatch)
+
+    assert client.create_improvement(
+        fields,
+        feedback_id=17,
+        expected_contract=EXPECTED_CONTRACT,
+    ) == 71
+
+    create_calls = [call for call in calls if call[0:2] == (TARGET_MODEL, "create")]
+    assert len(create_calls) == 1
+    assert create_calls[0][2] == (fields,)
+    assert "x_studio_linked_wo" not in create_calls[0][2][0]
 
 
 def mutation_client(monkeypatch, response, *, calls=None, fields=None):
@@ -1282,6 +1377,15 @@ def test_contract_fails_closed_for_missing_readonly_wrong_type_or_selection(monk
     client = client_with(monkeypatch, lambda *args, **kwargs: fields, uid=4)
 
     with pytest.raises(ContractError):
+        client.read_contract()
+
+
+def test_contract_requires_create_only_review_task_link_to_be_writable(monkeypatch):
+    fields = contract_fields()
+    fields["x_studio_linked_task"]["readonly"] = True
+    client = client_with(monkeypatch, lambda *args, **kwargs: fields, uid=4)
+
+    with pytest.raises(ContractError, match="x_studio_linked_task must be writable"):
         client.read_contract()
 
 

@@ -27,14 +27,21 @@ _BLOCK_REASONS = frozenset(
     {
         "More than one matching owner task exists.",
         "More than one matching owner screenshot exists.",
+        "The stored owner screenshot does not match this feedback.",
         "The stored owner task does not match this feedback.",
         "The owner task stage is missing or ambiguous.",
         "More than one matching owner task result note exists.",
+        "The Odoo review setup is missing or ambiguous.",
+        "The Odoo review reference is missing or ambiguous.",
+        "The Odoo review reference link conflicts with this task.",
     }
 )
 _MISSING_SUMMARY = "Task delivery record is missing."
 _FEEDBACK_TYPE_VALUES = tuple(
     item.value for item in FEEDBACK_TYPES if item.odoo_value is not None
+)
+_CODING_FEEDBACK_TYPE_VALUES = tuple(
+    item.value for item in FEEDBACK_TYPES if item.behavior == "coding"
 )
 
 
@@ -302,7 +309,8 @@ def queue_existing_lifecycle_mismatches(*, limit: int = 100) -> int:
               SELECT f.id, f.projection_version, f.status
               FROM feedback f
               JOIN feedback_task_delivery td ON td.feedback_id = f.id
-              WHERE f.lifecycle_origin = 'local'
+              WHERE f.task_type = ANY(%s)
+                AND f.lifecycle_origin = 'local'
                 AND f.status IN ('requested', 'in_progress', 'completed', 'declined')
                 AND td.odoo_task_id IS NOT NULL
                 AND td.state <> 'blocked'
@@ -331,6 +339,7 @@ def queue_existing_lifecycle_mismatches(*, limit: int = 100) -> int:
             SELECT COUNT(*) AS queued FROM updated
             """,
             (
+                list(_CODING_FEEDBACK_TYPE_VALUES),
                 TASK_SYNC_CONTRACT_VERSION,
                 TASK_SYNC_CONTRACT_VERSION,
                 limit,
@@ -544,6 +553,39 @@ def load_snapshot(feedback_id: int) -> FeedbackTaskSnapshot:
         projection_version=row["projection_version"],
         resolution_note=row.get("resolution_note"),
     )
+
+
+def task_id_for_review_reference(feedback_id: int) -> int | None:
+    """Return the durable task identity only after review delivery persisted it."""
+    safe_feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    with db.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT td.odoo_task_id, td.before_attachment_id,
+                   EXISTS (
+                       SELECT 1 FROM feedback_images fi
+                       WHERE fi.feedback_id = td.feedback_id AND fi.role = 'before'
+                   ) AS has_before_image
+            FROM feedback_task_delivery td
+            WHERE td.feedback_id = %s
+            """,
+            (safe_feedback_id,),
+        )
+        row = cursor.fetchone()
+    if not isinstance(row, Mapping):
+        return None
+    task_id = row.get("odoo_task_id")
+    if task_id is None:
+        return None
+    has_before_image = row.get("has_before_image")
+    if type(has_before_image) is not bool:
+        raise ValueError("attachment readiness is malformed")
+    attachment_id = row.get("before_attachment_id")
+    if has_before_image and attachment_id is None:
+        return None
+    if attachment_id is not None:
+        _positive_signed_64(attachment_id, "attachment id")
+    return _positive_signed_64(task_id, "task id")
 
 
 def record_task_id(
