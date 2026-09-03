@@ -74,6 +74,10 @@ Expected: failure because the regressed module has no `tick` API and the app cal
 - Modify: `src/zira_dashboard/attendance_mirror.py`
 - Modify: `src/zira_dashboard/attendance_corrections.py`
 - Modify: `src/zira_dashboard/production_history.py`
+- Modify: `src/zira_dashboard/attendance_recalc.py`
+- Modify: `src/zira_dashboard/attendance_department_repair.py`
+- Modify: `src/zira_dashboard/attendance_sync.py`
+- Modify: `src/zira_dashboard/attendance_timeline.py`
 - Modify: `src/zira_dashboard/_schema.py`
 - Modify: `src/zira_dashboard/routes/settings.py`
 - Modify: `src/zira_dashboard/app.py`
@@ -85,9 +89,13 @@ Expected: failure because the regressed module has no `tick` API and the app cal
 - Modify: `tests/test_attendance_location_policy.py`
 - Modify: `tests/test_settings_timeclock_layout.py`
 - Modify: matching Task 13 mirror, correction, precompute, and production-history test files
+- Modify: `tests/test_attendance_recalc.py`, `tests/test_attendance_sync.py`, and
+  `tests/test_attendance_timeline.py`
 - Delete: `tests/test_attendance_readiness_warmer.py` (a post-Task-13 suite
   tied only to the retired `run_warmer_tick(...)` interface; its useful
   warmer-registration coverage is retained in `tests/test_attendance_readiness.py`)
+- Delete: `tests/test_attendance_readiness_cli.py` (a 34f-only suite for
+  retired readiness and strict-source contracts)
 
 **Interfaces:**
 
@@ -138,6 +146,15 @@ Use the matching Task 13 tests from `15d86881`, then retain any later tests that
 Remove the obsolete warmer test suite instead of preserving its assertions for
 the retired worker interface.
 
+Restore the remaining retained 34f callers to the Task 13 boundary: the
+recalculation completion path uses the readiness advisory lock and ordinary
+prepared-day write (without retired strict-source locks or a fingerprint queue
+column); department repair omits the retired policy lock; the mirror worker
+uses `_sync_state_cur` and records its incremental start immediately; and the
+unused timeline snapshot API that requires the retired
+`last_incremental_observed_at` field is removed. Do not add compatibility
+wrappers for these retired interfaces.
+
 - [ ] **Step 3: Run focused GREEN tests**
 
 Run:
@@ -148,7 +165,10 @@ Run:
   tests/test_attendance_location_end_to_end.py \
   tests/test_attendance_location_failure_modes.py \
   tests/test_attendance_location_policy.py \
-  tests/test_settings_timeclock_layout.py -q
+  tests/test_settings_timeclock_layout.py \
+  tests/test_attendance_recalc.py \
+  tests/test_attendance_sync.py \
+  tests/test_attendance_timeline.py -q
 ```
 
 Expected: all focused tests pass; PostgreSQL-specific tests may skip only when the local database is unavailable.

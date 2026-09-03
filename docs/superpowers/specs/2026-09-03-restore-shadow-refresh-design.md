@@ -34,6 +34,16 @@ regressed worker, does not exist in the known-good Task 13 release, and
 asserts its retired `run_warmer_tick(...)` interface. The current Task 13
 readiness test covers the retained warmer-registration behavior.
 
+The merge also retained a small set of callers from the older 34f rollout
+branch. They cannot coexist with the restored Task 13 interfaces: the
+recalculation worker asks for retired strict-source locks and queue fields,
+department repair asks for a retired policy lock, the mirror worker uses a
+retired deferred-start API, and an unused timeline snapshot asks for a retired
+mirror-health field. Restore those callers to their Task 13 forms, rather than
+adding compatibility APIs that could reintroduce the old Live boundary.
+Retire the paired 34f-only CLI, warmer, and snapshot tests; restore the
+Task 13 recalculation and mirror-worker tests.
+
 Do not adapt the older module with a compatibility wrapper. That would leave
 older readiness rules and state formats in production. Do not force Live or
 manufacture yesterday's Shadow observation.
