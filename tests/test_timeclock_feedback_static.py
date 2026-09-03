@@ -44,4 +44,5 @@ def test_timeclock_feedback_asks_for_and_posts_one_employee_id():
     assert 'id="fb-submitter"' in feedback_html
     assert "window.location.pathname.indexOf('/timeclock') === 0" in feedback_js
     assert "window.gpiFetch('/api/feedback/submitters')" in feedback_js
+    assert "isTimeclockPath() ? '/timeclock/feedback' : '/feedback'" in feedback_js
     assert "form.append('submitter_employee_id', submitter.value)" in feedback_js

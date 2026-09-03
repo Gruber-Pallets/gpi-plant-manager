@@ -142,7 +142,7 @@ def test_shared_feedback_assets_keep_submit_and_screenshot_support():
     assert ".fb-status-pill" in css
     assert "function submitFeedback" in js
     assert "FormData" in js
-    assert "window.gpiFetch('/feedback'" in js
+    assert "window.gpiFetch(submitUrl" in js
     assert "/api/feedback/mine" in js
     assert "function renderMyFeedback" in js
     assert "'paste'" in js

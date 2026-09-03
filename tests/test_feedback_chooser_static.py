@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -86,14 +87,18 @@ def test_python_catalog_drives_each_button_behavior_and_repair_url():
     )
 
 
-def test_repair_fallback_is_an_ordinary_accessible_anchor():
+def test_repair_is_an_ordinary_protected_anchor_primary_action():
     html = _render_chooser()
 
-    assert 'id="fb-external-fallback"' in html
-    assert 'href="https://www.gpimaintenance.com/request"' in html
-    assert 'target="_blank"' in html
-    assert 'rel="noopener"' in html
-    assert "Open the Maintenance request page" in html
+    repair = re.search(r'<a\b(?=[^>]*data-type="repair")(?P<attrs>[^>]*)>', html)
+    assert repair is not None
+    attrs = repair.group("attrs")
+    assert 'class="fb-type-btn fb-type-card"' in attrs
+    assert 'data-behavior="external"' in attrs
+    assert 'href="https://www.gpimaintenance.com/request"' in attrs
+    assert 'target="_blank"' in attrs
+    assert 'rel="noopener"' in attrs
+    assert 'id="fb-external-fallback"' not in html
 
 
 def test_javascript_uses_button_metadata_without_a_second_type_catalog():
@@ -102,11 +107,10 @@ def test_javascript_uses_button_metadata_without_a_second_type_catalog():
     assert "ALLOWED_TYPES" not in js
     assert "PLACEHOLDERS" not in js
     assert "getAttribute('data-behavior')" in js
-    assert "getAttribute('data-url')" in js
-    assert 'window.open(url, "_blank", "noopener")' in js
-    assert "opened === null" in js
-    assert "externalFallback.hidden = false" in js
-    assert "window.gpiFetch('/feedback'" in js
+    assert "window.open(" not in js
+    assert "opened === null" not in js
+    assert "fb-external-fallback" not in js
+    assert "window.gpiFetch(submitUrl" in js
 
 
 def test_detail_step_keeps_description_screenshot_and_accessibility_contracts():

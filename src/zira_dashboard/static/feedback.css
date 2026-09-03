@@ -31,7 +31,7 @@
   align-items: center; gap: 10px; width: 100%; border: 1px solid #dbe3ec;
   background: #fff; padding: 12px; border-radius: 10px; color: #1f2937;
   text-align: left; cursor: pointer; transition: border-color 120ms ease,
-  box-shadow 120ms ease, background 120ms ease; }
+  box-shadow 120ms ease, background 120ms ease; text-decoration: none; }
 .fb-type-btn:hover { background: #f8fafc; border-color: #b8c4d2; }
 .fb-type-btn.is-active { background: var(--accent-dim, #dcfce7);
   border-color: var(--accent, #16a34a); }
@@ -49,10 +49,6 @@
   color: #64748b; font: inherit; font-size: 0.88rem; font-weight: 600;
   cursor: pointer; }
 .fb-back:hover { color: #111827; }
-
-.fb-external-fallback { display: block; margin-top: 1rem; color: #166534;
-  font-size: 0.88rem; font-weight: 700; }
-.fb-external-fallback[hidden] { display: none; }
 
 .fb-label { display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 6px; }
 .fb-submitter-field { margin-bottom: 1rem; }

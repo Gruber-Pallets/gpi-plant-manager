@@ -38,10 +38,14 @@
   function $(id) { return document.getElementById(id); }
 
   function focusableElements(el) {
-    return Array.prototype.slice.call(el.querySelectorAll(
+    var candidates = Array.prototype.slice.call(el.querySelectorAll(
       'button:not([disabled]):not([hidden]), [href]:not([hidden]), input:not([disabled]):not([hidden]), '
       + 'textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
     ));
+    return candidates.filter(function (candidate) {
+      return candidate.getClientRects().length > 0
+        && window.getComputedStyle(candidate).visibility !== 'hidden';
+    });
   }
 
   function openModal(el, opener, preferredFocus) {
@@ -99,8 +103,6 @@
     }
     showTypeStep(false);
     renderScreenshot();
-    var externalFallback = $('fb-external-fallback');
-    if (externalFallback) externalFallback.hidden = true;
     var submitter = $('fb-submitter');
     if (submitter) submitter.selectedIndex = 0;
     var status = $('fb-status');
@@ -122,28 +124,7 @@
     });
     var desc = $('fb-desc');
     if (desc) desc.placeholder = selectedButton.getAttribute('data-placeholder') || '';
-    if (selectedButton.getAttribute('data-behavior') === 'external') {
-      openExternal(selectedButton);
-      return;
-    }
     showDetailStep();
-  }
-
-  function openExternal(button) {
-    var url = button.getAttribute('data-url');
-    if (!url) return;
-    var opened = window.open(url, "_blank", "noopener");
-    var externalFallback = $('fb-external-fallback');
-    if (opened === null) {
-      if (externalFallback) {
-        externalFallback.href = url;
-        externalFallback.hidden = false;
-        externalFallback.focus();
-      }
-      return;
-    }
-    closeModal($('fb-modal'));
-    resetSendForm();
   }
 
   function showDetailStep() {
@@ -277,7 +258,8 @@
     }
     if (screenshot) form.append('screenshot', screenshot.file, screenshot.name);
 
-    window.gpiFetch('/feedback', { method: 'POST', body: form })
+    var submitUrl = isTimeclockPath() ? '/timeclock/feedback' : '/feedback';
+    window.gpiFetch(submitUrl, { method: 'POST', body: form })
       .then(function (r) { return r.json(); })
       .then(function (resp) {
         if (resp && resp.ok) {
@@ -379,7 +361,14 @@
     });
 
     Array.prototype.forEach.call(document.querySelectorAll('.fb-type-btn'), function (btn) {
-      btn.addEventListener('click', function () { setType(btn.getAttribute('data-type')); });
+      btn.addEventListener('click', function () {
+        if (btn.getAttribute('data-behavior') === 'external') {
+          closeModal($('fb-modal'));
+          resetSendForm();
+          return;
+        }
+        setType(btn.getAttribute('data-type'));
+      });
     });
     var back = $('fb-back');
     if (back) back.addEventListener('click', showTypeStep);

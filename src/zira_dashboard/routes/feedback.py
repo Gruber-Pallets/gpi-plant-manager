@@ -75,6 +75,7 @@ def _description_html(description: str, submitter: str | None,
     return "".join(parts)
 
 
+@router.post("/timeclock/feedback")
 @router.post("/feedback")
 async def submit_feedback(
     request: Request,
@@ -98,9 +99,13 @@ async def submit_feedback(
         return JSONResponse({"ok": False, "error": "Description is required."},
                             status_code=400)
 
+    matched_route = request.scope.get("route")
+    is_timeclock_submission = (
+        getattr(matched_route, "path", None) == "/timeclock/feedback"
+    )
     private_upn = getattr(request.state, "user_upn", None)
     try:
-        if private_upn is not None:
+        if private_upn is not None and not is_timeclock_submission:
             resolved_submitter = feedback_submitters.resolve_private(private_upn)
         else:
             raw_employee_id = (submitter_employee_id or "").strip()

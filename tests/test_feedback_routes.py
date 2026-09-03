@@ -362,6 +362,51 @@ def test_post_feedback_uses_authenticated_upn_and_ignores_posted_employee_id(
     assert captured["submitter_employee_odoo_id"] == 52
 
 
+def test_timeclock_feedback_uses_selected_employee_even_with_kiosk_session_upn(
+    monkeypatch,
+):
+    captured = {}
+    monkeypatch.setattr(
+        feedback_store,
+        "create_submission",
+        lambda **values: captured.update(values) or 49,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        feedback_submitters.db,
+        "query",
+        lambda *_args: [
+            {
+                "employee_id": 41,
+                "name": "Selected Employee",
+                "active": True,
+                "work_email": "selected@example.com",
+            },
+            {
+                "employee_id": 52,
+                "name": "Kiosk Session",
+                "active": True,
+                "work_email": "kiosk@example.com",
+            },
+        ],
+    )
+    _fail_if_odoo_is_called(monkeypatch)
+
+    response = private_client("kiosk@example.com").post(
+        "/timeclock/feedback",
+        data={
+            "type": "bug",
+            "description": "Production-shape kiosk report",
+            "submitter_employee_id": "41",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "id": 49, "task_delivery": "queued"}
+    assert captured["submitter"] == "selected@example.com"
+    assert captured["submitter_employee_odoo_id"] == 41
+
+
 def test_post_feedback_rejects_unresolved_submitter(monkeypatch):
     monkeypatch.setattr(
         feedback_submitters.db,
