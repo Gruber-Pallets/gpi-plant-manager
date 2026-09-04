@@ -1,4 +1,6 @@
 import asyncio
+import inspect
+import logging
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -305,6 +307,8 @@ def test_production_row_revision_changes_with_units_and_sample_count():
         (("Test Workcenter",), True),
         (("Night TEST Cell", "test station 2"), True),
         ((), False),
+        (("",), False),
+        (("Test Workcenter", ""), False),
         (("Dismantler 1",), False),
         (("Test Workcenter", "Dismantler 1"), False),
     ],
@@ -468,6 +472,39 @@ def test_resolved_unmapped_issue_is_hidden_only_when_all_attendance_ids_are_reso
 
     assert partial.issues == (issue,)
     assert complete.issues == ()
+
+
+def test_resolved_unmapped_filter_declares_snapshot_return_type():
+    signature = inspect.signature(exception_inbox._without_resolved_unmapped_issues)
+
+    assert signature.return_annotation == "AttendanceExceptionSnapshot"
+
+
+def test_resolved_id_read_failure_keeps_raw_unmapped_issue_visible_and_logs(
+    monkeypatch, caplog
+):
+    issue = replace(
+        _issue("attendance_unmapped_location", "attendance_unmapped_location:42:901:x"),
+        raw_work_center_labels=("Test Workcenter",),
+    )
+    raw_snapshot = _attendance_snapshot(mode="shadow", issues=(issue,))
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "build_snapshot",
+        lambda *_a, **_k: raw_snapshot,
+    )
+    monkeypatch.setattr(
+        missing_wc,
+        "resolved_ids",
+        lambda: (_ for _ in ()).throw(RuntimeError("resolved IDs unavailable")),
+    )
+
+    with caplog.at_level(logging.ERROR, logger=exception_inbox.__name__):
+        composed = exception_inbox._attendance_snapshot(DAY, [])
+
+    assert composed is raw_snapshot
+    assert composed.issues == (issue,)
+    assert "Could not read resolved missing-work-center attendance IDs" in caplog.text
 
 
 def test_summary_and_snapshot_count_the_same_attendance_items(monkeypatch):

@@ -13,10 +13,14 @@ import logging
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
+from typing import TYPE_CHECKING
 
 from . import plant_day, saturday_recruiting_store, schedule_store, shift_config, staffing
 from . import inbox_keys
 from . import time_off_context
+
+if TYPE_CHECKING:
+    from .attendance_exceptions import AttendanceExceptionSnapshot
 
 _log = logging.getLogger(__name__)
 
@@ -344,7 +348,9 @@ def is_dismissible_test_work_center(labels: Sequence[object]) -> bool:
     return bool(normalized) and all(label and "test" in label.casefold() for label in normalized)
 
 
-def _without_resolved_unmapped_issues(snapshot, resolved_ids: set[int]):
+def _without_resolved_unmapped_issues(
+    snapshot, resolved_ids: set[int]
+) -> AttendanceExceptionSnapshot:
     issues = tuple(
         issue
         for issue in snapshot.issues
