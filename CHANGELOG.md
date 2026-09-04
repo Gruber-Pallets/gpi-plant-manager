@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-09-04
+
+### Plan to dismiss system test work centers
+
+- **A plan is ready to let Dale dismiss unknown work centers used only for system tests.** Real unknown work centers will still need to be matched so a setup problem is not hidden. Nothing in the app has changed yet.
+
 ## 2026-09-03
 
 ### Floor ideas now use one shared review task
