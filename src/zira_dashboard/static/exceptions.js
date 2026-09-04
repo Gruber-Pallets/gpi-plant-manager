@@ -950,6 +950,25 @@
     setBusy(row, false);
   }
 
+  function dismissTestWorkCenter(row) {
+    if (!row.dataset.itemKey) {
+      failRow(row, 'Missing inbox item.');
+      return Promise.resolve();
+    }
+    setBusy(row, true);
+    rowStatus(row, 'Dismissing...', false);
+    return postJson('/api/exceptions/attendance-unmapped-location/dismiss', {
+      item_key: row.dataset.itemKey,
+    }).then(function (resp) {
+      if (resp && resp.ok) resolveRow(row, 'Dismissed');
+      else failRow(row, (resp && resp.error) || 'Dismiss failed.');
+    }).catch(function () { failRow(row, 'Network error.'); });
+  }
+
+  window.gpiExceptionInbox = Object.freeze({
+    dismissTestWorkCenter: dismissTestWorkCenter,
+  });
+
   function setForgotPunchMode(row, enabled) {
     if (!row) return;
     ['.js-forgot-punch-time', '.js-forgot-wc', '.js-forgot-punch-save'].forEach(function (selector) {
@@ -1424,18 +1443,7 @@
     }
 
     if (rowBtn.classList.contains('js-test-work-center-dismiss')) {
-      if (!row.dataset.itemKey) {
-        failRow(row, 'Missing inbox item.');
-        return;
-      }
-      setBusy(row, true);
-      rowStatus(row, 'Dismissing...', false);
-      postJson('/api/exceptions/attendance-unmapped-location/dismiss', {
-        item_key: row.dataset.itemKey,
-      }).then(function (resp) {
-        if (resp && resp.ok) resolveRow(row, 'Dismissed');
-        else failRow(row, (resp && resp.error) || 'Dismiss failed.');
-      }).catch(function () { failRow(row, 'Network error.'); });
+      dismissTestWorkCenter(row);
       return;
     }
 

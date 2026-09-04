@@ -69,7 +69,7 @@ def exceptions_summary_json():
     return JSONResponse(exception_inbox.build_summary())
 
 
-def _dismiss_test_work_center_sync(body: dict, actor_upn=None, actor_name=None):
+def _dismiss_test_work_center_sync(body: Mapping[str, Any], actor_upn=None, actor_name=None):
     item_key = str(body.get("item_key") or "").strip()
     if not item_key:
         return JSONResponse({"ok": False, "error": "Missing inbox item."}, status_code=400)
@@ -104,7 +104,17 @@ def _dismiss_test_work_center_sync(body: dict, actor_upn=None, actor_name=None):
             status_code=409,
         )
 
-    missing_wc.resolve_many(issue.attendance_ids, "dismissed", name=issue.employee_name)
+    changed = missing_wc.claim_many(
+        issue.item_key,
+        issue.attendance_ids,
+        "dismissed",
+        name=issue.employee_name,
+    )
+    if not changed:
+        return JSONResponse(
+            {"ok": False, "error": "That inbox item is no longer open."},
+            status_code=404,
+        )
     inbox_log.log_event_safe(
         item_kind="attendance_unmapped_location",
         item_key=issue.item_key,
@@ -123,7 +133,15 @@ def _dismiss_test_work_center_sync(body: dict, actor_upn=None, actor_name=None):
 
 @router.post("/api/exceptions/attendance-unmapped-location/dismiss")
 async def dismiss_test_work_center(request: Request):
-    body = await request.json()
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"ok": False, "error": "Invalid request."}, status_code=400
+            )
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return JSONResponse({"ok": False, "error": "Invalid request."}, status_code=400)
+
     actor_upn, actor_name = inbox_log.actor_from(request)
     try:
         return await asyncio.to_thread(

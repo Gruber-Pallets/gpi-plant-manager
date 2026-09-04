@@ -40,12 +40,100 @@ Promise.resolve({expression}).then(function (result) {{
     return json.loads(result.stdout)
 
 
-def test_test_work_center_dismiss_posts_only_stable_item_key():
-    js = _js()
-    assert "rowBtn.classList.contains('js-test-work-center-dismiss')" in js
-    assert "'/api/exceptions/attendance-unmapped-location/dismiss'" in js
-    assert "item_key: row.dataset.itemKey" in js
-    assert "resolveRow(row, 'Dismissed')" in js
+def test_test_work_center_dismiss_click_contract_is_retry_safe():
+    source = json.dumps(_js())
+    harness = f"""
+global.sessionStorage = {{getItem: function () {{ return null; }}, setItem: function () {{}}}};
+global.document = {{
+  hidden: false,
+  querySelector: function () {{ return null; }},
+  querySelectorAll: function () {{ return []; }},
+  addEventListener: function () {{}},
+  createElement: function () {{ throw new Error('dismiss must not create Undo'); }},
+}};
+global.window = {{
+  setInterval: function () {{}},
+  location: {{reload: function () {{}}}},
+}};
+global.setTimeout = function (fn) {{ fn(); return 1; }};
+global.clearTimeout = function () {{}};
+eval({source});
+
+function makeRow(itemKey) {{
+  var state = {{removed: false, error: false}};
+  var control = {{disabled: false}};
+  var status = {{hidden: true, textContent: ''}};
+  var row = {{
+    dataset: {{itemKey: itemKey, priority: 'urgent'}},
+    classList: {{
+      add: function (name) {{ if (name === 'is-resolved') state.resolved = true; }},
+      toggle: function (name, enabled) {{ if (name === 'is-error') state.error = enabled; }},
+    }},
+    querySelectorAll: function () {{ return [control]; }},
+    querySelector: function (selector) {{ return selector === '.row-status' ? status : null; }},
+    remove: function () {{ state.removed = true; }},
+  }};
+  return {{row: row, state: state, control: control, status: status}};
+}}
+
+async function run(response, rejects) {{
+  var fixture = makeRow('attendance-unmapped:test-workcenter');
+  var request = null;
+  window.gpiFetch = function (url, options) {{
+    request = {{url: url, body: JSON.parse(options.body)}};
+    if (rejects) return Promise.reject(new Error('offline'));
+    return Promise.resolve({{json: function () {{ return Promise.resolve(response); }}}});
+  }};
+  await window.gpiExceptionInbox.dismissTestWorkCenter(fixture.row);
+  return {{
+    request: request,
+    removed: fixture.state.removed,
+    resolved: !!fixture.state.resolved,
+    error: fixture.state.error,
+    disabled: fixture.control.disabled,
+    status: fixture.status.textContent,
+  }};
+}}
+
+(async function () {{
+  var success = await run({{ok: true}}, false);
+  var refused = await run({{ok: false, error: 'No longer open.'}}, false);
+  var rejected = await run(null, true);
+  process.stdout.write(JSON.stringify({{success: success, refused: refused, rejected: rejected}}));
+}})().catch(function (error) {{
+  process.stderr.write(String(error.stack || error));
+  process.exitCode = 1;
+}});
+"""
+
+    result = subprocess.run(
+        ["node", "--eval", harness], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    states = json.loads(result.stdout)
+    assert states["success"]["request"] == {
+        "url": "/api/exceptions/attendance-unmapped-location/dismiss",
+        "body": {"item_key": "attendance-unmapped:test-workcenter"},
+    }
+    assert states["success"] | {"request": None} == {
+        "request": None,
+        "removed": True,
+        "resolved": True,
+        "error": False,
+        "disabled": True,
+        "status": "Dismissed",
+    }
+    assert states["refused"]["removed"] is False
+    assert states["refused"]["resolved"] is False
+    assert states["refused"]["error"] is True
+    assert states["refused"]["disabled"] is False
+    assert states["refused"]["status"] == "No longer open."
+    assert states["rejected"]["removed"] is False
+    assert states["rejected"]["resolved"] is False
+    assert states["rejected"]["error"] is True
+    assert states["rejected"]["disabled"] is False
+    assert states["rejected"]["status"] == "Network error."
 
 
 def test_correction_javascript_posts_canonical_choices_and_token_only_apply():

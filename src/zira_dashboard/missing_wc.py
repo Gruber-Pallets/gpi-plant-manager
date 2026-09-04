@@ -97,6 +97,48 @@ def resolve_many(
         )
 
 
+def claim_many(
+    item_key: str,
+    attendance_ids: Sequence[int],
+    action: str,
+    name: str | None = None,
+    wc_name: str | None = None,
+) -> bool:
+    """Atomically suppress all IDs once for one stable inbox item.
+
+    The transaction-scoped advisory lock serializes clicks for the same stable
+    item key. The suppression check happens after taking that lock, so only the
+    first claimant writes and receives ``True``.
+    """
+    stable_key = str(item_key).strip()
+    ids = tuple(dict.fromkeys(int(value) for value in attendance_ids))
+    if not stable_key:
+        raise ValueError("item key is required")
+    if not ids:
+        raise ValueError("at least one attendance id is required")
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (stable_key,),
+        )
+        cur.execute(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM missing_wc_resolved WHERE attendance_id = ANY(%s)"
+            ") AS already_resolved",
+            (list(ids),),
+        )
+        if cur.fetchone()["already_resolved"]:
+            return False
+        cur.executemany(
+            "INSERT INTO missing_wc_resolved (attendance_id, action, name, wc_name) "
+            "VALUES (%s, %s, %s, %s)",
+            [(attendance_id, action, name, wc_name) for attendance_id in ids],
+        )
+    return True
+
+
 def unresolve(attendance_id) -> None:
     """Drop a suppression row so the attendance re-appears in the alert (undo)."""
     from . import db

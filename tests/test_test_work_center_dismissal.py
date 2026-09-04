@@ -1,6 +1,8 @@
 """Validated dismissal for current test-only Odoo work-center exceptions."""
 
 from datetime import UTC, date, datetime
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from unittest.mock import MagicMock
 
 import pytest
@@ -64,9 +66,9 @@ def _install_snapshot(monkeypatch, *, issues=()):
 
 
 def _install_no_writes(monkeypatch):
-    resolved = MagicMock()
+    resolved = MagicMock(return_value=True)
     logged = MagicMock()
-    monkeypatch.setattr(missing_wc, "resolve_many", resolved)
+    monkeypatch.setattr(missing_wc, "claim_many", resolved)
     monkeypatch.setattr(inbox_log, "log_event_safe", logged)
     return resolved, logged
 
@@ -148,10 +150,10 @@ def test_render_blank_work_center_label_uses_safe_map_link(monkeypatch, labels):
 
 def test_dismiss_current_test_item_suppresses_all_ids_and_audits(monkeypatch):
     issue = _unmapped_issue(labels=("Test Workcenter",), attendance_ids=(901, 902))
-    resolved = MagicMock()
+    resolved = MagicMock(return_value=True)
     logged = MagicMock(return_value=77)
     _install_snapshot(monkeypatch, issues=(issue,))
-    monkeypatch.setattr(missing_wc, "resolve_many", resolved)
+    monkeypatch.setattr(missing_wc, "claim_many", resolved)
     monkeypatch.setattr(inbox_log, "log_event_safe", logged)
 
     response = client.post(
@@ -161,7 +163,9 @@ def test_dismiss_current_test_item_suppresses_all_ids_and_audits(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    resolved.assert_called_once_with((901, 902), "dismissed", name=issue.employee_name)
+    resolved.assert_called_once_with(
+        issue.item_key, (901, 902), "dismissed", name=issue.employee_name
+    )
     logged.assert_called_once_with(
         item_kind="attendance_unmapped_location",
         item_key=issue.item_key,
@@ -175,6 +179,90 @@ def test_dismiss_current_test_item_suppresses_all_ids_and_audits(monkeypatch):
         reversible=False,
         detail={"raw_work_center_labels": ["Test Workcenter"]},
     )
+
+
+def test_dismiss_sequential_repeat_claims_and_audits_once(monkeypatch):
+    issue = _unmapped_issue()
+    _install_snapshot(monkeypatch, issues=(issue,))
+    claimed = MagicMock(side_effect=(True, False))
+    logged = MagicMock(return_value=77)
+    monkeypatch.setattr(missing_wc, "claim_many", claimed)
+    monkeypatch.setattr(inbox_log, "log_event_safe", logged)
+
+    first = client.post(
+        "/api/exceptions/attendance-unmapped-location/dismiss",
+        json={"item_key": issue.item_key},
+    )
+    second = client.post(
+        "/api/exceptions/attendance-unmapped-location/dismiss",
+        json={"item_key": issue.item_key},
+    )
+
+    assert first.status_code == 200
+    assert first.json() == {"ok": True}
+    assert second.status_code == 404
+    assert second.json() == {
+        "ok": False,
+        "error": "That inbox item is no longer open.",
+    }
+    assert claimed.call_count == 2
+    logged.assert_called_once()
+
+
+def test_dismiss_concurrent_race_claims_and_audits_once(monkeypatch):
+    issue = _unmapped_issue()
+    _install_snapshot(monkeypatch, issues=(issue,))
+    claim_lock = Lock()
+    claimed_keys = set()
+
+    def claim_once(item_key, *_args, **_kwargs):
+        with claim_lock:
+            if item_key in claimed_keys:
+                return False
+            claimed_keys.add(item_key)
+            return True
+
+    logged = MagicMock(return_value=77)
+    monkeypatch.setattr(missing_wc, "claim_many", claim_once)
+    monkeypatch.setattr(inbox_log, "log_event_safe", logged)
+
+    def dismiss():
+        return client.post(
+            "/api/exceptions/attendance-unmapped-location/dismiss",
+            json={"item_key": issue.item_key},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _index: dismiss(), range(2)))
+
+    assert sorted(response.status_code for response in responses) == [200, 404]
+    assert sum(response.json().get("ok") is True for response in responses) == 1
+    logged.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        (b"{not-json", "application/json"),
+        (b"[]", "application/json"),
+        (b'"item"', "application/json"),
+        (b"null", "application/json"),
+        (b"\xff", "application/json"),
+    ],
+)
+def test_dismiss_rejects_malformed_or_non_object_json(monkeypatch, content, content_type):
+    resolved, logged = _install_no_writes(monkeypatch)
+
+    response = client.post(
+        "/api/exceptions/attendance-unmapped-location/dismiss",
+        content=content,
+        headers={"content-type": content_type},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"ok": False, "error": "Invalid request."}
+    resolved.assert_not_called()
+    logged.assert_not_called()
 
 
 def test_dismiss_rejects_missing_item_key_without_writing(monkeypatch):
@@ -301,7 +389,7 @@ def test_dismiss_write_failure_returns_plain_500_without_auditing(monkeypatch):
     _install_snapshot(monkeypatch, issues=(issue,))
     resolved = MagicMock(side_effect=RuntimeError("private write detail"))
     logged = MagicMock()
-    monkeypatch.setattr(missing_wc, "resolve_many", resolved)
+    monkeypatch.setattr(missing_wc, "claim_many", resolved)
     monkeypatch.setattr(inbox_log, "log_event_safe", logged)
 
     response = client.post(
@@ -311,5 +399,7 @@ def test_dismiss_write_failure_returns_plain_500_without_auditing(monkeypatch):
 
     assert response.status_code == 500
     assert response.json() == {"ok": False, "error": "Could not dismiss this inbox item."}
-    resolved.assert_called_once_with((901, 902), "dismissed", name=issue.employee_name)
+    resolved.assert_called_once_with(
+        issue.item_key, (901, 902), "dismissed", name=issue.employee_name
+    )
     logged.assert_not_called()
