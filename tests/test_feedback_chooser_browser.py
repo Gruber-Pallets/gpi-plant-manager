@@ -21,15 +21,288 @@ def _render_enabled_chooser() -> str:
     return environment.get_template("_feedback.html").render()
 
 
-def _page_with_lightbulb(page):
+def _page_with_lightbulb(page, setup_script=None):
     page.set_content(
         '<button id="feedback-opener">Open feedback</button>'
         + _render_enabled_chooser()
     )
+    if setup_script:
+        page.evaluate(setup_script)
     page.add_script_tag(content=FEEDBACK_JS.read_text(encoding="utf-8"))
     page.locator("#feedback-opener").evaluate(
         "button => button.addEventListener('click', () => window.gpiLightbulb.open(button))"
     )
+
+
+def test_my_feedback_is_lazy_loaded_once_when_selected():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_lightbulb(
+                page,
+                """
+                window.mineRequests = 0;
+                window.gpiFetch = function (url) {
+                  if (url === '/api/feedback/mine') window.mineRequests += 1;
+                  return Promise.resolve({json: function () {
+                    return Promise.resolve({ok: true, items: []});
+                  }});
+                };
+                """,
+            )
+
+            page.locator("#feedback-opener").click()
+            assert page.evaluate("window.mineRequests") == 0
+
+            page.locator("#lightbulb-tab-mine").click()
+            page.get_by_text("You haven't sent any feedback yet.").wait_for()
+            assert page.evaluate("window.mineRequests") == 1
+
+            page.locator("#lightbulb-tab-send").click()
+            page.locator("#lightbulb-tab-mine").click()
+            assert page.evaluate("window.mineRequests") == 1
+        finally:
+            browser.close()
+
+
+def test_successful_submit_switches_to_refreshed_my_feedback():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_lightbulb(
+                page,
+                """
+                window.mineRequests = 0;
+                window.gpiFetch = function (url, options) {
+                  if (options && options.method === 'POST') {
+                    return Promise.resolve({json: function () {
+                      return Promise.resolve({ok: true});
+                    }});
+                  }
+                  if (url === '/api/feedback/mine') {
+                    window.mineRequests += 1;
+                    return Promise.resolve({json: function () {
+                      return Promise.resolve({ok: true, items: [{
+                        title: 'Count is wrong',
+                        type_label: 'Bug',
+                        created_at: '2026-09-04T12:00:00Z',
+                        status: 'requested'
+                      }]});
+                    }});
+                  }
+                  return Promise.resolve({json: function () {
+                    return Promise.resolve({ok: true, people: []});
+                  }});
+                };
+                """,
+            )
+
+            page.locator("#feedback-opener").click()
+            assert page.evaluate("window.mineRequests") == 0
+            page.locator('[data-type="bug"]').click()
+            page.locator("#fb-desc").fill("Count is wrong")
+            page.locator("#fb-submit").click()
+
+            page.locator("#lightbulb-tab-mine[aria-selected='true']").wait_for()
+            assert page.locator("#fb-view-body").get_by_text("Count is wrong").is_visible()
+            assert page.locator("#lightbulb-modal").get_attribute("hidden") is None
+            assert page.evaluate("window.mineRequests") == 1
+        finally:
+            browser.close()
+
+
+def test_failed_submit_keeps_form_and_draft():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_lightbulb(
+                page,
+                """
+                window.mineRequests = 0;
+                window.gpiFetch = function (url, options) {
+                  if (options && options.method === 'POST') {
+                    return Promise.resolve({json: function () {
+                      return Promise.resolve({ok: false, error: 'Try again'});
+                    }});
+                  }
+                  if (url === '/api/feedback/mine') window.mineRequests += 1;
+                  return Promise.resolve({json: function () {
+                    return Promise.resolve({ok: true, people: []});
+                  }});
+                };
+                """,
+            )
+
+            page.locator("#feedback-opener").click()
+            page.locator('[data-type="bug"]').click()
+            page.locator("#fb-desc").fill("Count is wrong")
+            page.locator("#fb-submit").click()
+
+            page.get_by_text("Failed: Try again").wait_for()
+            assert page.locator("#lightbulb-tab-send").get_attribute("aria-selected") == "true"
+            assert page.locator("#fb-desc").input_value() == "Count is wrong"
+            assert page.evaluate("window.mineRequests") == 0
+        finally:
+            browser.close()
+
+
+def test_my_feedback_failure_is_retryable_without_hiding_other_tabs():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_lightbulb(
+                page,
+                """
+                window.mineRequests = 0;
+                window.gpiFetch = function (url) {
+                  if (url !== '/api/feedback/mine') {
+                    return Promise.resolve({json: function () {
+                      return Promise.resolve({ok: true, people: []});
+                    }});
+                  }
+                  window.mineRequests += 1;
+                  if (window.mineRequests === 1) {
+                    return Promise.reject(new Error('unavailable'));
+                  }
+                  return Promise.resolve({json: function () {
+                    return Promise.resolve({ok: true, items: [{
+                      title: 'Count is wrong',
+                      type_label: 'Bug',
+                      created_at: '2026-09-04T12:00:00Z',
+                      status: 'requested'
+                    }]});
+                  }});
+                };
+                """,
+            )
+
+            page.locator("#feedback-opener").click()
+            page.locator("#lightbulb-tab-mine").click()
+            page.get_by_text("Could not load your feedback.").wait_for()
+            page.locator("#fb-view-retry").click()
+
+            page.get_by_text("Count is wrong").wait_for()
+            assert page.locator("#lightbulb-tab-send").is_enabled()
+            assert page.evaluate("window.mineRequests") == 2
+        finally:
+            browser.close()
+
+
+def test_close_and_reopen_ignores_pending_my_feedback_from_previous_session():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_lightbulb(
+                page,
+                """
+                window.mineResolvers = [];
+                window.gpiFetch = function (url) {
+                  if (url === '/api/feedback/mine') {
+                    return new Promise(function (resolve) {
+                      window.mineResolvers.push(resolve);
+                    });
+                  }
+                  return Promise.resolve({json: function () {
+                    return Promise.resolve({ok: true, people: []});
+                  }});
+                };
+                """,
+            )
+
+            page.locator("#feedback-opener").click()
+            page.locator("#lightbulb-tab-mine").click()
+            page.wait_for_function("window.mineResolvers.length === 1")
+            page.locator("#lightbulb-close").click()
+
+            page.locator("#feedback-opener").click()
+            page.locator("#lightbulb-tab-mine").click()
+            page.wait_for_function("window.mineResolvers.length === 2")
+            page.evaluate(
+                """
+                window.mineResolvers[1]({json: function () {
+                  return Promise.resolve({items: [{title: 'New session'}]});
+                }});
+                """
+            )
+            page.get_by_text("New session").wait_for()
+
+            page.evaluate(
+                """
+                window.mineResolvers[0]({json: function () {
+                  return Promise.resolve({items: [{title: 'Old session'}]});
+                }});
+                """
+            )
+            page.wait_for_timeout(50)
+
+            assert page.get_by_text("New session").is_visible()
+            assert page.get_by_text("Old session").count() == 0
+        finally:
+            browser.close()
+
+
+def test_successful_submit_supersedes_an_in_flight_my_feedback_load():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_lightbulb(
+                page,
+                """
+                window.mineResolvers = [];
+                window.gpiFetch = function (url, options) {
+                  if (options && options.method === 'POST') {
+                    return Promise.resolve({json: function () {
+                      return Promise.resolve({ok: true});
+                    }});
+                  }
+                  if (url === '/api/feedback/mine') {
+                    return new Promise(function (resolve) {
+                      window.mineResolvers.push(resolve);
+                    });
+                  }
+                  return Promise.resolve({json: function () {
+                    return Promise.resolve({ok: true, people: []});
+                  }});
+                };
+                """,
+            )
+
+            page.locator("#feedback-opener").click()
+            page.locator("#lightbulb-tab-mine").click()
+            page.wait_for_function("window.mineResolvers.length === 1")
+            page.locator("#lightbulb-tab-send").click()
+            page.locator('[data-type="bug"]').click()
+            page.locator("#fb-desc").fill("New request")
+            page.locator("#fb-submit").click()
+
+            page.wait_for_function("window.mineResolvers.length === 2", timeout=1000)
+            page.evaluate(
+                """
+                window.mineResolvers[1]({json: function () {
+                  return Promise.resolve({items: [{title: 'New request'}]});
+                }});
+                """
+            )
+            page.get_by_text("New request").wait_for()
+            page.evaluate(
+                """
+                window.mineResolvers[0]({json: function () {
+                  return Promise.resolve({items: [{title: 'Older result'}]});
+                }});
+                """
+            )
+            page.wait_for_timeout(50)
+
+            assert page.get_by_text("New request").is_visible()
+            assert page.get_by_text("Older result").count() == 0
+        finally:
+            browser.close()
 
 
 def test_lightbulb_opens_send_first_and_switching_tabs_keeps_draft_and_screenshot():
@@ -135,7 +408,7 @@ def test_close_and_reopen_ignores_a_pending_submit_from_the_previous_session():
             browser.close()
 
 
-def test_close_and_reopen_ignores_a_success_timer_from_the_previous_session():
+def test_successful_submit_leaves_no_close_timer_for_the_next_session():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
@@ -162,7 +435,7 @@ def test_close_and_reopen_ignores_a_success_timer_from_the_previous_session():
             page.locator('[data-type="bug"]').click()
             page.locator("#fb-desc").fill("Sent draft")
             page.locator("#fb-submit").click()
-            page.locator("#fb-status").get_by_text("Thanks").wait_for()
+            page.locator("#lightbulb-tab-mine[aria-selected='true']").wait_for()
 
             page.locator("#lightbulb-close").click()
             page.locator("#feedback-opener").click()

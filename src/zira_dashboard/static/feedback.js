@@ -36,6 +36,9 @@
   var activeOpener = null;
   var activeTab = 'send';
   var sessionGeneration = 0;
+  var myFeedbackLoaded = false;
+  var myFeedbackLoading = false;
+  var myFeedbackRequestGeneration = 0;
 
   function $(id) { return document.getElementById(id); }
 
@@ -87,6 +90,8 @@
 
   function closeLightbulb() {
     sessionGeneration += 1;
+    myFeedbackRequestGeneration += 1;
+    myFeedbackLoading = false;
     closeModal($('lightbulb-modal'));
     resetSendForm();
   }
@@ -304,10 +309,9 @@
       .then(function (resp) {
         if (submissionSession !== sessionGeneration) return;
         if (resp && resp.ok) {
-          if (status) status.textContent = 'Thanks — saved and sending it to the app owner.';
-          setTimeout(function () {
-            if (submissionSession === sessionGeneration) closeLightbulb();
-          }, 1200);
+          if (status) status.textContent = 'Thanks — your feedback was saved.';
+          myFeedbackLoaded = false;
+          selectTab('mine', {refresh: true});
         } else if (status) {
           status.textContent = 'Failed: ' + ((resp && resp.error) || 'unknown');
         }
@@ -365,14 +369,33 @@
     }
   }
 
-  function loadMyFeedback(refresh) {
+  function loadMyFeedback(forceRefresh) {
     var body = $('fb-view-body');
+    var retry = $('fb-view-retry');
+    if ((myFeedbackLoading || myFeedbackLoaded) && !forceRefresh) return;
+    var requestSession = sessionGeneration;
+    var requestGeneration = ++myFeedbackRequestGeneration;
+    myFeedbackLoading = true;
     if (body) body.textContent = 'Loading…';
+    if (retry) retry.hidden = true;
     window.gpiFetch('/api/feedback/mine')
       .then(function (r) { return r.json(); })
-      .then(renderMyFeedback)
+      .then(function (data) {
+        if (requestSession !== sessionGeneration
+            || requestGeneration !== myFeedbackRequestGeneration) return;
+        renderMyFeedback(data);
+        myFeedbackLoaded = true;
+      })
       .catch(function () {
+        if (requestSession !== sessionGeneration
+            || requestGeneration !== myFeedbackRequestGeneration) return;
         if (body) body.innerHTML = '<p class="fb-view-empty">Could not load your feedback.</p>';
+        if (retry) retry.hidden = false;
+      })
+      .then(function () {
+        if (requestSession !== sessionGeneration
+            || requestGeneration !== myFeedbackRequestGeneration) return;
+        myFeedbackLoading = false;
       });
   }
 
@@ -464,6 +487,8 @@
 
     var submit = $('fb-submit');
     if (submit) submit.addEventListener('click', submitFeedback);
+    var retry = $('fb-view-retry');
+    if (retry) retry.addEventListener('click', function () { loadMyFeedback(true); });
 
     document.addEventListener('keydown', function (event) {
       trapFocus(event);
