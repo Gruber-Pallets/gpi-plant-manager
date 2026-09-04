@@ -16,11 +16,13 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from .. import (
     attendance_corrections,
+    attendance_exceptions,
     auth,
     breakdown_actions,
     exception_inbox,
     inbox_keys,
     inbox_log,
+    missing_wc,
     plant_day,
     time_off_audit,
 )
@@ -65,6 +67,74 @@ def exceptions_json():
 @router.get("/api/exceptions/summary")
 def exceptions_summary_json():
     return JSONResponse(exception_inbox.build_summary())
+
+
+def _dismiss_test_work_center_sync(body: dict, actor_upn=None, actor_name=None):
+    item_key = str(body.get("item_key") or "").strip()
+    if not item_key:
+        return JSONResponse({"ok": False, "error": "Missing inbox item."}, status_code=400)
+
+    snapshot = attendance_exceptions.build_snapshot(
+        plant_day.today(), now_utc=exception_inbox._now_utc()
+    )
+    matches = [
+        issue
+        for issue in snapshot.issues
+        if issue.kind == "attendance_unmapped_location" and issue.item_key == item_key
+    ]
+    if not matches:
+        return JSONResponse(
+            {"ok": False, "error": "That inbox item is no longer open."},
+            status_code=404,
+        )
+    if len(matches) != 1:
+        return JSONResponse(
+            {"ok": False, "error": "That inbox item is ambiguous."}, status_code=409
+        )
+
+    issue = matches[0]
+    if not exception_inbox.is_dismissible_test_work_center(issue.raw_work_center_labels):
+        return JSONResponse(
+            {"ok": False, "error": "Only test work centers can be dismissed."},
+            status_code=409,
+        )
+    if not issue.attendance_ids:
+        return JSONResponse(
+            {"ok": False, "error": "This item has no attendance records."},
+            status_code=409,
+        )
+
+    missing_wc.resolve_many(issue.attendance_ids, "dismissed", name=issue.employee_name)
+    inbox_log.log_event_safe(
+        item_kind="attendance_unmapped_location",
+        item_key=issue.item_key,
+        person_name=issue.employee_name,
+        category_label="Unknown Odoo Work Center",
+        action="dismiss",
+        outcome="Dismissed test work center",
+        actor_upn=actor_upn,
+        actor_name=actor_name,
+        source="inbox",
+        reversible=False,
+        detail={"raw_work_center_labels": list(issue.raw_work_center_labels)},
+    )
+    return JSONResponse({"ok": True})
+
+
+@router.post("/api/exceptions/attendance-unmapped-location/dismiss")
+async def dismiss_test_work_center(request: Request):
+    body = await request.json()
+    actor_upn, actor_name = inbox_log.actor_from(request)
+    try:
+        return await asyncio.to_thread(
+            _dismiss_test_work_center_sync, body, actor_upn, actor_name
+        )
+    except Exception:  # noqa: BLE001 - source and write details stay server-side
+        _log.exception("test work center dismissal failed")
+        return JSONResponse(
+            {"ok": False, "error": "Could not dismiss this inbox item."},
+            status_code=500,
+        )
 
 
 _TIME_OFF_STATES = {

@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, UTC
 
 from . import attendance_location_policy
@@ -74,6 +74,27 @@ def resolve(
         "name = EXCLUDED.name, wc_name = EXCLUDED.wc_name, resolved_at = now()",
         (int(attendance_id), action, name, wc_name),
     )
+
+
+def resolve_many(
+    attendance_ids: Sequence[int],
+    action: str,
+    name: str | None = None,
+    wc_name: str | None = None,
+) -> None:
+    ids = tuple(dict.fromkeys(int(value) for value in attendance_ids))
+    if not ids:
+        raise ValueError("at least one attendance id is required")
+    from . import db
+
+    with db.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO missing_wc_resolved (attendance_id, action, name, wc_name) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (attendance_id) DO UPDATE SET action = EXCLUDED.action, "
+            "name = EXCLUDED.name, wc_name = EXCLUDED.wc_name, resolved_at = now()",
+            [(attendance_id, action, name, wc_name) for attendance_id in ids],
+        )
 
 
 def unresolve(attendance_id) -> None:

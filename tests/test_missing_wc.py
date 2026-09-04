@@ -217,3 +217,17 @@ def test_resolve_and_resolved_ids():
     missing_wc.resolve(999002, "assigned", name="Maria", wc_name="Dismantler 1")
     assert 999002 in missing_wc.resolved_ids()
     db.execute("DELETE FROM missing_wc_resolved WHERE attendance_id = %s", (999002,))
+
+
+@pg
+def test_resolve_many_suppresses_every_attendance_id():
+    from zira_dashboard import db
+
+    ids = (999012, 999013)
+    db.execute("DELETE FROM missing_wc_resolved WHERE attendance_id = ANY(%s)", (list(ids),))
+    try:
+        missing_wc.resolve_many(ids, "dismissed", name="Luke")
+        assert ids[0] in missing_wc.resolved_ids()
+        assert ids[1] in missing_wc.resolved_ids()
+    finally:
+        db.execute("DELETE FROM missing_wc_resolved WHERE attendance_id = ANY(%s)", (list(ids),))
