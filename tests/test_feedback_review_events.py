@@ -60,7 +60,7 @@ def test_canonical_v3_contract_and_runtime_constants_match():
         ],
     }
     assert feedback_types.IMPROVEMENT_CONTRACT_VERSION == 3
-    assert feedback_types.REVIEW_WORKFLOW_ENABLED is False
+    assert feedback_types.REVIEW_WORKFLOW_ENABLED is True
     assert feedback_types.REVIEW_EVENT_MARKER == "GPI-REVIEW-EVENT-V1"
     assert feedback_types.REVIEW_ACTIONS == (
         "accept",

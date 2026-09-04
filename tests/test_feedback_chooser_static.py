@@ -36,10 +36,10 @@ def test_shared_partial_still_renders_in_a_bare_template_environment():
     assert 'class="fb-type-btn' not in html
 
 
-def test_chooser_shows_all_six_choices_while_review_actions_stay_dark():
+def test_chooser_shows_all_six_choices_with_review_workflow_enabled():
     selector = getattr(feedback_types, "feedback_types_for_chooser", lambda: ())
 
-    assert feedback_types.REVIEW_WORKFLOW_ENABLED is False
+    assert feedback_types.REVIEW_WORKFLOW_ENABLED is True
     assert [item.label for item in selector()] == [
         "Bug",
         "New Feature",

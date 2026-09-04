@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-03
 
+### Floor ideas now use one shared review task
+
+- **Floor Issue, Floor Suggestion, and 2s Improvement now make one task for Dale to review.** The same task can be accepted, declined, assigned, finished, or moved to L10 in Sales Manager and OS Manager. Repair still opens GPI Maintenance.
+
 ### Send feedback asks what you are reporting first
 
 - **Send feedback now starts with a simple list.** You pick Bug, New Feature, Floor Issue, Floor Suggestion, Repair, or 2S Improvement. Repair opens GPI Maintenance. The others still ask for a short description next.

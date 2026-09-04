@@ -15,7 +15,7 @@ REVIEW_IMPROVEMENT_TYPES = frozenset(
 )
 IMPROVEMENT_STATUS_VALUES = ("Requested", "In-Progress", "Completed", "Declined")
 REPAIR_URL = "https://www.gpimaintenance.com/request"
-REVIEW_WORKFLOW_ENABLED = False
+REVIEW_WORKFLOW_ENABLED = True
 REVIEW_EVENT_MARKER = "GPI-REVIEW-EVENT-V1"
 REVIEW_ACTIONS = ("accept", "decline", "assign", "complete", "move_l10")
 REVIEW_TASK_STATES = {
