@@ -131,6 +131,21 @@ def test_render_real_or_mixed_work_center_uses_map_not_dismiss(monkeypatch, labe
     assert "js-test-work-center-dismiss" not in response.text
 
 
+@pytest.mark.parametrize("labels", [(), ("",)])
+def test_render_blank_work_center_label_uses_safe_map_link(monkeypatch, labels):
+    issue = _unmapped_issue(labels=labels, odoo_work_center_ids=(17,))
+
+    response = _render_issue(monkeypatch, issue)
+
+    assert response.status_code == 200
+    assert "js-test-work-center-dismiss" not in response.text
+    assert (
+        'href="/settings?section=work_centers&amp;odoo_work_center_id=17'
+        '&amp;odoo_work_center_name=Unknown+Odoo+work+center"'
+    ) in response.text
+    assert "Map this Odoo work center" in response.text
+
+
 def test_dismiss_current_test_item_suppresses_all_ids_and_audits(monkeypatch):
     issue = _unmapped_issue(labels=("Test Workcenter",), attendance_ids=(901, 902))
     resolved = MagicMock()
