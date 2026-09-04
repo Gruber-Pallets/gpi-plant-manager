@@ -535,7 +535,8 @@ def test_admin_template_renders_states_actions_and_escaped_text(monkeypatch):
     assert "if item.task_type" not in source
 
     feedback_js = Path("src/zira_dashboard/static/feedback.js").read_text()
-    assert "Thanks — saved and sending it to the app owner." in feedback_js
+    assert "Thanks — your feedback was saved." in feedback_js
+    assert "selectTab('mine', {refresh: true})" in feedback_js
 
 
 def test_transition_rejects_reopening_terminal_feedback(monkeypatch):

@@ -100,7 +100,7 @@ def _assert_single_chrome(html: str):
     lowered = html.lower()
     assert lowered.count("<!doctype") == 1
     assert html.count('class="brand-row"') == 1
-    assert "changelog-modal" in html  # _footer.html present
+    assert "lightbulb-modal" in html  # shared light-bulb footer content is present
 
 
 

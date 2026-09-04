@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-04
 
+### Send feedback opens first
+
+- **The light bulb now opens on Send feedback.** Use the tabs to see My feedback or What’s new without opening another window. After you send something, My feedback shows it and its status right away.
+
 ### Dismiss system test work centers
 
 - **Unknown work centers used for system tests now have a Dismiss button.** Real unknown work centers still ask you to match them, so setup problems stay easy to spot.
