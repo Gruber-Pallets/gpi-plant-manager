@@ -9,6 +9,7 @@ from zira_dashboard.feedback_types import FEEDBACK_TYPES
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "src" / "zira_dashboard" / "templates"
 FEEDBACK_JS = ROOT / "src" / "zira_dashboard" / "static" / "feedback.js"
+FOOTER_JS = ROOT / "src" / "zira_dashboard" / "static" / "footer.js"
 
 
 def _render_enabled_chooser() -> str:
@@ -32,6 +33,175 @@ def _page_with_lightbulb(page, setup_script=None):
     page.locator("#feedback-opener").evaluate(
         "button => button.addEventListener('click', () => window.gpiLightbulb.open(button))"
     )
+
+
+def _page_with_changelog(page, fragment_failures=0):
+    page.set_content(
+        '<style>.whatsnew-dot{display:block;width:8px;height:8px}'
+        '.whatsnew-dot[hidden]{display:none}</style>'
+        '<header></header>'
+        + _render_enabled_chooser()
+    )
+    page.evaluate(
+        """
+        () => {
+          var values = {};
+          Object.defineProperty(window, 'localStorage', {value: {
+            getItem: function (key) {
+              return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null;
+            },
+            setItem: function (key, value) { values[key] = String(value); },
+            removeItem: function (key) { delete values[key]; },
+            clear: function () { values = {}; }
+          }});
+        }
+        """
+    )
+    page.evaluate(
+        """
+        ([fragmentFailures]) => {
+          window.changelogRequests = 0;
+          window.fragmentFailures = fragmentFailures;
+          window.gpiFetch = function (url) {
+            if (url === '/changelog/latest') {
+              return Promise.resolve({
+                ok: true,
+                json: function () { return Promise.resolve({latest_date: '2026-09-04'}); }
+              });
+            }
+            if (url === '/changelog?fragment=1') {
+              window.changelogRequests += 1;
+              if (window.changelogRequests <= window.fragmentFailures) {
+                return Promise.reject(new Error('unavailable'));
+              }
+              return Promise.resolve({
+                ok: true,
+                text: function () {
+                  return Promise.resolve(
+                    '<article class="cl-entry" data-key="2026-09-04#floor-ideas">'
+                    + '<p>Floor ideas now use one shared review task</p>'
+                    + '<button class="cl-markread" data-key="2026-09-04#floor-ideas">Mark read</button>'
+                    + '</article>'
+                  );
+                }
+              });
+            }
+            if (url === '/api/feedback/mine') {
+              return Promise.resolve({
+                ok: true,
+                json: function () { return Promise.resolve({ok: true, items: []}); }
+              });
+            }
+            return Promise.resolve({
+              ok: true,
+              json: function () { return Promise.resolve({ok: true, people: []}); }
+            });
+          };
+        }
+        """,
+        [fragment_failures],
+    )
+    page.add_script_tag(content=FEEDBACK_JS.read_text(encoding="utf-8"))
+    page.add_script_tag(content=FOOTER_JS.read_text(encoding="utf-8"))
+
+
+def test_opening_lightbulb_and_my_feedback_do_not_clear_news_dot():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_changelog(page)
+
+            page.locator(".whatsnew-dot").wait_for(state="visible")
+            page.locator(".whatsnew-btn").click()
+            assert page.locator(".whatsnew-dot").is_visible()
+            assert page.evaluate("localStorage.getItem('changelog_seen')") is None
+
+            page.locator("#lightbulb-tab-mine").click()
+            page.get_by_text("You haven't sent any feedback yet.").wait_for()
+            assert page.locator(".whatsnew-dot").is_visible()
+            assert page.evaluate("window.changelogRequests") == 0
+            assert page.evaluate("localStorage.getItem('changelog_seen')") is None
+        finally:
+            browser.close()
+
+
+def test_news_loads_on_first_visit_and_clears_dot_only_after_success():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_changelog(page)
+
+            page.locator(".whatsnew-dot").wait_for(state="visible")
+            page.locator(".whatsnew-btn").click()
+            assert page.evaluate("window.changelogRequests") == 0
+            page.locator("#lightbulb-tab-news").click()
+
+            page.get_by_text("Floor ideas now use one shared review task").wait_for()
+            assert page.evaluate("window.changelogRequests") == 1
+            page.locator(".whatsnew-dot").wait_for(state="hidden")
+            assert page.locator(".whatsnew-dot").is_hidden()
+            assert page.locator(".cl-markread").is_visible()
+            assert page.evaluate("localStorage.getItem('changelog_seen')") == "2026-09-04"
+            assert page.evaluate("localStorage.getItem('changelog_cutoff')") is None
+
+            page.locator("#lightbulb-tab-send").click()
+            page.locator("#lightbulb-tab-news").click()
+            assert page.evaluate("window.changelogRequests") == 1
+        finally:
+            browser.close()
+
+
+def test_news_read_actions_do_not_change_the_launcher_seen_date():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_changelog(page)
+
+            page.locator(".whatsnew-btn").click()
+            page.locator("#lightbulb-tab-news").click()
+            page.get_by_text("Floor ideas now use one shared review task").wait_for()
+            page.locator(".whatsnew-dot").wait_for(state="hidden")
+
+            page.locator(".cl-markread").click()
+            assert page.evaluate("localStorage.getItem('changelog_read')") == (
+                '["2026-09-04#floor-ideas"]'
+            )
+            assert page.evaluate("localStorage.getItem('changelog_seen')") == "2026-09-04"
+
+            page.locator("#changelog-markall").click()
+            assert page.evaluate("localStorage.getItem('changelog_cutoff')") == "2026-09-04"
+            assert page.evaluate("localStorage.getItem('changelog_read')") == "[]"
+            assert page.evaluate("localStorage.getItem('changelog_seen')") == "2026-09-04"
+            assert page.locator(".whatsnew-dot").is_hidden()
+        finally:
+            browser.close()
+
+
+def test_news_failure_retries_without_closing_modal_or_clearing_dot():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_changelog(page, fragment_failures=1)
+
+            page.locator(".whatsnew-dot").wait_for(state="visible")
+            page.locator(".whatsnew-btn").click()
+            page.locator("#lightbulb-tab-news").click()
+            page.get_by_text("Could not load What’s new.").wait_for()
+            assert page.locator(".whatsnew-dot").is_visible()
+            assert page.evaluate("localStorage.getItem('changelog_seen')") is None
+
+            page.locator("#changelog-retry").click()
+            page.locator(".cl-entry").first.wait_for()
+            page.locator(".whatsnew-dot").wait_for(state="hidden")
+            assert page.locator(".whatsnew-dot").is_hidden()
+            assert page.locator("#lightbulb-modal").get_attribute("hidden") is None
+            assert page.evaluate("window.changelogRequests") == 2
+        finally:
+            browser.close()
 
 
 def test_my_feedback_is_lazy_loaded_once_when_selected():

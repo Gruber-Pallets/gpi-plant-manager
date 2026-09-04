@@ -143,12 +143,21 @@ def test_footer_js_injects_trigger_read_state_and_feedback_submit():
     assert "function injectButton()" in js
     assert "changelog_cutoff" in js
     assert "changelog_read" in js
+    assert "changelog_seen" in js
+    assert "function refreshDot()" in js
     assert "function markAllRead()" in js
+    assert "function wireCards()" in js
     assert "function makeBadgeModal" in js
+    assert (
+        "window.gpiLightbulbChangelog = {\n"
+        "    show: function () { showChangelog(false); },\n"
+        "    retry: function ()"
+    ) in js
     assert "window.gpiLightbulb.open(btn)" in js
     assert "btn.setAttribute('aria-label', 'Light bulb')" in js
     assert "btn.setAttribute('aria-label', \"What's new\")" not in js
     assert "btn.addEventListener('click', openPanel)" not in js
+    assert "function openPanel" not in js
     assert "function closePanel" not in js
 
 
@@ -170,6 +179,11 @@ def test_shared_feedback_assets_keep_submit_and_screenshot_support():
     assert "'paste'" in js
     assert "window.location.href" in js
     assert "window.gpiLightbulb = { open: openLightbulb }" in js
+    assert "if (name === 'news' && window.gpiLightbulbChangelog)" in js
+    assert "window.gpiLightbulbChangelog.show();" in js
+    assert "changelog_seen" not in js
+    assert "changelog_cutoff" not in js
+    assert "changelog_read" not in js
     assert "activeOpener" in js
     assert "function trapFocus" in js
     assert "event.key !== 'Tab'" in js

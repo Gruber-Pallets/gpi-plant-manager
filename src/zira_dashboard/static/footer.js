@@ -42,6 +42,14 @@
     try { localStorage.setItem('changelog_cutoff', value || ''); } catch (e) {}
   }
 
+  function getSeen() {
+    try { return localStorage.getItem('changelog_seen') || ''; } catch (e) { return ''; }
+  }
+
+  function setSeen(value) {
+    try { localStorage.setItem('changelog_seen', value || ''); } catch (e) {}
+  }
+
   function getRead() {
     try { return new Set(JSON.parse(localStorage.getItem('changelog_read') || '[]')); }
     catch (e) { return new Set(); }
@@ -109,43 +117,67 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var latest = data && data.latest_date;
-        var hasCutoff = false;
-        try { hasCutoff = localStorage.getItem('changelog_cutoff') != null; } catch (e) {}
-        if (!hasCutoff) {
-          var seen = '';
-          try { seen = localStorage.getItem('changelog_seen') || ''; } catch (e2) {}
-          setCutoff(seen || latest || '');
-        }
-        dot.hidden = !(latest && isUnread(latest));
+        dot.hidden = !(latest && latest > getSeen());
       })
       .catch(function () {});
   }
 
-  function ensurePanel() {
+  function wireChangelogControls() {
     body = document.getElementById('changelog-body');
-    if (!body) return false;
-    if (body.dataset.wired) return true;
-    body.dataset.wired = '1';
     var markAll = document.getElementById('changelog-markall');
-    if (markAll) markAll.addEventListener('click', markAllRead);
-    return true;
+    if (markAll && !markAll.dataset.wired) {
+      markAll.dataset.wired = '1';
+      markAll.addEventListener('click', markAllRead);
+    }
+    var retry = document.getElementById('changelog-retry');
+    if (retry && !retry.dataset.wired) {
+      retry.dataset.wired = '1';
+      retry.addEventListener('click', function () {
+        window.gpiLightbulbChangelog.retry();
+      });
+    }
   }
 
-  function showChangelog() {
-    if (!ensurePanel()) return;
-    if (!panelLoaded) {
-      window.gpiFetch('/changelog?fragment=1')
-        .then(function (r) { return r.text(); })
-        .then(function (htmlText) {
-          body.innerHTML = htmlText;
-          panelLoaded = true;
-          wireCards();
-          applyReadState();
-        })
-        .catch(function () { body.innerHTML = '<p>Could not load changelog.</p>'; });
-    } else {
-      applyReadState();
+  function newestLoadedDate() {
+    var newest = '';
+    Array.prototype.forEach.call(body.querySelectorAll('.cl-entry'), function (card) {
+      var when = whenOf(card.getAttribute('data-key'));
+      if (when > newest) newest = when;
+    });
+    return newest;
+  }
+
+  function markNewsSeen() {
+    var newest = newestLoadedDate();
+    if (newest) setSeen(newest);
+    if (dot) dot.hidden = true;
+  }
+
+  function showChangelog(forceRefresh) {
+    body = document.getElementById('changelog-body');
+    var retry = document.getElementById('changelog-retry');
+    if (!body || (panelLoaded && !forceRefresh)) {
+      if (body) applyReadState();
+      return;
     }
+    body.textContent = 'Loading…';
+    if (retry) retry.hidden = true;
+    window.gpiFetch('/changelog?fragment=1')
+      .then(function (r) {
+        if (!r.ok) throw new Error('changelog unavailable');
+        return r.text();
+      })
+      .then(function (htmlText) {
+        body.innerHTML = htmlText;
+        panelLoaded = true;
+        wireCards();
+        applyReadState();
+        markNewsSeen();
+      })
+      .catch(function () {
+        body.innerHTML = '<p>Could not load What’s new.</p>';
+        if (retry) retry.hidden = false;
+      });
   }
 
   function applyReadState() {
@@ -157,16 +189,6 @@
       var markRead = card.querySelector('.cl-markread');
       if (markRead) markRead.hidden = !unread;
     });
-    refreshDotFromCards();
-  }
-
-  function refreshDotFromCards() {
-    if (!dot || !body) return;
-    var anyUnread = Array.prototype.some.call(
-      body.querySelectorAll('.cl-entry'),
-      function (card) { return isUnread(card.getAttribute('data-key')); }
-    );
-    dot.hidden = !anyUnread;
   }
 
   function wireCards() {
@@ -192,15 +214,20 @@
     applyReadState();
   }
 
-  window.gpiLightbulbChangelog = { show: showChangelog };
+  window.gpiLightbulbChangelog = {
+    show: function () { showChangelog(false); },
+    retry: function () { panelLoaded = false; showChangelog(true); }
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
       injectButton();
+      wireChangelogControls();
       if (!livePollingDisabled()) refreshDot();
     });
   } else {
     injectButton();
+    wireChangelogControls();
     if (!livePollingDisabled()) refreshDot();
   }
 
