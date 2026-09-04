@@ -150,6 +150,18 @@ def test_javascript_uses_button_metadata_without_a_second_type_catalog():
     assert "window.gpiFetch(submitUrl" in js
 
 
+def test_javascript_exposes_one_send_first_lightbulb_controller():
+    js = FEEDBACK_JS.read_text(encoding="utf-8")
+
+    assert "window.gpiLightbulb = { open: openLightbulb }" in js
+    assert "function selectTab(name, options)" in js
+    assert "selectTab('send', { focus: false })" in js
+    assert "$('lightbulb-modal')" in js
+    assert "$('fb-modal')" not in js
+    assert "$('fb-view-modal')" not in js
+    assert "function openView" not in js
+
+
 def test_detail_step_keeps_description_screenshot_and_accessibility_contracts():
     html = _render_chooser()
     js = FEEDBACK_JS.read_text(encoding="utf-8")

@@ -145,6 +145,11 @@ def test_footer_js_injects_trigger_read_state_and_feedback_submit():
     assert "changelog_read" in js
     assert "function markAllRead()" in js
     assert "function makeBadgeModal" in js
+    assert "window.gpiLightbulb.open(btn)" in js
+    assert "btn.setAttribute('aria-label', 'Light bulb')" in js
+    assert "btn.setAttribute('aria-label', \"What's new\")" not in js
+    assert "btn.addEventListener('click', openPanel)" not in js
+    assert "function closePanel" not in js
 
 
 def test_shared_feedback_assets_keep_submit_and_screenshot_support():
@@ -164,7 +169,7 @@ def test_shared_feedback_assets_keep_submit_and_screenshot_support():
     assert "function renderMyFeedback" in js
     assert "'paste'" in js
     assert "window.location.href" in js
-    assert "[data-feedback-open]" in js
+    assert "window.gpiLightbulb = { open: openLightbulb }" in js
     assert "activeOpener" in js
     assert "function trapFocus" in js
     assert "event.key !== 'Tab'" in js
@@ -228,7 +233,7 @@ def test_whatsnew_uses_lucide_lightbulb_icon_button():
     js = JS.read_text(encoding="utf-8")
 
     # The trigger uses the accessible, outline-only Lucide lightbulb.
-    assert "btn.setAttribute('aria-label', \"What's new\")" in js
+    assert "btn.setAttribute('aria-label', 'Light bulb')" in js
     assert 'class="whatsnew-lightbulb"' in js
     assert 'width="24" height="24"' in js
     assert 'stroke-width="2"' in js

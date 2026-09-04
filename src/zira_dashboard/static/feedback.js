@@ -28,14 +28,26 @@
   }
 })();
 
-// ---------- Feedback modal (Send) + View Feedback list ----------
+// ---------- Unified light bulb modal ----------
 (function () {
   var screenshot = null;   // {file, name, url}
   var currentType = '';
   var activeModal = null;
   var activeOpener = null;
+  var activeTab = 'send';
 
   function $(id) { return document.getElementById(id); }
+
+  var tabs = {
+    send: $('lightbulb-tab-send'),
+    mine: $('lightbulb-tab-mine'),
+    news: $('lightbulb-tab-news')
+  };
+  var panels = {
+    send: $('lightbulb-panel-send'),
+    mine: $('lightbulb-panel-mine'),
+    news: $('lightbulb-panel-news')
+  };
 
   function focusableElements(el) {
     var candidates = Array.prototype.slice.call(el.querySelectorAll(
@@ -70,6 +82,11 @@
       document.dispatchEvent(new CustomEvent('gpi:feedback-closed'));
       if (opener && typeof opener.focus === 'function') opener.focus();
     }
+  }
+
+  function closeLightbulb() {
+    closeModal($('lightbulb-modal'));
+    resetSendForm();
   }
 
   function trapFocus(event) {
@@ -282,7 +299,7 @@
       .then(function (resp) {
         if (resp && resp.ok) {
           if (status) status.textContent = 'Thanks — saved and sending it to the app owner.';
-          setTimeout(function () { closeModal($('fb-modal')); resetSendForm(); }, 1200);
+          setTimeout(closeLightbulb, 1200);
         } else if (status) {
           status.textContent = 'Failed: ' + ((resp && resp.error) || 'unknown');
         }
@@ -339,14 +356,9 @@
     }
   }
 
-  function openView(event) {
+  function loadMyFeedback(refresh) {
     var body = $('fb-view-body');
     if (body) body.textContent = 'Loading…';
-    openModal(
-      $('fb-view-modal'),
-      event ? event.currentTarget : null,
-      $('fb-view-close')
-    );
     window.gpiFetch('/api/feedback/mine')
       .then(function (r) { return r.json(); })
       .then(renderMyFeedback)
@@ -355,34 +367,60 @@
       });
   }
 
+  function selectTab(name, options) {
+    options = options || {};
+    if (!tabs[name] || !panels[name]) return;
+    activeTab = name;
+    Object.keys(tabs).forEach(function (key) {
+      var selected = key === name;
+      tabs[key].classList.toggle('is-active', selected);
+      tabs[key].setAttribute('aria-selected', selected ? 'true' : 'false');
+      panels[key].hidden = !selected;
+    });
+    if (name === 'mine') loadMyFeedback(!!options.refresh);
+    if (name === 'news' && window.gpiLightbulbChangelog) {
+      window.gpiLightbulbChangelog.show();
+    }
+    if (options.focus !== false) {
+      var target = focusableElements(panels[name])[0];
+      (target || tabs[name]).focus();
+    }
+  }
+
+  function openLightbulb(opener) {
+    resetSendForm();
+    loadSubmitters();
+    selectTab('send', { focus: false });
+    openModal($('lightbulb-modal'), opener, tabs.send);
+  }
+
+  window.gpiLightbulb = { open: openLightbulb };
+
   function wire() {
-    var openButtons = document.querySelectorAll('[data-feedback-open]');
-    var viewBtn = $('fb-view-open');
-    if (!openButtons.length && !viewBtn) return;
-    Array.prototype.forEach.call(openButtons, function (openBtn) {
-      openBtn.addEventListener('click', function () {
-        resetSendForm();
-        loadSubmitters();
-        var selectedType = document.querySelector('.fb-type-btn.is-active');
-        openModal($('fb-modal'), openBtn, selectedType);
+    Object.keys(tabs).forEach(function (name) {
+      var tab = tabs[name];
+      if (!tab) return;
+      tab.addEventListener('click', function () { selectTab(name); });
+      tab.addEventListener('keydown', function (event) {
+        if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+        event.preventDefault();
+        var names = ['send', 'mine', 'news'];
+        var offset = event.key === 'ArrowRight' ? 1 : -1;
+        var next = names[(names.indexOf(activeTab) + offset + names.length) % names.length];
+        selectTab(next, { focus: false });
+        tabs[next].focus();
       });
     });
-    if (viewBtn) viewBtn.addEventListener('click', openView);
 
-    var close = $('fb-close'), cancel = $('fb-cancel'), backdrop = $('fb-backdrop');
+    var close = $('lightbulb-close'), cancel = $('fb-cancel'), backdrop = $('lightbulb-backdrop');
     [close, cancel, backdrop].forEach(function (el) {
-      if (el) el.addEventListener('click', function () { closeModal($('fb-modal')); });
-    });
-    var vClose = $('fb-view-close'), vBackdrop = $('fb-view-backdrop');
-    [vClose, vBackdrop].forEach(function (el) {
-      if (el) el.addEventListener('click', function () { closeModal($('fb-view-modal')); });
+      if (el) el.addEventListener('click', closeLightbulb);
     });
 
     Array.prototype.forEach.call(document.querySelectorAll('.fb-type-btn'), function (btn) {
       btn.addEventListener('click', function () {
         if (btn.getAttribute('data-behavior') === 'external') {
-          closeModal($('fb-modal'));
-          resetSendForm();
+          closeLightbulb();
           return;
         }
         setType(btn.getAttribute('data-type'));
@@ -420,9 +458,8 @@
     document.addEventListener('keydown', function (event) {
       trapFocus(event);
       if (event.key !== 'Escape') return;
-      var m = $('fb-modal'), v = $('fb-view-modal');
-      if (m && !m.hidden) closeModal(m);
-      if (v && !v.hidden) closeModal(v);
+      var modal = $('lightbulb-modal');
+      if (modal && !modal.hidden) closeLightbulb();
     });
   }
 

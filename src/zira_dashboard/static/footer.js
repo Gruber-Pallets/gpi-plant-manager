@@ -31,7 +31,6 @@
 (function () {
   var btn = null;
   var dot = null;
-  var modal = null;
   var body = null;
   var panelLoaded = false;
 
@@ -75,7 +74,7 @@
     btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'whatsnew-btn';
-    btn.setAttribute('aria-label', "What's new");
+    btn.setAttribute('aria-label', 'Light bulb');
     btn.setAttribute('aria-haspopup', 'dialog');
     btn.innerHTML = '<svg class="whatsnew-lightbulb" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" '
       + 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
@@ -99,7 +98,9 @@
     slot.appendChild(btn);
     var slotParent = header.querySelector('.k-header-actions') || header;
     slotParent.appendChild(slot);
-    btn.addEventListener('click', openPanel);
+    btn.addEventListener('click', function () {
+      if (window.gpiLightbulb) window.gpiLightbulb.open(btn);
+    });
   }
 
   function refreshDot() {
@@ -120,29 +121,18 @@
       .catch(function () {});
   }
 
-  function ensureModal() {
-    modal = document.getElementById('changelog-modal');
+  function ensurePanel() {
     body = document.getElementById('changelog-body');
-    if (!modal) return false;
-    if (modal.dataset.wired) return true;
-    modal.dataset.wired = '1';
-    var backdrop = document.getElementById('changelog-backdrop');
-    var closeBtn = document.getElementById('changelog-close');
+    if (!body) return false;
+    if (body.dataset.wired) return true;
+    body.dataset.wired = '1';
     var markAll = document.getElementById('changelog-markall');
-    if (backdrop) backdrop.addEventListener('click', closePanel);
-    if (closeBtn) closeBtn.addEventListener('click', closePanel);
     if (markAll) markAll.addEventListener('click', markAllRead);
-    document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape' && modal && !modal.hidden) closePanel();
-    });
     return true;
   }
 
-  function openPanel(event) {
-    if (event) event.preventDefault();
-    if (!ensureModal()) return;
-    modal.hidden = false;
-    document.documentElement.style.overflow = 'hidden';
+  function showChangelog() {
+    if (!ensurePanel()) return;
     if (!panelLoaded) {
       window.gpiFetch('/changelog?fragment=1')
         .then(function (r) { return r.text(); })
@@ -156,11 +146,6 @@
     } else {
       applyReadState();
     }
-  }
-
-  function closePanel() {
-    if (modal) modal.hidden = true;
-    document.documentElement.style.overflow = '';
   }
 
   function applyReadState() {
@@ -206,6 +191,8 @@
     setRead(new Set());
     applyReadState();
   }
+
+  window.gpiLightbulbChangelog = { show: showChangelog };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
