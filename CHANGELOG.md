@@ -22,6 +22,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 ### Finish the simpler light-bulb build plan
 
 - **The step-by-step build plan for the new light-bulb window is ready.** It covers the three tabs, saved text while switching, feedback status after sending, and the What’s new dot. Nothing on screen has changed yet.
+- **The What’s new dot will clear only after that tab loads.** Opening Send feedback or My feedback will leave it alone.
 
 ### Plan a simpler light-bulb window
 

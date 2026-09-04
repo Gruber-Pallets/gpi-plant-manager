@@ -16,7 +16,7 @@
 - Closing clears the unsent draft and returns focus to the light-bulb opener.
 - A confirmed submission refreshes My feedback, selects that tab, and does not close the modal.
 - Repair continues to open `https://www.gpimaintenance.com/request` and creates no feedback record.
-- The unread dot changes only through What’s new read state; opening the light bulb or My feedback must not clear it.
+- The unread dot clears only after What’s new loads successfully; opening the light bulb, opening My feedback, or a failed What’s new load must not clear it.
 - No Odoo workflow, task creation, reference synchronization, endpoint, database model, or custom Odoo code changes.
 - The three full tab labels may wrap but may not be shortened, clipped, or hidden.
 - Preserve the six existing feedback choices and all existing submission fields.
@@ -429,7 +429,7 @@ git commit -m "feat: show submitted feedback status"
 
 **Interfaces:**
 - Consumes: Task 1 `#changelog-body`, `#changelog-markall`, `#changelog-retry`; Task 2 `selectTab('news')`.
-- Produces: `window.gpiLightbulbChangelog.show()`, `.retry()`, and unchanged header-dot behavior.
+- Produces: `window.gpiLightbulbChangelog.show()`, `.retry()`, and a persistent `changelog_seen` cutoff used only for the header dot.
 
 - [ ] **Step 1: Write failing tests for lazy load, unread preservation, read actions, and retry**
 
@@ -444,20 +444,21 @@ def test_opening_lightbulb_and_my_feedback_do_not_clear_news_dot():
     assert page.locator(".whatsnew-dot").is_visible()
 
 
-def test_news_loads_on_first_visit_and_mark_all_clears_dot():
+def test_news_loads_on_first_visit_and_clears_dot_only_after_success():
     assert page.evaluate("window.changelogRequests") == 0
     page.locator("#lightbulb-tab-news").click()
     assert page.evaluate("window.changelogRequests") == 1
     assert page.get_by_text("Floor ideas now use one shared review task").is_visible()
-    page.locator("#changelog-markall").click()
     assert page.locator(".whatsnew-dot").is_hidden()
 
 
 def test_news_failure_retries_without_closing_modal():
     page.locator("#lightbulb-tab-news").click()
     assert page.get_by_text("Could not load What’s new.").is_visible()
+    assert page.locator(".whatsnew-dot").is_visible()
     page.locator("#changelog-retry").click()
     assert page.locator(".cl-entry").first.is_visible()
+    assert page.locator(".whatsnew-dot").is_hidden()
     assert page.locator("#lightbulb-modal").get_attribute("hidden") is None
 ```
 
@@ -471,7 +472,45 @@ Expected: failures show the old modal-coupled controller and missing retry bridg
 
 - [ ] **Step 3: Refactor `footer.js` into a panel controller**
 
-Keep local-storage functions, `refreshDot`, `applyReadState`, `refreshDotFromCards`, `wireCards`, and `markAllRead`. Replace `openPanel`/`closePanel` with:
+Keep local-storage functions, `applyReadState`, `wireCards`, and `markAllRead`. Keep card read state in `changelog_cutoff` and `changelog_read`, but use `changelog_seen` only for the launcher dot:
+
+```javascript
+function getSeen() {
+  try { return localStorage.getItem('changelog_seen') || ''; } catch (error) { return ''; }
+}
+
+function setSeen(value) {
+  try { localStorage.setItem('changelog_seen', value || ''); } catch (error) {}
+}
+
+function newestLoadedDate() {
+  var newest = '';
+  Array.prototype.forEach.call(body.querySelectorAll('.cl-entry'), function (card) {
+    var when = whenOf(card.getAttribute('data-key'));
+    if (when > newest) newest = when;
+  });
+  return newest;
+}
+
+function markNewsSeen() {
+  var newest = newestLoadedDate();
+  if (newest) setSeen(newest);
+  if (dot) dot.hidden = true;
+}
+
+function refreshDot() {
+  if (!dot) return;
+  window.gpiFetch('/changelog/latest')
+    .then(function (response) { return response.json(); })
+    .then(function (data) {
+      var latest = data && data.latest_date;
+      dot.hidden = !(latest && latest > getSeen());
+    })
+    .catch(function () {});
+}
+```
+
+Replace `openPanel`/`closePanel` with:
 
 ```javascript
 function showChangelog(forceRefresh) {
@@ -493,6 +532,7 @@ function showChangelog(forceRefresh) {
       panelLoaded = true;
       wireCards();
       applyReadState();
+      markNewsSeen();
     })
     .catch(function () {
       body.innerHTML = '<p>Could not load What’s new.</p>';
@@ -506,7 +546,7 @@ window.gpiLightbulbChangelog = {
 };
 ```
 
-Wire `#changelog-markall` once during initialization and `#changelog-retry` to `.retry()`. Do not call `setCutoff`, `setRead`, `applyReadState`, or `markAllRead` when the light bulb opens, Send feedback is active, or My feedback is selected.
+Wire `#changelog-markall` once during initialization and `#changelog-retry` to `.retry()`. Do not call `setSeen`, `setCutoff`, `setRead`, `applyReadState`, or `markAllRead` when the light bulb opens, Send feedback is active, or My feedback is selected. A failed What’s new request must not call `markNewsSeen()`.
 
 - [ ] **Step 4: Wire What’s new selection without affecting unread state**
 
@@ -581,7 +621,7 @@ At a desktop viewport and at 360 px wide, verify:
 5. Repair opens Maintenance and does not POST feedback.
 6. A successful disposable local/test submission switches to My feedback.
 7. My feedback and What’s new each recover from one simulated failed request.
-8. Opening Send/My does not clear the unread dot; Mark all read does.
+8. Opening Send/My or failing to load What’s new does not clear the unread dot; a successful What’s new load does.
 9. Tab arrows, Tab/Shift+Tab, Escape, and opener focus restoration work.
 
 Expected: all nine checks pass with no console errors.
