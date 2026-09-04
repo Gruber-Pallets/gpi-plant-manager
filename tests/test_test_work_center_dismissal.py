@@ -181,12 +181,33 @@ def test_dismiss_current_test_item_suppresses_all_ids_and_audits(monkeypatch):
     )
 
 
-def test_dismiss_sequential_repeat_claims_and_audits_once(monkeypatch):
+def test_dismiss_partial_completion_audits_only_winning_completion(monkeypatch):
     issue = _unmapped_issue()
     _install_snapshot(monkeypatch, issues=(issue,))
-    claimed = MagicMock(side_effect=(True, False))
+    resolved_ids = {901}
+    raw_snapshot = attendance_exceptions.AttendanceExceptionSnapshot(
+        day=DAY,
+        mode="strict",
+        production_mode="strict",
+        baseline_complete=True,
+        fresh=True,
+        complete=True,
+        issues=(issue,),
+        source_errors=(),
+    )
+    assert exception_inbox._without_resolved_unmapped_issues(
+        raw_snapshot, resolved_ids
+    ).issues == (issue,)
+
+    def complete_partial(_item_key, attendance_ids, *_args, **_kwargs):
+        missing_ids = set(attendance_ids) - resolved_ids
+        if not missing_ids:
+            return False
+        resolved_ids.update(missing_ids)
+        return True
+
     logged = MagicMock(return_value=77)
-    monkeypatch.setattr(missing_wc, "claim_many", claimed)
+    monkeypatch.setattr(missing_wc, "claim_many", complete_partial)
     monkeypatch.setattr(inbox_log, "log_event_safe", logged)
 
     first = client.post(
@@ -205,7 +226,10 @@ def test_dismiss_sequential_repeat_claims_and_audits_once(monkeypatch):
         "ok": False,
         "error": "That inbox item is no longer open.",
     }
-    assert claimed.call_count == 2
+    assert resolved_ids == {901, 902}
+    assert exception_inbox._without_resolved_unmapped_issues(
+        raw_snapshot, resolved_ids
+    ).issues == ()
     logged.assert_called_once()
 
 

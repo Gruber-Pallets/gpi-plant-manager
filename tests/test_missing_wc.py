@@ -263,6 +263,46 @@ def test_claim_many_allows_one_winner_under_a_concurrent_race():
         db.execute("DELETE FROM missing_wc_resolved WHERE attendance_id = ANY(%s)", (list(ids),))
 
 
+@pg
+def test_claim_many_completes_partial_postgres_rows_and_preserves_existing_metadata():
+    from zira_dashboard import db
+
+    ids = (999016, 999017)
+    item_key = "attendance-unmapped:partial-postgres-test-workcenter"
+    db.execute("DELETE FROM missing_wc_resolved WHERE attendance_id = ANY(%s)", (list(ids),))
+    db.execute(
+        "INSERT INTO missing_wc_resolved (attendance_id, action, name, wc_name) "
+        "VALUES (%s, %s, %s, %s)",
+        (ids[0], "assigned", "Original person", "Dismantler 1"),
+    )
+    try:
+        assert missing_wc.claim_many(item_key, ids, "dismissed", name="Luke") is True
+        assert missing_wc.claim_many(item_key, ids, "dismissed", name="Luke") is False
+
+        rows = db.query(
+            "SELECT attendance_id, action, name, wc_name "
+            "FROM missing_wc_resolved WHERE attendance_id = ANY(%s) "
+            "ORDER BY attendance_id",
+            (list(ids),),
+        )
+        assert rows == [
+            {
+                "attendance_id": ids[0],
+                "action": "assigned",
+                "name": "Original person",
+                "wc_name": "Dismantler 1",
+            },
+            {
+                "attendance_id": ids[1],
+                "action": "dismissed",
+                "name": "Luke",
+                "wc_name": None,
+            },
+        ]
+    finally:
+        db.execute("DELETE FROM missing_wc_resolved WHERE attendance_id = ANY(%s)", (list(ids),))
+
+
 def test_resolve_many_rolls_back_every_id_when_batch_fails(monkeypatch):
     from zira_dashboard import db
 
@@ -347,8 +387,8 @@ def test_claim_many_returns_false_without_writing_when_item_is_already_suppresse
         def execute(self, sql, params):
             self.calls.append((sql, params))
 
-        def fetchone(self):
-            return {"already_resolved": True}
+        def fetchall(self):
+            return [{"attendance_id": 999012}, {"attendance_id": 999013}]
 
         def executemany(self, *_args):
             raise AssertionError("losing claimant must not write")
@@ -378,6 +418,71 @@ def test_claim_many_returns_false_without_writing_when_item_is_already_suppresse
     assert cursor.calls[1][1] == ([999012, 999013],)
 
 
+def test_claim_many_completes_partial_suppression_without_overwriting_existing_row(
+    monkeypatch,
+):
+    from zira_dashboard import db
+
+    existing = {
+        901: {
+            "action": "assigned",
+            "name": "Original person",
+            "wc_name": "Dismantler 1",
+        }
+    }
+    inserted_batches = []
+
+    class Cursor:
+        def execute(self, _sql, _params):
+            return None
+
+        def fetchall(self):
+            return [{"attendance_id": attendance_id} for attendance_id in existing]
+
+        def executemany(self, _sql, rows):
+            inserted_batches.append(list(rows))
+            for attendance_id, action, name, wc_name in rows:
+                existing[attendance_id] = {
+                    "action": action,
+                    "name": name,
+                    "wc_name": wc_name,
+                }
+
+    cursor = Cursor()
+
+    class CursorContext:
+        def __enter__(self):
+            return cursor
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(db, "cursor", CursorContext)
+
+    first = missing_wc.claim_many(
+        "attendance-unmapped:partial-test-workcenter",
+        (901, 902),
+        "dismissed",
+        name="Luke",
+    )
+    second = missing_wc.claim_many(
+        "attendance-unmapped:partial-test-workcenter",
+        (901, 902),
+        "dismissed",
+        name="Luke",
+    )
+
+    assert first is True
+    assert second is False
+    assert inserted_batches == [[(902, "dismissed", "Luke", None)]]
+    assert existing[901] == {
+        "action": "assigned",
+        "name": "Original person",
+        "wc_name": "Dismantler 1",
+    }
+    assert set(existing) == {901, 902}
+
+
 def test_claim_many_rolls_back_every_id_when_batch_fails(monkeypatch):
     from zira_dashboard import db
 
@@ -391,12 +496,12 @@ def test_claim_many_rolls_back_every_id_when_batch_fails(monkeypatch):
         def execute(self, sql, params):
             if "pg_advisory_xact_lock" in sql:
                 return
-            if "SELECT EXISTS" in sql:
+            if "SELECT attendance_id" in sql:
                 return
             raise AssertionError(sql)
 
-        def fetchone(self):
-            return {"already_resolved": False}
+        def fetchall(self):
+            return []
 
         def executemany(self, _sql, rows):
             self.connection.pending.append(rows[0])
