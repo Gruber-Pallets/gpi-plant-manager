@@ -1,13 +1,20 @@
-<div id="fb-modal" class="fb-modal" hidden>
-  <div class="fb-backdrop" id="fb-backdrop"></div>
-  <div class="fb-card" role="dialog" aria-modal="true" aria-labelledby="fb-title">
+<div id="lightbulb-modal" class="fb-modal" hidden>
+  <div class="fb-backdrop" id="lightbulb-backdrop"></div>
+  <div class="fb-card" role="dialog" aria-modal="true" aria-labelledby="lightbulb-title">
     <div class="fb-head">
-      <div class="fb-head-copy">
-        <h3 id="fb-title">What are you reporting?</h3>
-        <p class="fb-step-label" id="fb-step-label">Step 1 of 2</p>
-      </div>
-      <button type="button" id="fb-close" class="fb-close" aria-label="Close">Close</button>
+      <h3 id="lightbulb-title">Light bulb</h3>
+      <button type="button" id="lightbulb-close" class="fb-close" aria-label="Close">Close</button>
     </div>
+    <div class="fb-tabs" role="tablist" aria-label="Light bulb sections">
+      <button type="button" id="lightbulb-tab-send" class="fb-tab is-active"
+              role="tab" aria-selected="true" aria-controls="lightbulb-panel-send">Send feedback</button>
+      <button type="button" id="lightbulb-tab-mine" class="fb-tab"
+              role="tab" aria-selected="false" aria-controls="lightbulb-panel-mine">My feedback</button>
+      <button type="button" id="lightbulb-tab-news" class="fb-tab"
+              role="tab" aria-selected="false" aria-controls="lightbulb-panel-news">What’s new</button>
+    </div>
+    <section id="lightbulb-panel-send" class="fb-panel" role="tabpanel"
+             aria-labelledby="lightbulb-tab-send">
     <div id="fb-type-step">
       {% set chooser_types = feedback_types_for_chooser() if feedback_types_for_chooser is defined else () %}
       {% set default_type = chooser_types[0].value if chooser_types else '' %}
@@ -81,17 +88,20 @@
         <button type="button" id="fb-submit" class="fb-submit">Send feedback</button>
       </div>
     </div>
-  </div>
-</div>
-
-<div id="fb-view-modal" class="fb-modal" hidden>
-  <div class="fb-backdrop" id="fb-view-backdrop"></div>
-  <div class="fb-card" role="dialog" aria-modal="true" aria-label="Your feedback">
-    <div class="fb-head">
-      <h3>Your feedback</h3>
-      <button type="button" id="fb-view-close" class="fb-close" aria-label="Close">Close</button>
-    </div>
-    <div id="fb-view-body" class="fb-view-body">Loading…</div>
+    </section>
+    <section id="lightbulb-panel-mine" class="fb-panel" role="tabpanel"
+             aria-labelledby="lightbulb-tab-mine" hidden>
+      <div id="fb-view-body" class="fb-view-body" aria-live="polite"></div>
+      <button type="button" id="fb-view-retry" class="fb-retry" hidden>Retry</button>
+    </section>
+    <section id="lightbulb-panel-news" class="fb-panel" role="tabpanel"
+             aria-labelledby="lightbulb-tab-news" hidden>
+      <div class="changelog-toolbar">
+        <button type="button" id="changelog-markall" class="changelog-markall">Mark all read</button>
+      </div>
+      <div id="changelog-body" class="changelog-body" aria-live="polite"></div>
+      <button type="button" id="changelog-retry" class="fb-retry" hidden>Retry</button>
+    </section>
   </div>
 </div>
 <link rel="stylesheet" href="/static/feedback.css?v={{ static_v('feedback.css') }}">

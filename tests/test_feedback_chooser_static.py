@@ -11,6 +11,24 @@ from zira_dashboard.feedback_types import FEEDBACK_TYPES
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "src" / "zira_dashboard" / "templates"
 FEEDBACK_JS = ROOT / "src" / "zira_dashboard" / "static" / "feedback.js"
+FEEDBACK_TEMPLATE = TEMPLATES / "_feedback.html"
+
+
+def test_lightbulb_is_one_send_first_tabbed_modal():
+    html = FEEDBACK_TEMPLATE.read_text(encoding="utf-8")
+    assert html.count('role="dialog"') == 1
+    assert 'id="lightbulb-modal"' in html
+    assert 'role="tablist" aria-label="Light bulb sections"' in html
+    assert 'id="lightbulb-tab-send"' in html
+    assert '>Send feedback<' in html
+    assert 'id="lightbulb-tab-mine"' in html
+    assert '>My feedback<' in html
+    assert 'id="lightbulb-tab-news"' in html
+    assert '>What’s new<' in html
+    assert 'id="lightbulb-panel-send"' in html
+    assert 'id="lightbulb-panel-mine"' in html
+    assert 'id="lightbulb-panel-news"' in html
+    assert 'id="fb-view-modal"' not in html
 
 
 def _render_chooser(catalog=FEEDBACK_TYPES) -> str:
@@ -32,8 +50,24 @@ def test_shared_partial_still_renders_in_a_bare_template_environment():
 
     html = environment.get_template("_feedback.html").render()
 
-    assert 'id="fb-modal"' in html
+    assert 'id="lightbulb-modal"' in html
     assert 'class="fb-type-btn' not in html
+
+
+def test_lightbulb_tabs_have_accessible_panel_links_and_responsive_styles():
+    html = FEEDBACK_TEMPLATE.read_text(encoding="utf-8")
+    css = (ROOT / "src" / "zira_dashboard" / "static" / "feedback.css").read_text(
+        encoding="utf-8"
+    )
+
+    for section in ("send", "mine", "news"):
+        assert f'aria-controls="lightbulb-panel-{section}"' in html
+        assert f'aria-labelledby="lightbulb-tab-{section}"' in html
+    assert html.count('role="tabpanel"') == 3
+    assert '.fb-tabs { display: grid; grid-template-columns: repeat(3' in css
+    assert ".fb-tab:focus-visible" in css
+    assert ".fb-panel[hidden]" in css
+    assert "@media (max-width: 520px)" in css
 
 
 def test_chooser_shows_all_six_choices_with_review_workflow_enabled():

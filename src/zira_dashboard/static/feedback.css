@@ -1,6 +1,5 @@
-/* Shared Send + View feedback modals. */
-/* Above the What's New panel (z-index 9000) and nav-badge modals (9100):
-   desktop opens feedback from inside that panel. */
+/* Shared light-bulb modal for feedback and What's New. */
+/* Above nav-badge modals (z-index 9100). */
 .fb-modal { position: fixed; inset: 0; z-index: 9200; display: flex;
   align-items: center; justify-content: center; }
 .fb-modal[hidden] { display: none; }
@@ -19,6 +18,18 @@
 .fb-close { border: none; background: none; font-size: 0.95rem; font-weight: 500;
   color: #6b7280; cursor: pointer; padding: 2px 0; }
 .fb-close:hover { color: #111827; }
+
+.fb-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px; margin: 0 -0.25rem 1rem; padding: 4px; border-radius: 10px;
+  background: var(--muted-bg, #f3f4f6); }
+.fb-tab { min-width: 0; min-height: 44px; padding: 8px; border: 0;
+  border-radius: 8px; background: transparent; color: var(--muted, #6b7280);
+  font: inherit; font-weight: 600; white-space: normal; cursor: pointer; }
+.fb-tab.is-active { background: var(--panel, #fff); color: var(--fg, #1f2937);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12); }
+.fb-tab:focus-visible { outline: 2px solid var(--accent, #16a34a); outline-offset: 2px; }
+.fb-panel[hidden] { display: none; }
+.fb-retry { min-height: 44px; margin-top: 0.75rem; }
 
 .fb-step-label { margin: 0.2rem 0 0; color: #9ca3af; font-size: 0.68rem;
   font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -122,4 +133,6 @@
 
 @media (max-width: 520px) {
   .fb-card { padding: 1rem; }
+  .fb-tabs { gap: 2px; }
+  .fb-tab { padding-inline: 4px; }
 }

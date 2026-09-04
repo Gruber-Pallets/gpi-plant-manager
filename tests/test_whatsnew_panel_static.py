@@ -11,58 +11,63 @@ FEEDBACK_CSS = ROOT / "src" / "zira_dashboard" / "static" / "feedback.css"
 FEEDBACK_JS = ROOT / "src" / "zira_dashboard" / "static" / "feedback.js"
 
 
+def test_footer_has_no_second_lightbulb_modal():
+    html = TEMPLATE.read_text(encoding="utf-8")
+    assert 'id="changelog-modal"' not in html
+    assert 'id="fb-open"' not in html
+    assert 'id="fb-view-open"' not in html
+    assert html.count("{% include '_feedback.html' %}") == 1
+
+
 def _rule_zindex(css, selector):
     """z-index of the first rule block for an exact selector (skips `sel[hidden]`)."""
     m = re.search(re.escape(selector) + r"\s*\{[^}]*?z-index:\s*(\d+)", css)
     return int(m.group(1)) if m else None
 
 
-def test_feedback_modal_stacks_above_whatsnew_panel():
-    # The Send/View feedback modals open from inside the What's New panel, so
-    # their z-index must sit ABOVE the panel's or they render behind it.
+def test_lightbulb_uses_the_feedback_modal_layer_without_changelog_layer():
     feedback_css = FEEDBACK_CSS.read_text(encoding="utf-8")
     footer_css = CSS.read_text(encoding="utf-8")
     fb = _rule_zindex(feedback_css, ".fb-modal")
-    panel = _rule_zindex(footer_css, ".changelog-modal")
     assert fb is not None, ".fb-modal z-index not found"
-    assert panel is not None, ".changelog-modal z-index not found"
-    assert fb >= panel, (
-        f".fb-modal z-index ({fb}) must be >= .changelog-modal ({panel}) — "
-        "it opens from within the What's New panel"
-    )
+    assert ".changelog-modal" not in footer_css
+    assert ".changelog-backdrop" not in footer_css
+    assert ".changelog-card" not in footer_css
 
 
-def test_footer_template_uses_panel_without_old_text_link():
+def test_footer_template_uses_shared_lightbulb_without_old_text_link():
     html = TEMPLATE.read_text(encoding="utf-8")
 
     assert "app-footer" not in html
     assert "changelog-open" not in html
-    assert "changelog-markall" in html
-    # Old inline feedback form is gone; shared feedback buttons remain.
+    assert "changelog-markall" not in html
     assert "changelog-feedback-toggle" not in html
-    assert 'id="fb-open"' in html
-    assert 'id="fb-view-open"' in html
+    assert 'id="fb-open"' not in html
+    assert 'id="fb-view-open"' not in html
 
 
 def test_footer_includes_shared_feedback_component():
     html = TEMPLATE.read_text(encoding="utf-8")
 
-    assert "{% include '_feedback.html' %}" in html
-    assert 'id="fb-open"' in html
-    assert 'id="fb-view-open"' in html
+    assert html.count("{% include '_feedback.html' %}") == 1
+    assert html.count("/static/footer.css") == 1
+    assert html.count("/static/footer.js") == 1
 
 
 def test_shared_feedback_component_keeps_modal_contract():
     html = FEEDBACK_TEMPLATE.read_text(encoding="utf-8")
 
-    assert 'id="fb-modal"' in html
-    assert 'id="fb-view-modal"' in html
+    assert 'id="lightbulb-modal"' in html
+    assert 'id="lightbulb-panel-send"' in html
+    assert 'id="lightbulb-panel-mine"' in html
+    assert 'id="lightbulb-panel-news"' in html
+    assert 'id="fb-view-modal"' not in html
     assert 'id="fb-desc"' in html
     assert 'data-type="{{ item.value }}"' in html
     assert "feedback_types_for_chooser()" in html
     assert 'id="fb-file-input"' in html
     assert 'id="fb-status" class="fb-status" role="status" aria-live="polite"' in html
-    assert 'id="fb-title"' in html
+    assert 'id="lightbulb-title"' in html
     assert "/static/feedback.css" in html
     assert "/static/feedback.js" in html
 
@@ -73,8 +78,7 @@ def test_feedback_panel_renders_catalog_types_in_two_steps():
     assert "for item in group_types" in html
     assert "{{ item.label }}" in html
     assert "{{ item.description }}" in html
-    assert "What are you reporting?" in html
-    assert "Step 1 of 2" in html
+    assert ">Send feedback<" in html
     assert "Ready to create work — straight to the floor team" in html
     assert "opens GPI Maintenance" in html
     assert (

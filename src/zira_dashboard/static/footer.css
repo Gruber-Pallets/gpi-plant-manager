@@ -62,18 +62,6 @@
     font-size: 0.8rem;
     color: var(--muted, #6b7280);
   }
-  .changelog-head-actions { display: flex; align-items: center; gap: 0.5rem; }
-  .changelog-feedback-btn {
-    background: transparent;
-    color: var(--accent, #16a34a);
-    border: 1px solid var(--accent, #16a34a);
-    border-radius: 6px;
-    padding: 0.3rem 0.7rem;
-    font: inherit;
-    font-size: 0.82rem;
-    cursor: pointer;
-  }
-  .changelog-feedback-btn:hover { background: var(--accent-dim, #dcfce7); }
   .changelog-toolbar {
     display: flex;
     justify-content: flex-end;
@@ -133,30 +121,6 @@
   .cl-group li { margin: 0.18rem 0; }
   .cl-markread { margin-top: 0.3rem; }
 
-  .changelog-modal[hidden] { display: none; }
-  .changelog-modal {
-    position: fixed; inset: 0; z-index: 9000;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .changelog-backdrop {
-    position: absolute; inset: 0;
-    background: rgba(0,0,0,0.45);
-  }
-  .changelog-card {
-    position: relative;
-    background: var(--panel, #fff); color: var(--fg, #1f2937);
-    border: 1px solid var(--border, #d8dee5); border-radius: 12px;
-    width: min(720px, 92vw);
-    max-height: 80vh;
-    display: flex; flex-direction: column;
-    box-shadow: 0 18px 48px rgba(0,0,0,0.25);
-  }
-  .changelog-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0.85rem 1rem;
-    border-bottom: 1px solid var(--border, #d8dee5);
-  }
-  .changelog-head h3 { margin: 0; font-size: 1rem; font-weight: 700; }
   .changelog-close {
     background: transparent; border: none; cursor: pointer;
     color: var(--muted, #6b7280); font-size: 1.3rem; line-height: 1;
