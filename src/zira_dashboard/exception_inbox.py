@@ -10,11 +10,17 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
+from typing import TYPE_CHECKING
 
 from . import plant_day, saturday_recruiting_store, schedule_store, shift_config, staffing
 from . import inbox_keys
 from . import time_off_context
+
+if TYPE_CHECKING:
+    from .attendance_exceptions import AttendanceExceptionSnapshot
 
 _log = logging.getLogger(__name__)
 
@@ -337,6 +343,26 @@ _ATTENDANCE_SECTION_META = {
 }
 
 
+def is_dismissible_test_work_center(labels: Sequence[object]) -> bool:
+    normalized = [str(label).strip() for label in labels]
+    return bool(normalized) and all(label and "test" in label.casefold() for label in normalized)
+
+
+def _without_resolved_unmapped_issues(
+    snapshot, resolved_ids: set[int]
+) -> AttendanceExceptionSnapshot:
+    issues = tuple(
+        issue
+        for issue in snapshot.issues
+        if not (
+            issue.kind == "attendance_unmapped_location"
+            and issue.attendance_ids
+            and set(issue.attendance_ids).issubset(resolved_ids)
+        )
+    )
+    return snapshot if issues == snapshot.issues else replace(snapshot, issues=issues)
+
+
 def _now_utc() -> datetime:
     value = plant_day.now()
     if value.tzinfo is None:
@@ -345,7 +371,7 @@ def _now_utc() -> datetime:
 
 
 def _attendance_snapshot(today: date, source_errors: list[dict]):
-    from . import attendance_exceptions
+    from . import attendance_exceptions, missing_wc
 
     now_utc = _now_utc()
     try:
@@ -383,7 +409,12 @@ def _attendance_snapshot(today: date, source_errors: list[dict]):
     for source in snapshot.source_errors:
         if not any(error.get("source") == source for error in source_errors):
             source_errors.append({"source": source})
-    return snapshot
+    try:
+        resolved_ids = missing_wc.resolved_ids()
+    except Exception:  # noqa: BLE001 - read failure must keep raw issues visible
+        _log.exception("Could not read resolved missing-work-center attendance IDs")
+        return snapshot
+    return _without_resolved_unmapped_issues(snapshot, resolved_ids)
 
 
 def _timeline_owns_location(snapshot) -> bool:
@@ -474,7 +505,12 @@ def _attendance_issue_row(issue) -> dict:
         else ("Follow-up" if issue.priority == "muted" else "Needs decision"),
         "row_key": "",
         "item_key": issue.item_key,
-        "action": None,
+        "action": (
+            {"type": "attendance_unmapped_location_dismiss"}
+            if issue.kind == "attendance_unmapped_location"
+            and is_dismissible_test_work_center(raw_labels)
+            else None
+        ),
         "kind": issue.kind,
         "employee_odoo_id": issue.employee_odoo_id,
         "employee_name": issue.employee_name,

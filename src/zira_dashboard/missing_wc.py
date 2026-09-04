@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, UTC
 
 from . import attendance_location_policy
@@ -74,6 +74,73 @@ def resolve(
         "name = EXCLUDED.name, wc_name = EXCLUDED.wc_name, resolved_at = now()",
         (int(attendance_id), action, name, wc_name),
     )
+
+
+def resolve_many(
+    attendance_ids: Sequence[int],
+    action: str,
+    name: str | None = None,
+    wc_name: str | None = None,
+) -> None:
+    ids = tuple(dict.fromkeys(int(value) for value in attendance_ids))
+    if not ids:
+        raise ValueError("at least one attendance id is required")
+    from . import db
+
+    with db.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO missing_wc_resolved (attendance_id, action, name, wc_name) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (attendance_id) DO UPDATE SET action = EXCLUDED.action, "
+            "name = EXCLUDED.name, wc_name = EXCLUDED.wc_name, resolved_at = now()",
+            [(attendance_id, action, name, wc_name) for attendance_id in ids],
+        )
+
+
+def claim_many(
+    item_key: str,
+    attendance_ids: Sequence[int],
+    action: str,
+    name: str | None = None,
+    wc_name: str | None = None,
+) -> bool:
+    """Atomically suppress all IDs once for one stable inbox item.
+
+    The transaction-scoped advisory lock serializes clicks for the same stable
+    item key. The suppression check happens after taking that lock. A partially
+    suppressed item is completed without changing existing row metadata; only
+    the claimant that finishes the set receives ``True``.
+    """
+    stable_key = str(item_key).strip()
+    ids = tuple(dict.fromkeys(int(value) for value in attendance_ids))
+    if not stable_key:
+        raise ValueError("item key is required")
+    if not ids:
+        raise ValueError("at least one attendance id is required")
+    from . import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (stable_key,),
+        )
+        cur.execute(
+            "SELECT attendance_id FROM missing_wc_resolved "
+            "WHERE attendance_id = ANY(%s)",
+            (list(ids),),
+        )
+        existing_ids = {int(row["attendance_id"]) for row in cur.fetchall()}
+        missing_ids = tuple(
+            attendance_id for attendance_id in ids if attendance_id not in existing_ids
+        )
+        if not missing_ids:
+            return False
+        cur.executemany(
+            "INSERT INTO missing_wc_resolved (attendance_id, action, name, wc_name) "
+            "VALUES (%s, %s, %s, %s)",
+            [(attendance_id, action, name, wc_name) for attendance_id in missing_ids],
+        )
+    return True
 
 
 def unresolve(attendance_id) -> None:
