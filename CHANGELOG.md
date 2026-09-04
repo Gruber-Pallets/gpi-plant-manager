@@ -17,6 +17,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 - **A plan is ready to let Dale dismiss unknown work centers used only for system tests.** Real unknown work centers will still need to be matched so a setup problem is not hidden. Nothing in the app has changed yet.
 - **The step-by-step build plan is now ready too.** It includes safety checks so only system tests can be dismissed. Nothing in the app has changed yet.
 
+## 2026-09-04
+
+### Plan a simpler light-bulb window
+
+- **A new design makes Send feedback the first screen when the light bulb opens.** My feedback and What’s new will be tabs in the same window. Nothing on screen has changed yet.
+
 ## 2026-09-03
 
 ### Floor ideas now use one shared review task
