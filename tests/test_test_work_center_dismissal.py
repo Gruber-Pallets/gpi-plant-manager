@@ -83,8 +83,19 @@ def test_dismiss_current_test_item_suppresses_all_ids_and_audits(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     resolved.assert_called_once_with((901, 902), "dismissed", name=issue.employee_name)
-    assert logged.call_args.kwargs["item_key"] == issue.item_key
-    assert logged.call_args.kwargs["reversible"] is False
+    logged.assert_called_once_with(
+        item_kind="attendance_unmapped_location",
+        item_key=issue.item_key,
+        person_name=issue.employee_name,
+        category_label="Unknown Odoo Work Center",
+        action="dismiss",
+        outcome="Dismissed test work center",
+        actor_upn=None,
+        actor_name=None,
+        source="inbox",
+        reversible=False,
+        detail={"raw_work_center_labels": ["Test Workcenter"]},
+    )
 
 
 def test_dismiss_rejects_missing_item_key_without_writing(monkeypatch):
@@ -203,4 +214,23 @@ def test_dismiss_source_failure_returns_plain_500_without_writing(monkeypatch):
     assert response.status_code == 500
     assert response.json() == {"ok": False, "error": "Could not dismiss this inbox item."}
     resolved.assert_not_called()
+    logged.assert_not_called()
+
+
+def test_dismiss_write_failure_returns_plain_500_without_auditing(monkeypatch):
+    issue = _unmapped_issue()
+    _install_snapshot(monkeypatch, issues=(issue,))
+    resolved = MagicMock(side_effect=RuntimeError("private write detail"))
+    logged = MagicMock()
+    monkeypatch.setattr(missing_wc, "resolve_many", resolved)
+    monkeypatch.setattr(inbox_log, "log_event_safe", logged)
+
+    response = client.post(
+        "/api/exceptions/attendance-unmapped-location/dismiss",
+        json={"item_key": issue.item_key},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"ok": False, "error": "Could not dismiss this inbox item."}
+    resolved.assert_called_once_with((901, 902), "dismissed", name=issue.employee_name)
     logged.assert_not_called()

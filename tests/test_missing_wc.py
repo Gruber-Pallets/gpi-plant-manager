@@ -231,3 +231,73 @@ def test_resolve_many_suppresses_every_attendance_id():
         assert ids[1] in missing_wc.resolved_ids()
     finally:
         db.execute("DELETE FROM missing_wc_resolved WHERE attendance_id = ANY(%s)", (list(ids),))
+
+
+def test_resolve_many_rolls_back_every_id_when_batch_fails(monkeypatch):
+    from zira_dashboard import db
+
+    committed = []
+
+    class FailingCursor:
+        def __init__(self, connection):
+            self.connection = connection
+            self.closed = False
+
+        def execute(self, _sql, row):
+            if self.connection.commit_count:
+                raise RuntimeError("injected mid-batch failure")
+            self.connection.pending.append(row)
+
+        def executemany(self, _sql, rows):
+            self.connection.pending.append(rows[0])
+            raise RuntimeError("injected mid-batch failure")
+
+        def close(self):
+            self.closed = True
+
+    class FakeConnection:
+        def __init__(self):
+            self.pending = []
+            self.cursor_instance = FailingCursor(self)
+            self.commit_count = 0
+            self.rollback_count = 0
+
+        def cursor(self, *, cursor_factory):
+            assert cursor_factory is not None
+            return self.cursor_instance
+
+        def commit(self):
+            self.commit_count += 1
+            committed.extend(self.pending)
+            self.pending.clear()
+
+        def rollback(self):
+            self.rollback_count += 1
+            self.pending.clear()
+
+    class FakePool:
+        def __init__(self):
+            self.connection = FakeConnection()
+            self.get_count = 0
+            self.returned = []
+
+        def getconn(self):
+            self.get_count += 1
+            return self.connection
+
+        def putconn(self, connection):
+            self.returned.append(connection)
+
+    pool = FakePool()
+    monkeypatch.setattr(db, "_pool", pool)
+
+    with pytest.raises(RuntimeError, match="injected mid-batch failure"):
+        missing_wc.resolve_many((999012, 999013), "dismissed", name="Luke")
+
+    assert committed == []
+    assert pool.get_count == 1
+    assert pool.connection.commit_count == 0
+    assert pool.connection.rollback_count == 1
+    assert pool.connection.pending == []
+    assert pool.connection.cursor_instance.closed is True
+    assert pool.returned == [pool.connection]
