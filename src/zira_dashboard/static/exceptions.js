@@ -1423,6 +1423,22 @@
       return;
     }
 
+    if (rowBtn.classList.contains('js-test-work-center-dismiss')) {
+      if (!row.dataset.itemKey) {
+        failRow(row, 'Missing inbox item.');
+        return;
+      }
+      setBusy(row, true);
+      rowStatus(row, 'Dismissing...', false);
+      postJson('/api/exceptions/attendance-unmapped-location/dismiss', {
+        item_key: row.dataset.itemKey,
+      }).then(function (resp) {
+        if (resp && resp.ok) resolveRow(row, 'Dismissed');
+        else failRow(row, (resp && resp.error) || 'Dismiss failed.');
+      }).catch(function () { failRow(row, 'Network error.'); });
+      return;
+    }
+
     if (rowBtn.classList.contains('js-missing-wc-dismiss')) {
       if (!attendanceId) {
         failRow(row, 'Missing attendance id.');

@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-04
 
+### Dismiss system test work centers
+
+- **Unknown work centers used for system tests now have a Dismiss button.** Real unknown work centers still ask you to match them, so setup problems stay easy to spot.
+
 ### Plan to dismiss system test work centers
 
 - **A plan is ready to let Dale dismiss unknown work centers used only for system tests.** Real unknown work centers will still need to be matched so a setup problem is not hidden. Nothing in the app has changed yet.

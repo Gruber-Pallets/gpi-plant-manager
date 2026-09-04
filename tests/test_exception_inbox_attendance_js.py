@@ -40,6 +40,14 @@ Promise.resolve({expression}).then(function (result) {{
     return json.loads(result.stdout)
 
 
+def test_test_work_center_dismiss_posts_only_stable_item_key():
+    js = _js()
+    assert "rowBtn.classList.contains('js-test-work-center-dismiss')" in js
+    assert "'/api/exceptions/attendance-unmapped-location/dismiss'" in js
+    assert "item_key: row.dataset.itemKey" in js
+    assert "resolveRow(row, 'Dismissed')" in js
+
+
 def test_correction_javascript_posts_canonical_choices_and_token_only_apply():
     js = _js()
 

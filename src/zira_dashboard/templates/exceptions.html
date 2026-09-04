@@ -152,6 +152,8 @@
             <button type="button" class="row-btn primary js-attendance-correction-open" data-attendance-correction-open>
               Choose workers and times
             </button>
+          {% elif action and action.type == 'attendance_unmapped_location_dismiss' %}
+            <button type="button" class="row-btn js-test-work-center-dismiss">Dismiss</button>
           {% elif row.get('kind') == 'attendance_unmapped_location' and can_manage_work_centers and row.get('odoo_work_center_ids') and row.get('raw_work_center_labels') %}
             <a class="row-btn" href="/settings?{{ {'section': 'work_centers', 'odoo_work_center_id': row.get('odoo_work_center_ids')[0], 'odoo_work_center_name': row.get('raw_work_center_labels')[0]} | urlencode }}">
               Map this Odoo work center

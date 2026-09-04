@@ -3,14 +3,17 @@
 from datetime import UTC, date, datetime
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from zira_dashboard import (
     attendance_exceptions,
+    exception_inbox,
     inbox_log,
     missing_wc,
 )
 from zira_dashboard.app import app
+from zira_dashboard.routes import exceptions as exceptions_route
 
 
 DAY = date(2026, 9, 4)
@@ -22,6 +25,7 @@ def _unmapped_issue(
     *,
     labels=("Test Workcenter",),
     attendance_ids=(901, 902),
+    odoo_work_center_ids=(),
     item_key="attendance-unmapped:test-workcenter",
 ):
     return attendance_exceptions.AttendanceException(
@@ -33,7 +37,7 @@ def _unmapped_issue(
         start_utc=NOW,
         end_utc=NOW,
         raw_work_center_labels=labels,
-        odoo_work_center_ids=(),
+        odoo_work_center_ids=odoo_work_center_ids,
         affected_workers=((42, "Luke"),),
         app_work_center_name=None,
         units=None,
@@ -65,6 +69,66 @@ def _install_no_writes(monkeypatch):
     monkeypatch.setattr(missing_wc, "resolve_many", resolved)
     monkeypatch.setattr(inbox_log, "log_event_safe", logged)
     return resolved, logged
+
+
+def _render_issue(monkeypatch, issue):
+    row = {
+        **exception_inbox._attendance_issue_row(issue),
+        "section_id": "attendance_unmapped_location",
+        "category_label": "Unknown Odoo Work Center",
+        "tone": "bad",
+    }
+    snapshot = {
+        "today": DAY.isoformat(),
+        "generated_at": "9:00 AM",
+        "total": 1,
+        "urgent_total": 1,
+        "follow_up_total": 0,
+        "source_errors": [],
+        "work_centers": [],
+        "people": [],
+        "sections": [],
+        "queue": [row],
+    }
+    monkeypatch.setattr(exceptions_route.exception_inbox, "build_snapshot", lambda: snapshot)
+    monkeypatch.setattr(
+        exceptions_route.exception_inbox,
+        "build_summary",
+        lambda: {"total": 1, "urgent_total": 1, "source_errors": []},
+    )
+    monkeypatch.setattr(exceptions_route, "_active_correction_people", lambda: [])
+    monkeypatch.setattr(
+        exceptions_route.auth, "request_is_super_admin", lambda _request: True
+    )
+    return client.get("/exceptions")
+
+
+def test_render_test_work_center_uses_dismiss_instead_of_map(monkeypatch):
+    issue = _unmapped_issue(labels=("Test Workcenter",), odoo_work_center_ids=(17,))
+
+    response = _render_issue(monkeypatch, issue)
+
+    assert response.status_code == 200
+    assert 'class="row-btn js-test-work-center-dismiss"' in response.text
+    assert "Map this Odoo work center" not in response.text
+    assert f'data-item-key="{issue.item_key}"' in response.text
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        ("Dismantler 1",),
+        ("Test Workcenter", "Dismantler 1"),
+    ],
+)
+def test_render_real_or_mixed_work_center_uses_map_not_dismiss(monkeypatch, labels):
+    issue = _unmapped_issue(labels=labels, odoo_work_center_ids=(17,))
+
+    response = _render_issue(monkeypatch, issue)
+
+    assert response.status_code == 200
+    assert "Map this Odoo work center" in response.text
+    assert "js-test-work-center-dismiss" not in response.text
 
 
 def test_dismiss_current_test_item_suppresses_all_ids_and_audits(monkeypatch):
