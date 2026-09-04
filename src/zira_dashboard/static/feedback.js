@@ -35,6 +35,7 @@
   var activeModal = null;
   var activeOpener = null;
   var activeTab = 'send';
+  var sessionGeneration = 0;
 
   function $(id) { return document.getElementById(id); }
 
@@ -85,6 +86,7 @@
   }
 
   function closeLightbulb() {
+    sessionGeneration += 1;
     closeModal($('lightbulb-modal'));
     resetSendForm();
   }
@@ -141,6 +143,8 @@
     if (submitter) submitter.selectedIndex = 0;
     var status = $('fb-status');
     if (status) { status.hidden = true; status.textContent = ''; }
+    var submit = $('fb-submit');
+    if (submit) submit.disabled = false;
   }
 
   function setType(type) {
@@ -273,6 +277,7 @@
     var status = $('fb-status');
     var submit = $('fb-submit');
     var submitter = $('fb-submitter');
+    var submissionSession = sessionGeneration;
     var message = ((desc && desc.value) || '').trim();
     if (status) status.hidden = false;
     if (isTimeclockPath() && (!submitter || !submitter.value)) {
@@ -297,15 +302,19 @@
     window.gpiFetch(submitUrl, { method: 'POST', body: form })
       .then(function (r) { return r.json(); })
       .then(function (resp) {
+        if (submissionSession !== sessionGeneration) return;
         if (resp && resp.ok) {
           if (status) status.textContent = 'Thanks — saved and sending it to the app owner.';
-          setTimeout(closeLightbulb, 1200);
+          setTimeout(function () {
+            if (submissionSession === sessionGeneration) closeLightbulb();
+          }, 1200);
         } else if (status) {
           status.textContent = 'Failed: ' + ((resp && resp.error) || 'unknown');
         }
         if (submit) submit.disabled = false;
       })
       .catch(function () {
+        if (submissionSession !== sessionGeneration) return;
         if (status) status.textContent = 'Network error.';
         if (submit) submit.disabled = false;
       });
@@ -388,6 +397,7 @@
   }
 
   function openLightbulb(opener) {
+    sessionGeneration += 1;
     resetSendForm();
     loadSubmitters();
     selectTab('send', { focus: false });

@@ -82,6 +82,100 @@ def test_close_clears_draft_and_reopen_returns_to_send():
             browser.close()
 
 
+def test_close_and_reopen_ignores_a_pending_submit_from_the_previous_session():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.set_content(
+                '<button id="feedback-opener">Open feedback</button>'
+                + _render_enabled_chooser()
+            )
+            page.evaluate(
+                """
+                window.resolvePendingFeedback = null;
+                window.gpiFetch = function (url, options) {
+                  if (options && options.method === 'POST') {
+                    return new Promise(function (resolve) {
+                      window.resolvePendingFeedback = resolve;
+                    });
+                  }
+                  return Promise.resolve({json: function () {
+                    return Promise.resolve({ok: true, people: []});
+                  }});
+                };
+                """
+            )
+            page.add_script_tag(content=FEEDBACK_JS.read_text(encoding="utf-8"))
+            page.locator("#feedback-opener").evaluate(
+                "button => button.addEventListener('click', () => window.gpiLightbulb.open(button))"
+            )
+
+            page.locator("#feedback-opener").click()
+            page.locator('[data-type="bug"]').click()
+            page.locator("#fb-desc").fill("Old draft")
+            page.locator("#fb-submit").click()
+            assert page.locator("#fb-submit").is_disabled()
+
+            page.locator("#lightbulb-close").click()
+            page.locator("#feedback-opener").click()
+            assert not page.locator("#fb-submit").is_disabled()
+            page.locator('[data-type="bug"]').click()
+            page.locator("#fb-desc").fill("New draft")
+
+            page.evaluate(
+                "window.resolvePendingFeedback({json: function () { return Promise.resolve({ok: true}); }})"
+            )
+            page.wait_for_timeout(1300)
+
+            assert page.locator("#lightbulb-modal").get_attribute("hidden") is None
+            assert page.locator("#fb-desc").input_value() == "New draft"
+            assert page.locator("#fb-status").get_attribute("hidden") == ""
+        finally:
+            browser.close()
+
+
+def test_close_and_reopen_ignores_a_success_timer_from_the_previous_session():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.set_content(
+                '<button id="feedback-opener">Open feedback</button>'
+                + _render_enabled_chooser()
+            )
+            page.evaluate(
+                """
+                window.gpiFetch = function () {
+                  return Promise.resolve({json: function () {
+                    return Promise.resolve({ok: true, people: []});
+                  }});
+                };
+                """
+            )
+            page.add_script_tag(content=FEEDBACK_JS.read_text(encoding="utf-8"))
+            page.locator("#feedback-opener").evaluate(
+                "button => button.addEventListener('click', () => window.gpiLightbulb.open(button))"
+            )
+
+            page.locator("#feedback-opener").click()
+            page.locator('[data-type="bug"]').click()
+            page.locator("#fb-desc").fill("Sent draft")
+            page.locator("#fb-submit").click()
+            page.locator("#fb-status").get_by_text("Thanks").wait_for()
+
+            page.locator("#lightbulb-close").click()
+            page.locator("#feedback-opener").click()
+            page.locator('[data-type="bug"]').click()
+            page.locator("#fb-desc").fill("New draft")
+            page.wait_for_timeout(1300)
+
+            assert page.locator("#lightbulb-modal").get_attribute("hidden") is None
+            assert page.locator("#fb-desc").input_value() == "New draft"
+        finally:
+            browser.close()
+
+
 def test_tab_arrow_keys_wrap_and_escape_returns_focus_to_opener():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
