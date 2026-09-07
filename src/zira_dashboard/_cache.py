@@ -29,6 +29,9 @@ class TTLCache:
         self._max = max_entries
         self._store: dict[Hashable, tuple[float, Any]] = {}
         self._lock = threading.RLock()
+        # A write/clear invalidates publication by reads already in flight.
+        # One counter keeps metadata bounded, even for arbitrary cache keys.
+        self._generation = 0
 
     def get_or_compute(self, key: Hashable, compute: Callable[[], Any]) -> Any:
         now = time.monotonic()
@@ -41,10 +44,14 @@ class TTLCache:
                     self._store.pop(key, None)
                     self._store[key] = (ts, value)
                     return value
+            generation = self._generation
         # Compute outside the lock so concurrent misses don't serialize.
         value = compute()
         now = time.monotonic()
         with self._lock:
+            if generation != self._generation:
+                return value
+            self._store.pop(key, None)
             self._store[key] = (now, value)
             # Evict oldest if over capacity.
             while len(self._store) > self._max:
@@ -73,6 +80,8 @@ class TTLCache:
         """Store a value with the current timestamp (TTL window starts now)."""
         now = time.monotonic()
         with self._lock:
+            self._generation += 1
+            self._store.pop(key, None)
             self._store[key] = (now, value)
             while len(self._store) > self._max:
                 oldest_key = next(iter(self._store))
@@ -80,6 +89,7 @@ class TTLCache:
 
     def invalidate(self, key: Hashable | None = None) -> None:
         with self._lock:
+            self._generation += 1
             if key is None:
                 self._store.clear()
             else:

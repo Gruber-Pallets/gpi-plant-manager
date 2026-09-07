@@ -7,6 +7,7 @@ import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from .. import api_keys, object_api, object_models
 
@@ -81,7 +82,7 @@ def _key_row(request: Request) -> dict | JSONResponse:
 @router.post("/execute")
 async def execute(request: Request):
     started = time.perf_counter()
-    key = _key_row(request)
+    key = await run_in_threadpool(_key_row, request)
     if isinstance(key, JSONResponse):
         return key
     try:
@@ -94,13 +95,15 @@ async def execute(request: Request):
         }
         status = 400
     else:
-        body, status = object_api.execute(
+        body, status = await run_in_threadpool(
+            object_api.execute,
             _registry(),
             key,
             payload,
             {"client_ip": request.client.host if request.client else None},
         )
-    object_api.audit_call(
+    await run_in_threadpool(
+        object_api.audit_call,
         key_row=key,
         payload=payload,
         body=body,
@@ -113,7 +116,7 @@ async def execute(request: Request):
 
 
 @router.get("/models")
-async def models(request: Request):
+def models(request: Request):
     key = _key_row(request)
     if isinstance(key, JSONResponse):
         return key
@@ -121,7 +124,7 @@ async def models(request: Request):
 
 
 @router.get("/models/{model_name}/fields")
-async def model_fields(model_name: str, request: Request):
+def model_fields(model_name: str, request: Request):
     key = _key_row(request)
     if isinstance(key, JSONResponse):
         return key

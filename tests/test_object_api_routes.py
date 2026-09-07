@@ -118,3 +118,64 @@ def test_https_required_in_production(monkeypatch):
     )
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "https_required"
+
+
+def test_slow_object_api_does_not_block_other_requests(monkeypatch):
+    """Authentication, reads and audit writes must all leave the loop free."""
+    import asyncio
+    import threading
+    import httpx
+    from fastapi import FastAPI
+    from zira_dashboard.routes import object_api as routes
+
+    for slow_stage in ("auth", "read", "audit"):
+        entered, release = threading.Event(), threading.Event()
+        blocked = []
+
+        def slow_io(stage):
+            if stage == slow_stage:
+                entered.set()
+                if not release.wait(2):
+                    blocked.append(stage)
+
+        def verify(token):
+            slow_io("auth")
+            return {"id": 1, "name": "Test", "scopes": ["admin:*"], "allowed_ips": []}
+
+        def records(self, ctx):
+            slow_io("read")
+            return [{"id": 1, "name": "Dale", "active": True}]
+
+        def audit_write(sql, params=None):
+            slow_io("audit")
+
+        monkeypatch.setattr(api_keys, "verify_key", verify)
+        monkeypatch.setattr("zira_dashboard.object_models.PersonModel.all_records", records)
+        monkeypatch.setattr("zira_dashboard.object_api.db.execute", audit_write)
+        test_app = FastAPI()
+        test_app.include_router(routes.router)
+
+        @test_app.get("/probe")
+        async def probe():
+            release.set()
+            return {"ok": True}
+
+        async def exercise():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=test_app), base_url="http://test"
+            ) as session:
+                pending = asyncio.create_task(session.post(
+                    "/api/v1/object/execute",
+                    headers={"Authorization": "Bearer test"},
+                    json={"model": "plant.person", "method": "search_read"},
+                ))
+                try:
+                    assert await asyncio.to_thread(entered.wait, 3)
+                    assert (await session.get("/probe")).status_code == 200
+                    assert (await pending).status_code == 200
+                finally:
+                    release.set()
+                    await pending
+
+        asyncio.run(exercise())
+        assert not blocked, f"{slow_stage} blocked the request loop"

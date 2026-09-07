@@ -10,6 +10,16 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-09-07
+
+### Smoother loading and fresher saved data
+
+#### Fixes
+
+- **Old data is less likely to return after a save.** A slow read can no longer replace newer saved data in the app's short-term memory.
+- **Requests from connected apps no longer hold up other pages while waiting for data.**
+- **Recently refreshed data stays ready longer.** This avoids some repeat loading.
+
 ## 2026-09-04
 
 ### Send feedback opens first
