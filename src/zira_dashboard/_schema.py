@@ -6,6 +6,8 @@ boot. Kept as a Python constant (not a .sql file) so it always ships in the
 wheel/Railway build with zero packaging config.
 """
 
+from ._time_off_email_schema import TIME_OFF_EMAIL_DDL
+
 SCHEMA_DDL = """
 -- 2026-05-29 migration: the "kiosk" app was renamed to "timeclock". Rename
 -- the existing prod tables + indexes IN PLACE (preserving punch history and
@@ -2865,3 +2867,5 @@ CREATE INDEX IF NOT EXISTS absence_pto_requests_resolution_due_idx
   WHERE state IN ('approved', 'resolved_manually')
     AND task_resolution_step <> 'closed';
 """
+
+SCHEMA_DDL += TIME_OFF_EMAIL_DDL

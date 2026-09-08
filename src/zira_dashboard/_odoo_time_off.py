@@ -186,6 +186,7 @@ def fetch_leaves_for_range(
             "number_of_days",
             "number_of_hours",
             "name",
+            "write_date",
         ],
     )
 

@@ -12,6 +12,13 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-08
 
+### Time-off approval emails
+
+#### Features
+
+- **Employees now get an email when their time off is approved.** It shows the approved dates and hours in English and Spanish. The email goes to the personal address saved in Odoo, or the work address if needed.
+- **Missing email addresses do not block approval.** Add the address in Odoo, and the app will try again. Employees can still check the time clock.
+
 ### Plan for time-off approval emails
 
 - **A plan is ready to email employees when their time off is approved.** The email will show the approved dates and hours. Email delivery has not been added yet.

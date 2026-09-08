@@ -607,6 +607,7 @@ def _upsert_one(leave: dict[str, Any], existing: dict[str, Any] | None) -> None:
         # tick has nothing to do for this row — skip the write.
         unchanged = (
             existing["state"] == state
+            and existing["person_odoo_id"] == person_odoo_id
             and existing["shape"] == shape
             and existing["date_from"] == date_from
             and existing["date_to"] == date_to
@@ -617,6 +618,7 @@ def _upsert_one(leave: dict[str, Any], existing: dict[str, Any] | None) -> None:
             return
         new_row = dict(existing)
         new_row["state"] = state
+        new_row["person_odoo_id"] = person_odoo_id
         new_row["shape"] = shape
         new_row["date_from"] = date_from
         new_row["date_to"] = date_to
@@ -630,9 +632,11 @@ def _upsert_one(leave: dict[str, Any], existing: dict[str, Any] | None) -> None:
         updated = db.query(
             "UPDATE time_off_requests SET state = %s, shape = %s, date_from = %s, "
             "date_to = %s, hour_from = %s, hour_to = %s, "
+            "person_odoo_id = %s, approval_source_updated_at = %s, "
             "last_pulled_at = now(), updated_at = now() "
             "WHERE id = %s AND NOT local_record RETURNING id",
-            (state, shape, date_from, date_to, hour_from, hour_to, existing["id"]),
+            (state, shape, date_from, date_to, hour_from, hour_to, person_odoo_id,
+             _approval_source_updated_at(leave.get("write_date")), existing["id"]),
         )
         if not updated:
             return
@@ -644,10 +648,12 @@ def _upsert_one(leave: dict[str, Any], existing: dict[str, Any] | None) -> None:
             "INSERT INTO time_off_requests "
             "(person_odoo_id, originating_kiosk_user, shape, "
             "holiday_status_id, date_from, date_to, hour_from, hour_to, "
-            "note, state, odoo_leave_id, synced_to_odoo, last_pulled_at) "
-            "VALUES (%s, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, now())",
+            "note, state, odoo_leave_id, synced_to_odoo, last_pulled_at, "
+            "approval_source_updated_at) "
+            "VALUES (%s, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, now(), %s)",
             (person_odoo_id, shape, holiday_status_id, date_from, date_to,
-             hour_from, hour_to, note, state, odoo_leave_id),
+             hour_from, hour_to, note, state, odoo_leave_id,
+             _approval_source_updated_at(leave.get("write_date"))),
         )
         if state == "validate":
             # New HR-entered leave already approved → trigger cascade
@@ -705,6 +711,17 @@ def _delete_missing_from_odoo(
             "DELETE FROM time_off_requests WHERE id = %s",
             (r["id"],),
         )
+
+
+def _approval_source_updated_at(value: Any) -> datetime | None:
+    """Odoo's naive timestamps are UTC; missing/invalid imports cannot email."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
 def _parse_date(value: Any) -> date | None:

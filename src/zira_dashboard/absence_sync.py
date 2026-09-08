@@ -126,6 +126,7 @@ def mirror_approved_absence(
             "shape = 'full_day', holiday_status_id = %s, date_from = %s, date_to = %s, "
             "hour_from = NULL, hour_to = NULL, note = %s, state = 'validate', "
             "odoo_leave_id = %s, synced_to_odoo = TRUE, sync_error = NULL, "
+            "approval_source_updated_at = now(), "
             "last_pulled_at = now(), last_pushed_at = now(), updated_at = now() "
             "WHERE id = %s",
             (holiday_status_id, day, day, note, leave_id, old["id"]),
@@ -139,8 +140,8 @@ def mirror_approved_absence(
         "INSERT INTO time_off_requests "
         "(person_odoo_id, originating_kiosk_user, shape, holiday_status_id, "
         "date_from, date_to, hour_from, hour_to, note, state, odoo_leave_id, "
-        "synced_to_odoo, last_pulled_at, last_pushed_at) "
-        "VALUES (%s, FALSE, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, TRUE, now(), now())",
+        "synced_to_odoo, last_pulled_at, last_pushed_at, approval_source_updated_at) "
+        "VALUES (%s, FALSE, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, TRUE, now(), now(), now())",
         (employee_odoo_id, "full_day", holiday_status_id, day, day, note, "validate", leave_id),
     )
     from . import time_off_sync

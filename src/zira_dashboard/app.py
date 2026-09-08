@@ -205,6 +205,12 @@ async def _tick_time_off_poll():
     await asyncio.to_thread(time_off_sync.poll_odoo_leaves)
 
 
+async def _tick_time_off_email():
+    from . import time_off_email
+
+    await asyncio.to_thread(time_off_email.run_once)
+
+
 async def _tick_time_off_balance():
     """Refresh stale time_off_balances rows from Odoo (older than 10 min) so
     kiosk balance reads don't each pay a per-employee Odoo round-trip."""
@@ -529,6 +535,7 @@ _WARMERS = [
     ("auto-salaried reconcile", _tick_auto_salaried_reconcile, 600),
     ("time-off sync", _tick_time_off_sync, 60),
     ("time-off poll", _tick_time_off_poll, 60),
+    ("time-off approval email", _tick_time_off_email, 60),
     ("time-off balance", _tick_time_off_balance, 600),
     ("anniversary PTO reminders", _tick_anniversary_pto_reminders, 21600),
     ("absence PTO reconcile", _tick_absence_pto_reconcile, 60),

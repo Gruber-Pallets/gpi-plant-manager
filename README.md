@@ -137,3 +137,44 @@ shift ends keeps eligible employees in sync. Every change is written to Odoo
 first, so a rejected write leaves the level unchanged and is reported in the
 run summary. Manual matrix edits still work; a later automated run may promote
 or demote the same two skills.
+
+### Time-off approval emails
+
+New final approvals of current or future time off send an email with the approved
+dates and hours in English and Spanish. Plant Manager uses the employee's personal
+email in Odoo, then their work email if no valid personal address is saved. Keep
+these addresses current in Odoo. The time-clock notices continue to work.
+
+Approvals in Plant Manager and Odoo are covered, including the local approval
+fallback. Pending first approvals, denied or cancelled requests, past leave, and
+historical imports do not send approval emails. Each request gets at most one
+approval email. The message leaves out the leave type and private notes.
+
+Operators can set `TIME_OFF_APPROVAL_EMAIL_RECIPIENT` to `personal_then_work`
+(default), `personal`, or `work`. `TIME_OFF_APPROVAL_EMAIL_ENABLED=0` pauses the
+worker; approvals continue to be saved for processing when it resumes. It does
+not recall mail already accepted by Odoo. Delivery uses the configured Odoo user's
+default sender address, displayed as **GPI Plant Manager**, and Odoo's normal mail
+queue. The API user needs read access to the exact employee's email fields and
+read/create access to `mail.mail` (plus cancellation access for stale queued mail).
+
+The `time_off_approval_email` table records each request's delivery status. The
+worker checks it every minute. `queued` means Odoo accepted the email; `sent`
+means Odoo reports it sent, not proof that it reached the inbox. Missing addresses
+retry hourly; read failures and definite queue rejections retry after five minutes.
+Odoo delivery failures remain `attention` and must be reviewed in Odoo's outgoing
+mail list. Logs include request IDs and fixed reasons, never email addresses or
+message bodies. A useful read-only status query is:
+
+```sql
+SELECT request_id, state, last_error, odoo_mail_id, updated_at
+FROM time_off_approval_email
+WHERE state NOT IN ('sent', 'skipped')
+ORDER BY updated_at;
+```
+
+An uncertain queue response stays `sending` with `delivery_unknown`. The worker
+looks for its stable Message-ID every 15 minutes without creating another email.
+Investigate that exact message in Odoo before taking further action. Do not reset
+or delete the delivery row to retry an uncertain send. Odoo mail records are kept
+after delivery so restarts can read back the same message.
