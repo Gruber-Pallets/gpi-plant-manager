@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-08
 
+### Plan for time-off approval emails
+
+- **A plan is ready to email employees when their time off is approved.** The email will show the approved dates and hours. Email delivery has not been added yet.
+
 ### Completed improvements stay out of the open list
 
 - **Older tasks marked Done are now recognized even if their stage still says New.** A guarded repair can update affected older records so the L10 list shows what is still open.
