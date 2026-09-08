@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Mapping
 from uuid import UUID
 
@@ -523,6 +523,9 @@ def _legacy_stages(client, task_ids: list[int]) -> dict[int, str | None]:
             stages[task_id] = stage[1]
         else:
             raise ContractError("legacy task stage response was malformed")
+        # Odoo task Status can be Done while the stage still says New.
+        if row.get("state") == "1_done":
+            stages[task_id] = "Done"
     return stages
 
 
@@ -972,3 +975,58 @@ __all__ = [
     "readback_diagnostic",
     "reconciliation_counts",
 ]
+
+
+@dataclass(frozen=True)
+class LegacyCompletionRepairReport:
+    feedback_id: int
+    eligible: bool
+    applied: bool
+
+
+def repair_legacy_completion(*, feedback_id: int, client, now: datetime,
+                             apply: bool = False) -> LegacyCompletionRepairReport:
+    """Preview or repair one untouched import of an already-completed task."""
+    safe_id = _positive_signed_64(feedback_id, "feedback id")
+    current = _aware_datetime(now, "repair time")
+    if type(apply) is not bool:
+        raise ValueError("apply must be a boolean")
+    report = preflight(client)
+    if not (report.database_uuid_matches and report.company_matches
+            and report.fields_ok and report.source_value_present):
+        raise TargetIdentityError("dedicated Odoo target identity or contract mismatch")
+    rows = _validated_rollout_rows(feedback_store.feedback_after(safe_id - 1, 1),
+                                   after_id=safe_id - 1, limit=1)
+    if not rows or rows[0]["id"] != safe_id:
+        raise ValueError("feedback record not found")
+    row = rows[0]
+    ineligible = LegacyCompletionRepairReport(safe_id, False, False)
+    if (row["lifecycle_origin"] != "legacy_project_task"
+            or row["status"] not in {"requested", "in_progress"}
+            or row["odoo_task_id"] is None
+            or row["legacy_lifecycle_migrated_at"] is None
+            or row["updated_at"] != row["legacy_lifecycle_migrated_at"]
+            or any(row[k] is not None for k in ("finished_at", "finished_by", "resolution_note"))):
+        return ineligible
+    task_id = row["odoo_task_id"]
+    tasks = client.read_legacy_task_stages([task_id])
+    if (type(tasks) is not list or len(tasks) != 1 or not isinstance(tasks[0], Mapping)
+            or type(tasks[0].get("id")) is not int or tasks[0]["id"] != task_id):
+        raise ContractError("legacy task response was malformed")
+    task = tasks[0]
+    if task.get("state") != "1_done" or type(task.get("write_date")) is not str:
+        return ineligible
+    try:
+        task_updated = datetime.strptime(task["write_date"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+    except ValueError:
+        return ineligible
+    migrated_at = _aware_datetime(row["legacy_lifecycle_migrated_at"], "migration time")
+    if task_updated > migrated_at:
+        return ineligible
+    if apply:
+        feedback_store.repair_legacy_completion(
+            feedback_id=safe_id, expected_odoo_task_id=task_id,
+            expected_projection_version=row["projection_version"],
+            expected_status=row["status"], expected_migrated_at=migrated_at, now=current,
+        )
+    return LegacyCompletionRepairReport(safe_id, True, apply)

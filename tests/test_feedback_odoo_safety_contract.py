@@ -353,6 +353,7 @@ def test_rollout_cli_has_exact_commands_and_no_alias_or_config_overrides():
         "quarantine-readback-diagnostic",
         "quarantine-disposition",
         "quarantine-release-pre-attempt",
+        "repair-legacy-completion",
     }
     assert all(
         selected_parser.allow_abbrev is False for selected_parser in (parser, *command_parsers)
@@ -362,6 +363,7 @@ def test_rollout_cli_has_exact_commands_and_no_alias_or_config_overrides():
         "--help",
         "--confirm-read-only",
         "--confirm-local-migration",
+        "--confirm-local-repair",
         "--confirm-local-backfill",
         "--after-id",
         "--batch-size",

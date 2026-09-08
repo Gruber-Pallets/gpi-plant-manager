@@ -114,6 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--after-id", required=True, type=_nonnegative_id)
     migrate.add_argument("--batch-size", required=True, type=_batch_size)
 
+    repair = commands.add_parser("repair-legacy-completion", allow_abbrev=False)
+    repair.add_argument("--confirm-read-only", action="store_true")
+    repair.add_argument("--confirm-local-repair", action="store_true")
+    repair.add_argument("--feedback-id", required=True, type=_positive_id)
+
     enqueue = commands.add_parser("enqueue-history", allow_abbrev=False)
     enqueue.add_argument("--confirm-local-backfill", action="store_true")
     enqueue.add_argument("--batch-size", required=True, type=_batch_size)
@@ -163,6 +168,7 @@ def _approved_report_types() -> tuple[type, ...]:
         rollout.PreflightReport,
         rollout.DryRunReport,
         rollout.LegacyMigrationReport,
+        rollout.LegacyCompletionRepairReport,
         rollout.EnqueueReport,
         rollout.CanaryReport,
         rollout.ReadbackDiagnosticReport,
@@ -236,6 +242,12 @@ def _command_payload(args: argparse.Namespace) -> dict[str, object]:
             batch_size=args.batch_size,
             client=client,
             now=utc_now(),
+        )
+    elif command == "repair-legacy-completion":
+        require_flag(args.confirm_read_only, "repair requires --confirm-read-only")
+        report = rollout.repair_legacy_completion(
+            feedback_id=args.feedback_id, client=ImprovementsClient.from_env(),
+            now=utc_now(), apply=args.confirm_local_repair,
         )
     elif command == "enqueue-history":
         require_flag(

@@ -2333,6 +2333,7 @@ def test_rollout_cli_exposes_only_the_exact_planned_subcommands():
         "quarantine-readback-diagnostic",
         "quarantine-disposition",
         "quarantine-release-pre-attempt",
+        "repair-legacy-completion",
     }
 
     help_text = parser.format_help().casefold()
@@ -3407,7 +3408,7 @@ def test_task_11_runbook_environment_readme_and_patch_note_are_complete_and_dark
     changelog = (root / "CHANGELOG.md").read_text()
 
     numbered_sections = [line for line in runbook.splitlines() if line.startswith("## ")]
-    assert len(numbered_sections) == 16
+    assert len(numbered_sections) == 17
     assert "fresh retry budget" in runbook
     assert "`keep` does not reset that budget" in runbook
     required_phrases = (
@@ -3444,3 +3445,113 @@ def test_task_11_runbook_environment_readme_and_patch_note_are_complete_and_dark
     ) in changelog
     assert "ODOO_SHARED_REPORTING_WRITE_ENABLED=true" not in runbook
     assert "ODOO_IMPROVEMENTS_WRITE_ENABLED=true" not in runbook
+
+
+def test_legacy_done_state_overrides_stale_new_stage(monkeypatch):
+    client = FakeClient()
+    client.stage_rows = [{"id": 90, "stage_id": [2, "New"], "state": "1_done"}]
+    monkeypatch.setattr(feedback_store, "feedback_after", lambda *_: [legacy_row(7, 90)])
+    apply = MagicMock(return_value=True)
+    monkeypatch.setattr(feedback_store, "apply_legacy_status", apply)
+    migrate_legacy_batch(after_id=6, batch_size=1, client=client, now=aware_now())
+    assert apply.call_args.kwargs["status"] == "completed"
+
+
+def repair_row(**changes):
+    return local_row(11, lifecycle_origin="legacy_project_task", odoo_task_id=3078,
+                     legacy_lifecycle_migrated_at=aware_now(), **changes)
+
+
+def test_legacy_repair_previews_then_applies_only_verified_old_completion(monkeypatch):
+    from zira_dashboard import feedback_rollout as rollout
+    client = FakeClient()
+    client.stage_rows = [{"id": 3078, "stage_id": [55, "New"], "state": "1_done",
+                          "write_date": "2026-01-01 00:00:00"}]
+    monkeypatch.setattr(feedback_store, "feedback_after", lambda *_: [repair_row()])
+    apply = MagicMock()
+    monkeypatch.setattr(feedback_store, "repair_legacy_completion", apply, raising=False)
+    preview = rollout.repair_legacy_completion(feedback_id=11, client=client, now=aware_now())
+    assert preview.eligible and not preview.applied
+    apply.assert_not_called()
+    result = rollout.repair_legacy_completion(feedback_id=11, client=client, now=aware_now(), apply=True)
+    assert result.applied
+    assert apply.call_args.kwargs["expected_odoo_task_id"] == 3078
+    assert apply.call_args.kwargs["expected_projection_version"] == 3
+
+
+@pytest.mark.parametrize("changes", [
+    {"lifecycle_origin": "local"}, {"status": "completed"},
+    {"finished_by": "someone@example.com"}, {"resolution_note": "changed"},
+    {"updated_at": aware_now() + timedelta(seconds=1)},
+])
+def test_legacy_repair_preserves_local_or_changed_lifecycle(monkeypatch, changes):
+    from zira_dashboard import feedback_rollout as rollout
+    row = repair_row()
+    row.update(changes)
+    monkeypatch.setattr(feedback_store, "feedback_after", lambda *_: [row])
+    client = FakeClient()
+    result = rollout.repair_legacy_completion(feedback_id=11, client=client, now=aware_now(), apply=True)
+    assert not result.eligible and not result.applied
+    assert client.events == [("inspect_target",)]
+
+
+@pytest.mark.parametrize("state,write_date", [
+    ("01_in_progress", "2026-01-01 00:00:00"), ("1_canceled", "2026-01-01 00:00:00"),
+    ("1_done", False), ("1_done", "2099-01-01 00:00:00"),
+])
+def test_legacy_repair_requires_done_evidence_predating_migration(monkeypatch, state, write_date):
+    from zira_dashboard import feedback_rollout as rollout
+    monkeypatch.setattr(feedback_store, "feedback_after", lambda *_: [repair_row()])
+    client = FakeClient()
+    client.stage_rows = [{"id": 3078, "stage_id": [55, "New"], "state": state, "write_date": write_date}]
+    result = rollout.repair_legacy_completion(feedback_id=11, client=client, now=aware_now(), apply=True)
+    assert not result.eligible and not result.applied
+
+
+@pytest.mark.parametrize("results", [
+    [None], [{"projection_version": 4}, None],
+])
+def test_legacy_repair_store_rejects_races_and_missing_sync(monkeypatch, results):
+    cursor, _ = install_cursor(monkeypatch, feedback_store, results)
+    with pytest.raises(feedback_store.InvalidTransition):
+        feedback_store.repair_legacy_completion(
+            feedback_id=11, expected_odoo_task_id=3078, expected_projection_version=3,
+            expected_status="requested", expected_migrated_at=aware_now(), now=aware_now(),
+        )
+    sql, params = cursor.calls[0]
+    assert "odoo_task_id = %s AND projection_version = %s" in sql
+    assert "lifecycle_origin = 'legacy_project_task'" in sql
+    assert "legacy_lifecycle_migrated_at = %s AND updated_at = %s" in sql
+    assert params[2:6] == (11, 3078, 3, "requested")
+
+
+def test_legacy_repair_store_enqueues_in_same_transaction_without_fabricating_history(monkeypatch):
+    cursor, transactions = install_cursor(monkeypatch, feedback_store,
+                                        [{"projection_version": 4}, {"feedback_id": 11}])
+    feedback_store.repair_legacy_completion(
+        feedback_id=11, expected_odoo_task_id=3078, expected_projection_version=3,
+        expected_status="requested", expected_migrated_at=aware_now(), now=aware_now(),
+    )
+    assert transactions == [cursor]
+    assert len(cursor.calls) == 2
+    feedback_sql, _ = cursor.calls[0]
+    assigned = feedback_sql.split("WHERE")[0]
+    assert "finished_at" not in assigned and "finished_by" not in assigned
+    sync_sql, sync_params = cursor.calls[1]
+    assert "desired_version = %s" in sync_sql
+    assert "state =" not in sync_sql  # Preserve quarantined/in-flight attempts.
+    assert sync_params == (4, aware_now(), aware_now(), 11, 3)
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_legacy_repair_cli_is_exact_and_dry_by_default(monkeypatch, apply):
+    from zira_dashboard import feedback_rollout as rollout
+    repair = MagicMock(return_value=rollout.LegacyCompletionRepairReport(11, True, apply))
+    monkeypatch.setattr(rollout, "repair_legacy_completion", repair)
+    monkeypatch.setattr(cli.ImprovementsClient, "from_env", lambda: "client")
+    argv = ["repair-legacy-completion", "--feedback-id", "11", "--confirm-read-only"]
+    if apply:
+        argv.append("--confirm-local-repair")
+    payload = cli._command_payload(cli.build_parser().parse_args(argv))
+    assert repair.call_args.kwargs["apply"] is apply
+    assert payload["report"] == {"feedback_id": 11, "eligible": True, "applied": apply}

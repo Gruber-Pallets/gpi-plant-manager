@@ -899,7 +899,7 @@ class ImprovementsClient:
             or any(not _is_positive_identifier(task_id) for task_id in task_ids)
         ):
             raise ContractError("legacy task ids must be 1 to 100 unique positive integers")
-        result = self._execute("project.task", "read", list(task_ids), fields=["id", "stage_id"])
+        result = self._execute("project.task", "read", list(task_ids), fields=["id", "stage_id", "state", "write_date"])
         rows = _row_list(result, label="legacy task stage read", maximum=len(task_ids))
         seen: set[int] = set()
         for row in rows:

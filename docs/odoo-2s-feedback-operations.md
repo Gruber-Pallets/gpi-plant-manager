@@ -302,3 +302,27 @@ Until each approved live stage completes, explicitly treat these as unproven:
 
 Unit tests and dark deployment prove code contracts only. They are not proof of
 any item above and do not authorize the next checkpoint.
+
+
+## Repair an older completion imported as open
+
+Legacy imports now recognize Odoo task Status `1_done` as Completed even when
+its stage still says New. Existing imports can be previewed one exact Feedback
+ID at a time:
+
+```sh
+python -m scripts.feedback_odoo_rollout repair-legacy-completion --confirm-read-only --feedback-id 11
+```
+
+The preview reads the target identity and original task. It is eligible only
+when an untouched `legacy_project_task` import is open, has no completion
+metadata, and the original task is Done with a last-write time no later than
+the import. Local-authority, terminal, changed, missing, and ambiguous records
+are left alone. To apply the reviewed eligible correction, add
+`--confirm-local-repair`. A concurrent local change fails closed.
+
+The repair changes only local status and queues the next normal mirror version
+in the same transaction. It preserves migration provenance and does not invent
+a completion date/person, reset quarantine, write an owner task, or change gates.
+Let the normal worker synchronize; read the same Odoo mirror and L10 list back.
+A later task change is outside this historical-import repair and needs review.

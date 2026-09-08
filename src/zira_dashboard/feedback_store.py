@@ -1608,3 +1608,39 @@ def transition(
         except feedback_task_delivery.StateTransitionError as exc:
             raise InvalidTransition("feedback task sync state is missing") from exc
         return version
+
+
+def repair_legacy_completion(*, feedback_id: int, expected_odoo_task_id: int,
+                             expected_projection_version: int, expected_status: str,
+                             expected_migrated_at: datetime, now: datetime) -> None:
+    """CAS an untouched legacy import and enqueue its next mirror version atomically."""
+    feedback_id = _positive_signed_64(feedback_id, "feedback id")
+    task_id = _positive_signed_64(expected_odoo_task_id, "legacy task id")
+    version = _positive_signed_64(expected_projection_version, "projection version")
+    next_version = _positive_signed_64(version + 1, "resulting projection version")
+    migrated_at = _aware_datetime(expected_migrated_at, "migration time")
+    current = _aware_datetime(now, "repair time")
+    if expected_status not in {"requested", "in_progress"}:
+        raise ValueError("legacy repair requires an open status")
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE feedback SET status = 'completed', projection_version = %s, updated_at = %s "
+            "WHERE id = %s AND odoo_task_id = %s AND projection_version = %s "
+            "AND status = %s AND lifecycle_origin = 'legacy_project_task' "
+            "AND legacy_lifecycle_migrated_at = %s AND updated_at = %s "
+            "AND finished_at IS NULL AND finished_by IS NULL AND resolution_note IS NULL "
+            "RETURNING projection_version",
+            (next_version, current, feedback_id, task_id, version, expected_status,
+             migrated_at, migrated_at),
+        )
+        updated = cur.fetchone()
+        if not isinstance(updated, Mapping) or updated.get("projection_version") != next_version:
+            raise InvalidTransition("legacy repair conflicted with local state")
+        cur.execute(
+            "UPDATE feedback_odoo_sync SET desired_version = %s, due_at = %s, updated_at = %s "
+            "WHERE feedback_id = %s AND desired_version = %s RETURNING feedback_id",
+            (next_version, current, current, feedback_id, version),
+        )
+        synced = cur.fetchone()
+        if not isinstance(synced, Mapping) or synced.get("feedback_id") != feedback_id:
+            raise InvalidTransition("legacy repair sync state conflicted")

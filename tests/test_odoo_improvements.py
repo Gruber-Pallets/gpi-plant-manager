@@ -1258,7 +1258,7 @@ def test_legacy_task_stage_read_fixes_ids_and_fields(monkeypatch):
     )
 
     assert client.read_legacy_task_stages([90, 91]) == rows
-    assert calls == [("project.task", "read", ([90, 91],), {"fields": ["id", "stage_id"]})]
+    assert calls == [("project.task", "read", ([90, 91],), {"fields": ["id", "stage_id", "state", "write_date"]})]
 
 
 @pytest.mark.parametrize(

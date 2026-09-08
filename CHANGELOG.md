@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-08
 
+### Completed improvements stay out of the open list
+
+- **Older tasks marked Done are now recognized even if their stage still says New.** A guarded repair can update affected older records so the L10 list shows what is still open.
+
 ### Cleaner schedule PDFs
 
 - **Schedule PDFs no longer show the Odoo preview banner, blue location bubbles, or extra list of people from Odoo.** The printed schedule is easier to read.
