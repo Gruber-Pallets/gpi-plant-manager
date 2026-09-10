@@ -85,15 +85,56 @@ def test_wc_by_slug_unknown_returns_none(monkeypatch):
     assert wc_dashboard_data.wc_by_slug("ghost") is None
 
 
-def test_assigned_operators_for_wc(monkeypatch):
-    from zira_dashboard import wc_dashboard_data, staffing
+def test_planned_operators_by_work_center_returns_complete_filtered_plan(monkeypatch):
+    from zira_dashboard import attendance, staffing, wc_dashboard_data
 
-    monkeypatch.setattr(staffing, "load_schedule", lambda d: staffing.Schedule(
-        day=d, published=True,
-        assignments={"Repair 1": ["Christian", "Jose L"], "Repair 2": ["Alice"]},
-    ))
-    out = wc_dashboard_data.assigned_operators_for_wc("Repair 1", _date(2026, 5, 13))
-    assert out == ["Christian", "Jose L"]
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda d: staffing.Schedule(
+            day=d,
+            published=True,
+            assignments={
+                "Repair 1": ["Christian", "Jose L"],
+                "Repair 2": ["Alice"],
+                staffing.TIME_OFF_KEY: ["Vacation Person"],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        attendance, "full_day_absent_names", lambda d: {"Jose L"}
+    )
+
+    assert wc_dashboard_data.planned_operators_by_work_center(
+        _date(2026, 5, 13)
+    ) == {
+        "Repair 1": ["Christian"],
+        "Repair 2": ["Alice"],
+    }
+
+
+def test_assigned_operators_for_wc_remains_plan_only(monkeypatch):
+    from zira_dashboard import attendance, staffing, wc_dashboard_data
+
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda d: staffing.Schedule(
+            day=d,
+            published=True,
+            assignments={"Repair 1": ["Jose O."]},
+        ),
+    )
+    monkeypatch.setattr(attendance, "full_day_absent_names", lambda d: set())
+    monkeypatch.setattr(
+        wc_dashboard_data,
+        "live_people_at_work_center",
+        lambda _wc_name, _day: ["Christian C."],
+    )
+
+    assert wc_dashboard_data.assigned_operators_for_wc(
+        "Repair 1", _date(2026, 5, 13)
+    ) == ["Jose O."]
 
 
 def test_assigned_operators_for_wc_excludes_full_day_absent(monkeypatch):

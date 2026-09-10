@@ -18,7 +18,7 @@
      {% endcall %}
 #}
 
-{% macro tv_header(name, crumb=None, right=None, right_label="OPERATORS", right_items=None, right_class=None, title_meta=None, right_icon=None) -%}
+{% macro tv_header(name, crumb=None, right=None, right_label="OPERATORS", right_items=None, right_class=None, title_meta=None, right_icon=None, right_operators=None) -%}
 <div class="tv-header">
   <div class="tv-header-main">
     {%- if crumb %}<div class="crumb">{{ crumb }}</div>{% endif %}
@@ -34,7 +34,7 @@
   {# Center slot. Always emitted (even when empty) so the header keeps its
      three-column grid shape whether or not a caller passes content. #}
   <div class="tv-header-center">{% if caller %}{{ caller() }}{% endif %}</div>
-  {%- if right or right_items %}
+  {%- if right or right_items or right_operators is not none %}
   <div class="right{% if right_items %} tv-header-right-items{% endif %}{% if right_class %} {{ right_class }}{% endif %}{% if right_icon %} tv-header-right-has-icon{% endif %}">
     {%- if right_icon %}
     <span class="tv-header-right-icon" aria-hidden="true">{{ right_icon }}</span>
@@ -51,6 +51,16 @@
         <span class="tv-header-right-meta">{{ "%.0f"|format(item.units) }} pallets</span>
         {%- endif %}
       </div>
+      {%- endfor %}
+    </div>
+    {%- elif right_operators is not none %}
+    <div class="name tv-header-current-operators">
+      {%- for operator in right_operators %}
+      <span class="current-operator {{ 'physically-present' if operator.physically_present else 'planned-only' }}">
+        {{ operator.person_name }}
+      </span>{% if not loop.last %}<span aria-hidden="true"> · </span>{% endif %}
+      {%- else %}
+      <span class="current-operator-empty">No one here now</span>
       {%- endfor %}
     </div>
     {%- else %}

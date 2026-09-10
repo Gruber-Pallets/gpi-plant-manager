@@ -178,6 +178,18 @@ html[data-tv-theme] .tv-header .name {
   letter-spacing: -0.03em;
 }
 html[data-tv-theme] .tv-header .right { text-align: right; }
+html[data-tv-theme] .tv-header-current-operators .current-operator.physically-present {
+  color: var(--fg);
+}
+html[data-tv-theme] .tv-header-current-operators .current-operator.planned-only {
+  color: var(--muted);
+  font-weight: 500;
+}
+html[data-tv-theme] .tv-header-current-operators .current-operator-empty {
+  color: var(--muted);
+  font-style: italic;
+  font-weight: 500;
+}
 
 /* Center slot holds the GOAT watch banner (passed in via the tv_header
    {% call %} block). Vertically centered against the tall title/operator

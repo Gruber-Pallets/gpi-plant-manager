@@ -74,30 +74,30 @@ def wc_by_slug(slug: str):
     return None
 
 
-def assigned_operators_for_wc(wc_name: str, day: date) -> list[str]:
-    """Return the names assigned to this specific WC for `day`.
-
-    Starts from the published schedule, drops full-day absences, then adds
-    anyone currently at this center in Odoo so a live transfer is visible
-    before the saved plan catches up.
-    """
+def planned_operators_by_work_center(day: date) -> dict[str, list[str]]:
+    """Return the complete plan for ``day``, excluding full-day absences."""
     from . import staffing
+
     try:
-        sched = staffing.load_schedule(day)
+        schedule = staffing.load_schedule(day)
     except Exception:
-        return []
-    names = list(sched.assignments.get(wc_name, []) or [])
+        return {}
     try:
         from . import attendance
+
         absent = set(attendance.full_day_absent_names(day))
     except Exception:
         absent = set()
-    if absent:
-        names = [name for name in names if name not in absent]
-    for live_name in live_people_at_work_center(wc_name, day):
-        if live_name not in names:
-            names.append(live_name)
-    return names
+    return {
+        wc_name: [name for name in names if name not in absent]
+        for wc_name, names in schedule.assignments.items()
+        if wc_name != staffing.TIME_OFF_KEY
+    }
+
+
+def assigned_operators_for_wc(wc_name: str, day: date) -> list[str]:
+    """Compatibility wrapper returning only this work center's saved plan."""
+    return list(planned_operators_by_work_center(day).get(wc_name, ()))
 
 
 def live_people_at_work_center(wc_name: str, day: date) -> list[str]:

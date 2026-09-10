@@ -11,12 +11,14 @@ are shared across every WC under page='operator'.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import (
+    attendance_location_snapshot,
+    current_operators,
     layout_store,
     shift_config,
     wc_dashboard_data,
@@ -82,15 +84,45 @@ def _render_wc_dashboard(
         return cached
 
     wc_name = loc.name
-    operators = wc_dashboard_data.assigned_operators_for_wc(wc_name, day)
+    planned_by_wc = wc_dashboard_data.planned_operators_by_work_center(day)
+    planned_operators = list(planned_by_wc.get(wc_name, ()))
+    current_operator_rows = ()
+    if is_today:
+        as_of_utc = datetime.now(UTC)
+        try:
+            location_snapshot = attendance_location_snapshot.read_location_snapshot(
+                day, as_of_utc=as_of_utc
+            )
+            operator_source = current_operators.source_from_location_snapshot(
+                location_snapshot
+            )
+        except Exception:
+            operator_source = current_operators.OperatorSourceSnapshot(
+                (), (), False, True, False
+            )
+        try:
+            from .. import attendance
+
+            planned_employee_ids = attendance.name_to_person_id()
+        except Exception:
+            planned_employee_ids = {}
+        current_operator_rows = current_operators.build_display_by_work_center(
+            planned_by_wc,
+            planned_employee_ids=planned_employee_ids,
+            absent_names=set(),
+            source=operator_source,
+            is_today=True,
+        ).get(wc_name, ())
+    operators = planned_operators
     operators_display = " · ".join(operators)
     groups = work_centers_store.groups(loc) or []
     wc_group = groups[0] if groups else None
 
     pallets = wc_dashboard_data.pallets_banner(wc_name, day)
-    # Nobody scheduled AND nothing produced yet → a calm "not staffed" view,
+    # Nobody displayed AND nothing produced yet → a calm "not staffed" view,
     # not red zeros and a "-246 BEHIND" GOAT delta against an empty station.
-    no_activity = not operators and int(pallets.get("units_today") or 0) == 0
+    staffed = bool(current_operator_rows) if is_today else bool(operators)
+    no_activity = not staffed and int(pallets.get("units_today") or 0) == 0
     progress = wc_dashboard_data.fifteen_min_progress_buckets(wc_name, day)
     kpi = wc_dashboard_data.kpi_tiles(wc_name, day)
     report = wc_dashboard_data.downtime_report(wc_name, day) or {}
@@ -125,6 +157,8 @@ def _render_wc_dashboard(
             "wc_group": wc_group,
             "operators": operators,
             "operators_display": operators_display,
+            "current_operator_rows": current_operator_rows,
+            "is_live_operator_display": is_today,
             "no_activity": no_activity,
             "today": today.isoformat(),
             "operator_day": day.isoformat(),

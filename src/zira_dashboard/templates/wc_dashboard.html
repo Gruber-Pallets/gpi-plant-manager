@@ -45,7 +45,8 @@
   {% call tv_header(
       wc_name,
       crumb="OPERATOR · " + (wc_group or "")|upper,
-      right=operators_display or "(unassigned)",
+      right=(operators_display or "(unassigned)") if not is_live_operator_display else none,
+      right_operators=current_operator_rows if is_live_operator_display else none,
   ) %}{% include "_ribbon_winners_banner.html" %}{% include "_goat_watch_banner.html" %}{% endcall %}
 {% else %}
   <header>
@@ -69,7 +70,16 @@
         {% endfor %}
       </select>
       <span class="operator-strip-op">
-        {% if operators_display %}
+        {% if is_live_operator_display %}
+          <span class="op-icon" aria-hidden="true">👤</span>
+          {% for operator in current_operator_rows %}
+            <span class="current-operator {{ 'physically-present' if operator.physically_present else 'planned-only' }}">
+              {{ operator.person_name }}
+            </span>{% if not loop.last %}<span aria-hidden="true"> · </span>{% endif %}
+          {% else %}
+            <span class="current-operator-empty">No one here now</span>
+          {% endfor %}
+        {% elif operators_display %}
           <span class="op-icon" aria-hidden="true">👤</span> {{ operators_display }}
         {% else %}
           <em class="op-unassigned">(unassigned)</em>
@@ -90,7 +100,7 @@
 {% if no_activity %}
 <div class="wc-idle-notice">
   <span class="wc-idle-icon" aria-hidden="true">🌙</span>
-  No one is scheduled on <b>{{ wc_name }}</b>{% if is_today %} today{% else %} on {{ operator_day }}{% endif %} — the numbers below stay at
+  {% if is_live_operator_display %}No one is here now at{% else %}No one is scheduled on{% endif %} <b>{{ wc_name }}</b>{% if is_today %} today{% else %} on {{ operator_day }}{% endif %} — the numbers below stay at
   zero until someone clocks in here.
 </div>
 {% endif %}

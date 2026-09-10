@@ -443,6 +443,18 @@ html[data-tv-theme="dark"] .wc-dashboard .grid-stack-item[gs-id^="kpi-"] .val { 
   flex: 0 1 auto;
 }
 .wc-dashboard .operator-strip-op .op-icon { margin-right: 0.25rem; opacity: 0.85; }
+.wc-dashboard .operator-strip-op .current-operator.physically-present {
+  color: var(--fg, #1f2937);
+}
+.wc-dashboard .operator-strip-op .current-operator.planned-only {
+  color: var(--muted, #6b7280);
+  font-weight: 500;
+}
+.wc-dashboard .operator-strip-op .current-operator-empty {
+  color: var(--muted, #6b7280);
+  font-style: italic;
+  font-weight: 500;
+}
 .wc-dashboard .operator-strip-op .op-unassigned {
   color: var(--muted, #6b7280);
   font-weight: 500;

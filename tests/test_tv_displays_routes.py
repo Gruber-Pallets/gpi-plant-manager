@@ -197,7 +197,14 @@ def test_get_tv_wc_valid_renders_dashboard(monkeypatch):
     green in tests while the actual plant TVs went dark. This drives the real
     dispatcher end-to-end so the dispatch->render wiring is covered.
     """
-    from zira_dashboard import staffing, wc_dashboard_data, work_centers_store
+    from zira_dashboard import (
+        attendance,
+        attendance_location_snapshot,
+        current_operators,
+        staffing,
+        wc_dashboard_data,
+        work_centers_store,
+    )
 
     class _Loc:
         name = "Repair 1"
@@ -214,8 +221,31 @@ def test_get_tv_wc_valid_renders_dashboard(monkeypatch):
                         lambda s: loc if s == "repair-1" else None)
     monkeypatch.setattr(work_centers_store, "groups", lambda l: ["Repairs"])
     monkeypatch.setattr(work_centers_store, "goal_per_day", lambda l: 200)
-    monkeypatch.setattr(wc_dashboard_data, "assigned_operators_for_wc",
-                        lambda nm, d: ["Christian", "Jose L"])
+    monkeypatch.setattr(
+        wc_dashboard_data,
+        "planned_operators_by_work_center",
+        lambda d: {"Repair 1": ["Christian", "Jose L"]},
+    )
+    monkeypatch.setattr(
+        attendance,
+        "name_to_person_id",
+        lambda: {"Christian": "101", "Jose L": "102"},
+    )
+    monkeypatch.setattr(
+        attendance_location_snapshot,
+        "read_location_snapshot",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        current_operators,
+        "source_from_location_snapshot",
+        lambda _snapshot: current_operators.OperatorSourceSnapshot(
+            presences=(),
+            departures=(),
+            available=True,
+            mirror_owned=True,
+        ),
+    )
     monkeypatch.setattr(wc_dashboard_data, "pallets_banner",
                         lambda nm, d: {"units_today": 87, "target_today": 100,
                                        "target_full_day": 200, "pct_of_target": 87.0})
@@ -240,6 +270,37 @@ def test_get_tv_wc_valid_renders_dashboard(monkeypatch):
     assert r.status_code == 200
     assert 'data-tv-theme="dark"' in r.text
     assert "Repair 1" in r.text
+
+
+def test_tv_header_keeps_existing_generic_right_markup_without_operator_rows():
+    from zira_dashboard.deps import templates
+
+    items_template = templates.env.from_string(
+        '{% from "_tv_header.html" import tv_header %}'
+        '{{ tv_header("Leaderboard", right_label="CURRENT GOATS", '
+        'right_items=items, right_class="goat-class", right_icon="🐐") }}'
+    )
+
+    html = items_template.render(
+        items=[{"label": "Repair GOAT", "name": "Maria S.", "units": 900}]
+    )
+
+    assert 'class="right tv-header-right-items goat-class tv-header-right-has-icon"' in html
+    assert '<span class="tv-header-right-icon" aria-hidden="true">🐐</span>' in html
+    assert 'class="tv-header-right-chip"' in html
+    assert "CURRENT GOATS" in html
+    assert "Repair GOAT" in html
+    assert "Maria S." in html
+    assert "900 pallets" in html
+
+    right_template = templates.env.from_string(
+        '{% from "_tv_header.html" import tv_header %}'
+        '{{ tv_header("Repair 1", right="Christian · Jose L") }}'
+    )
+    right_html = right_template.render()
+    assert '<div class="right">' in right_html
+    assert '<div class="crumb">OPERATORS</div>' in right_html
+    assert '<div class="name">Christian · Jose L</div>' in right_html
 
 
 def test_legacy_tv_d_redirects_to_new_path():

@@ -26,8 +26,16 @@ def _stub_wc(monkeypatch):
     calls: the render consumes ``fifteen_min_progress_buckets`` and
     ``kpi_tiles`` (the ``daily_progress``/``fifteen_min_increments`` helpers
     they replaced are no longer called by the render)."""
-    from zira_dashboard import wc_dashboard_data, work_centers_store
+    from zira_dashboard import (
+        _http_cache,
+        attendance,
+        attendance_location_snapshot,
+        current_operators,
+        wc_dashboard_data,
+        work_centers_store,
+    )
 
+    _http_cache.invalidate_all_cache()
     class _Loc:
         name = "Repair 1"
         meter_id = "meter-1"
@@ -38,8 +46,31 @@ def _stub_wc(monkeypatch):
     monkeypatch.setattr(wc_dashboard_data, "wc_by_slug", lambda s: fake if s == "repair-1" else None)
     monkeypatch.setattr(work_centers_store, "groups", lambda loc: ["Repairs"])
     monkeypatch.setattr(work_centers_store, "goal_per_day", lambda loc: 200)
-    monkeypatch.setattr(wc_dashboard_data, "assigned_operators_for_wc",
-                        lambda nm, d: ["Christian", "Jose L"])
+    monkeypatch.setattr(
+        wc_dashboard_data,
+        "planned_operators_by_work_center",
+        lambda d: {"Repair 1": ["Christian", "Jose L"]},
+    )
+    monkeypatch.setattr(
+        attendance,
+        "name_to_person_id",
+        lambda: {"Christian": "101", "Jose L": "102"},
+    )
+    monkeypatch.setattr(
+        attendance_location_snapshot,
+        "read_location_snapshot",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        current_operators,
+        "source_from_location_snapshot",
+        lambda _snapshot: current_operators.OperatorSourceSnapshot(
+            presences=(),
+            departures=(),
+            available=True,
+            mirror_owned=True,
+        ),
+    )
     monkeypatch.setattr(wc_dashboard_data, "pallets_banner",
                         lambda nm, d: {"units_today": 87, "target_today": 100,
                                        "target_full_day": 200, "pct_of_target": 87.0})
@@ -68,7 +99,10 @@ def test_editor_route_renders_with_drag(monkeypatch):
     assert "/static/tv-mode.css" not in r.text
     # Header renders the WC name + operator list.
     assert "Repair 1" in r.text
-    assert "Christian · Jose L" in r.text
+    assert "Christian" in r.text
+    assert "Jose L" in r.text
+    assert r.text.count('class="current-operator planned-only"') == 2
+    assert 'class="current-operator physically-present"' not in r.text
     # All operator-dashboard widgets present (shared /recycling-style layout;
     # the KPI row was consolidated to a single Pallets/hr tile).
     for wid in ("kpi-pph", "pallets-banner", "progress-15min", "cumulative-daily",
@@ -89,6 +123,7 @@ def test_tv_route_renders_with_dark_theme_and_no_chrome(monkeypatch):
     assert "tv-refresh.js" in r.text
     # Same widgets present.
     assert 'gs-id="pallets-banner"' in r.text
+    assert r.text.count('class="current-operator planned-only"') == 2
 
 
 def test_tv_route_supports_light_theme_via_query(monkeypatch):
@@ -112,11 +147,13 @@ def test_unknown_slug_returns_404(monkeypatch):
 def test_unassigned_wc_renders_with_placeholder(monkeypatch):
     _stub_wc(monkeypatch)
     from zira_dashboard import wc_dashboard_data
-    monkeypatch.setattr(wc_dashboard_data, "assigned_operators_for_wc", lambda nm, d: [])
+    monkeypatch.setattr(
+        wc_dashboard_data, "planned_operators_by_work_center", lambda d: {}
+    )
     c = TestClient(app)
     r = c.get("/tv/wc/repair-1")
     assert r.status_code == 200
-    assert "(unassigned)" in r.text
+    assert "No one here now" in r.text
 
 
 def test_operator_route_uses_shared_layout_key(monkeypatch):
@@ -197,15 +234,16 @@ def test_operator_dashboard_renders_operator_strip(monkeypatch):
 
 
 def test_operator_dashboard_unassigned_strip(monkeypatch):
-    """With no operators assigned, the strip shows '(unassigned)'."""
+    """With nobody planned or present, the strip says nobody is here now."""
     _stub_wc(monkeypatch)
     from zira_dashboard import wc_dashboard_data
-    monkeypatch.setattr(wc_dashboard_data, "assigned_operators_for_wc",
-                        lambda nm, d: [])
+    monkeypatch.setattr(
+        wc_dashboard_data, "planned_operators_by_work_center", lambda d: {}
+    )
     c = TestClient(app)
     r = c.get("/wc/repair-1")
     assert r.status_code == 200
-    assert "(unassigned)" in r.text
+    assert "No one here now" in r.text
 
 
 def test_operator_dashboard_renames_remaining_widget_ids(monkeypatch):
