@@ -12,6 +12,7 @@ from zira_dashboard import (
     live_cache,
     machine_breakdown,
     production_segments,
+    recycling_data,
     recycling_range,
     settings_store,
     shift_config,
@@ -31,7 +32,7 @@ OPERATOR_ROWS = (
 )
 
 
-def test_live_department_data_shows_unplanned_christian_without_changing_plan(
+def test_zero_production_station_is_active_from_unplanned_physical_presence(
     monkeypatch,
 ):
     station = Station("dismantler-3", "Dismantler 3", "Dismantler", "Recycling")
@@ -64,7 +65,7 @@ def test_live_department_data_shows_unplanned_christian_without_changing_plan(
         lambda *_args, **_kwargs: [
             SimpleNamespace(
                 station=station,
-                units=100,
+                units=0,
                 downtime_minutes=0,
                 active_intervals=(),
                 last_reading_at=None,
@@ -139,6 +140,8 @@ def test_live_department_data_shows_unplanned_christian_without_changing_plan(
         ),
     )
     assert live["schedule_assignments"]["Dismantler 3"] == []
+    assert live["active_wc_names"] == {"Dismantler 3"}
+    assert live["per_wc_units"] == {"Dismantler 3": 0}
 
 
 def test_canonical_department_projection_reuses_exact_location_snapshot(monkeypatch):
@@ -173,41 +176,57 @@ def test_canonical_department_projection_reuses_exact_location_snapshot(monkeypa
     assert projection.location_snapshot is snapshot
 
 
-def test_current_rows_attach_after_bar_geometry_is_complete():
-    rows = [
-        {
-            "name": "Repair 4",
-            "units": 548,
-            "expected": 725,
-            "segments": [
+def test_real_transfer_bar_is_unchanged_when_current_rows_are_attached():
+    bars = recycling_data.build_bars(
+        "Repair",
+        agg_active_names={"Repair 4"},
+        agg_category={"Repair 4": "Repair"},
+        agg_units={"Repair 4": 548},
+        agg_expected={"Repair 4": 725.0},
+        agg_who_today={"Repair 4": "Ana M."},
+        is_range=False,
+        agg_downtime={},
+        agg_segments={
+            "Repair 4": (
                 {
-                    "start_pct": 0.0,
-                    "actual_pct": 64.0,
-                    "shortfall_start_pct": 64.0,
-                    "shortfall_pct": 23.0,
-                    "finish_pct": 87.0,
-                    "runway_pct": 87.0,
+                    "person_name": "Humberto S.",
+                    "person_label": "Humberto S.",
+                    "time_label": "7a-2:33p",
+                    "actual_units": 516.0,
+                    "goal_units": 700.0,
+                    "runway_units": 700.0,
+                    "is_active": False,
+                    "result": "behind",
+                    "result_label": "184 behind",
                 },
                 {
-                    "start_pct": 87.0,
-                    "actual_pct": 4.0,
-                    "shortfall_start_pct": 91.0,
-                    "shortfall_pct": 0.0,
-                    "finish_pct": 90.0,
-                    "runway_pct": 4.0,
+                    "person_name": "Ana M.",
+                    "person_label": "Ana M.",
+                    "time_label": "since 2:35p",
+                    "actual_units": 32.0,
+                    "goal_units": 25.0,
+                    "runway_units": 32.0,
+                    "is_active": True,
+                    "result": "ahead",
+                    "result_label": "7 ahead",
                 },
-            ],
-        }
-    ]
-    before = deepcopy(rows)
+            )
+        },
+        agg_segment_display={"Repair 4": True},
+        agg_producers={"Repair 4": ("Humberto S.", "Ana M.")},
+        is_live=True,
+    )
+    before = deepcopy(bars)
 
     returned = departments._attach_current_operator_rows(
-        rows, {"Repair 4": OPERATOR_ROWS}
+        bars, {"Repair 4": OPERATOR_ROWS}
     )
 
-    assert returned is rows
-    assert rows[0]["current_operators"] == OPERATOR_ROWS
-    assert {key: value for key, value in rows[0].items() if key != "current_operators"} == (
+    assert returned is bars
+    assert bars[0]["has_segments"] is True
+    assert len(bars[0]["segments"]) == 2
+    assert bars[0]["current_operators"] == OPERATOR_ROWS
+    assert {key: value for key, value in bars[0].items() if key != "current_operators"} == (
         before[0]
     )
 
@@ -257,7 +276,7 @@ def test_range_aggregate_carries_current_rows_only_for_single_day():
     assert ranged.single_day_current_operator_rows == {}
 
 
-def _bar(*, name: str = "Dismantler 3"):
+def _bar(*, name: str = "Dismantler 3", current_rows=OPERATOR_ROWS):
     return {
         "name": name,
         "who": "Past Worker",
@@ -273,18 +292,22 @@ def _bar(*, name: str = "Dismantler 3"):
         "no_one_here_now": False,
         "show_segment_worker_names": False,
         "has_worker_history": True,
-        "current_operators": OPERATOR_ROWS,
+        "current_operators": current_rows,
     }
 
 
 def _render_bar(*, orientation: str) -> str:
+    return _render_bar_with_item(_bar(), orientation=orientation)
+
+
+def _render_bar_with_item(item, *, orientation: str) -> str:
     template = templates.env.from_string(
         '{% from "_department_dashboard_widgets.html" import '
         "department_bar_chart with context %}"
         "{{ department_bar_chart('bars', items) }}"
     )
     return template.render(
-        items=[_bar()],
+        items=[item],
         customs={"bars": {"orientation": orientation}},
         is_range=False,
         tv_mode=orientation == "vertical",
@@ -306,11 +329,23 @@ def test_horizontal_and_vertical_labels_render_presence_classes():
         assert "Planned Person" in html
         assert "Christian C." in html
         assert "Dismantler 3" in html
+        assert (
+            'title="Planned Person + Christian C. — 100 / 90 expected (111%)"'
+            in html
+        )
+        assert 'title="Past Worker — 100 / 90 expected (111%)"' not in html
         assert "from Odoo" not in html
         assert "unplanned" not in html
 
 
-def test_downtime_label_renders_presence_classes():
+def test_bar_title_keeps_legacy_name_without_current_rows():
+    for orientation in ("horizontal", "vertical"):
+        html = _render_bar_with_item(_bar(current_rows=()), orientation=orientation)
+
+        assert 'title="Past Worker — 100 / 90 expected (111%)"' in html
+
+
+def _render_downtime(*, current_rows):
     template = templates.env.from_string(
         '{% from "_department_dashboard_widgets.html" import '
         "department_downtime_report with context %}"
@@ -323,10 +358,10 @@ def test_downtime_label_renders_presence_classes():
         "down": 0,
         "working_pct": 100,
         "down_pct": 0,
-        "current_operators": OPERATOR_ROWS,
+        "current_operators": current_rows,
     }
 
-    html = template.render(
+    return template.render(
         rows=[row],
         is_range=False,
         tv_mode=False,
@@ -335,6 +370,21 @@ def test_downtime_label_renders_presence_classes():
         goat_holders=lambda: {},
     )
 
+
+def test_downtime_label_renders_presence_classes():
+    html = _render_downtime(current_rows=OPERATOR_ROWS)
+
     assert "current-operator planned-only" in html
     assert "current-operator physically-present" in html
     assert "Dismantler 3" in html
+    assert (
+        'title="Planned Person + Christian C. — Working 60m · Down 0m"'
+        in html
+    )
+    assert 'title="Past Worker — Working 60m · Down 0m"' not in html
+
+
+def test_downtime_title_keeps_legacy_name_without_current_rows():
+    html = _render_downtime(current_rows=())
+
+    assert 'title="Past Worker — Working 60m · Down 0m"' in html

@@ -455,12 +455,16 @@ def _department_day_data(
     )
 
     ACTIVE_UNITS_THRESHOLD = 5
-    active_wc_names: set[str] = set(historical_who_by_wc.keys())
+    production_active_wc_names: set[str] = set(historical_who_by_wc.keys())
     for r in results:
         if r.units > ACTIVE_UNITS_THRESHOLD:
-            active_wc_names.add(r.station.name)
-    active_results = [r for r in results if r.station.name in active_wc_names]
-    active_stations = [s for s in stations if s.name in active_wc_names]
+            production_active_wc_names.add(r.station.name)
+    active_results = [
+        r for r in results if r.station.name in production_active_wc_names
+    ]
+    active_stations = [
+        s for s in stations if s.name in production_active_wc_names
+    ]
     total_units = sum(r.units for r in active_results)
     total_downtime = sum(r.downtime_minutes for r in active_results)
     elapsed = shift_elapsed_minutes(d, now)
@@ -652,13 +656,15 @@ def _department_day_data(
 
     per_wc_expected = compute_per_wc_expected(
         segments=segments,
-        active_wc_names=active_wc_names,
+        active_wc_names=production_active_wc_names,
         target_per_hour=target_per_hour,
         productive_minutes=_productive_minutes_less_breakdown,
         productive_minutes_for_segment=_productive_minutes_for_segment,
     )
     credit_segments = [
-        segment for segment in segments if segment.wc_name in active_wc_names
+        segment
+        for segment in segments
+        if segment.wc_name in production_active_wc_names
     ]
     try:
         credits = production_segments.credit_work_segments(
@@ -700,6 +706,23 @@ def _department_day_data(
             per_wc_who[wc_name] = person_name
     per_wc_category = {r.station.name: r.station.category for r in active_results}
     per_wc_station_obj = {r.station.name: r.station for r in active_results}
+    station_by_name = {station.name: station for station in stations}
+    result_by_name = {result.station.name: result for result in results}
+    current_display_names = set(current_operator_rows).intersection(station_by_name)
+    active_wc_names = production_active_wc_names | current_display_names
+    for wc_name in current_display_names - production_active_wc_names:
+        result = result_by_name.get(wc_name)
+        per_wc_units[wc_name] = int(result.units) if result is not None else 0
+        per_wc_downtime[wc_name] = (
+            int(result.downtime_minutes) if result is not None else 0
+        )
+        per_wc_expected[wc_name] = 0.0
+        per_wc_state[wc_name] = (
+            _state(result, now, is_today_d) if result is not None else "Offline"
+        )
+        per_wc_who[wc_name] = None
+        per_wc_category[wc_name] = station_by_name[wc_name].category
+        per_wc_station_obj[wc_name] = station_by_name[wc_name]
 
     return {
         "total_units": total_units,

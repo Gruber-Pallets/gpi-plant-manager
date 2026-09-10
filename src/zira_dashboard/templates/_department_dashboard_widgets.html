@@ -27,7 +27,8 @@
             {% if s.actual_pct + s.shortfall_pct <= 0 %}{% set zero_stints.found = true %}{% endif %}
           {% endfor %}
         {% endif %}
-        <div class="vbar-col" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
+        {% set title_who = (b.current_operators | map(attribute='person_name') | join(' + ')) if b.current_operators else (b.who if b.who else b.name) %}
+        <div class="vbar-col" title="{{ title_who }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
           {% if numpos == 'widget' %}<div class="vbar-val">{{ b.units }}{% if b.expected %}<span class="pct"> / {{ b.expected }}</span>{% endif %}</div>{% endif %}
           <div class="vbar-track">
             {% if b.has_segments %}
@@ -124,7 +125,8 @@
           {% if s.actual_pct + s.shortfall_pct <= 0 %}{% set zero_stints.found = true %}{% endif %}
         {% endfor %}
       {% endif %}
-      <div class="bar-row numpos-{{ numpos }}{% if zero_stints.found %} has-zero-runway{% endif %}" title="{{ b.who if b.who else b.name }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
+      {% set title_who = (b.current_operators | map(attribute='person_name') | join(' + ')) if b.current_operators else (b.who if b.who else b.name) %}
+      <div class="bar-row numpos-{{ numpos }}{% if zero_stints.found %} has-zero-runway{% endif %}" title="{{ title_who }} — {{ b.units }} / {{ b.expected }} expected{% if b.pct_of_target %} ({{ b.pct_of_target }}%){% endif %}">
         <div class="name">
           {% if is_range %}
             <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
@@ -282,7 +284,8 @@
     {% else %}
       <div class="downtime-vbars">
         {% for d in rows %}
-          <div class="downtime-vbar-col" title="{{ d.who or d.name }} — Working {{ d.working }}m · Down {{ d.down }}m">
+          {% set title_who = (d.current_operators | map(attribute='person_name') | join(' + ')) if d.current_operators else (d.who or d.name) %}
+          <div class="downtime-vbar-col" title="{{ title_who }} — Working {{ d.working }}m · Down {{ d.down }}m">
             <div class="downtime-vbar-val">{{ d.down }}m</div>
             <div class="downtime-vbar-track">
               <div class="bad"  style="height: {{ d.down_pct }}%"   title="Down {{ d.down }}m"></div>
