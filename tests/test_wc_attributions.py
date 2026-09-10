@@ -1,6 +1,9 @@
 """Pure-logic tests for the retro WC attribution extension to
 ``attribute_for_day``. No DB or network needed."""
 
+from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
+
 from zira_dashboard.production_history import attribute_for_day
 
 
@@ -52,3 +55,38 @@ def test_creditable_for_day_excludes_testing_rows(monkeypatch):
     monkeypatch.setattr(wc_attributions, "for_day", lambda day: rows)
     out = wc_attributions.creditable_for_day("2026-06-02")
     assert [r["person_name"] for r in out] == ["Eulogio"]
+
+
+def test_unattributed_work_remains_when_odoo_presence_exists(monkeypatch):
+    from zira_dashboard import leaderboard, plant_day, staffing, timeclock_windows
+    from zira_dashboard import wc_attributions
+
+    day = date(2026, 9, 9)
+    now = datetime(2026, 9, 9, 20, 30, tzinfo=UTC)
+    repair = next(loc for loc in staffing.LOCATIONS if loc.name == "Repair 1")
+    result = SimpleNamespace(
+        station=SimpleNamespace(meter_id=repair.meter_id, name="Repair 1"),
+        units=225,
+        active_intervals=((now - timedelta(hours=3), now),),
+    )
+    monkeypatch.setattr(plant_day, "today", lambda: day)
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda _day: SimpleNamespace(assignments={}),
+    )
+    monkeypatch.setattr(wc_attributions, "for_day", lambda _day: [])
+    monkeypatch.setattr(
+        leaderboard,
+        "cached_leaderboard",
+        lambda _client, _stations, _day, now_utc=None: [result],
+    )
+    monkeypatch.setattr(
+        timeclock_windows,
+        "current_attendance_windows",
+        lambda: ({"Christian C.": [("Repair 1",)]}, now),
+    )
+
+    out = wc_attributions.unattributed_for_day(day, object())
+
+    assert [item["wc_name"] for item in out] == ["Repair 1"]

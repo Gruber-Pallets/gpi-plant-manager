@@ -47,26 +47,6 @@
   </p>
 </div>
 {% endif %}
-{% if staffing_live_enabled %}
-<div class="staffing-live-banner{% if staffing_live_unavailable %} unavailable{% elif staffing_live_stale or staffing_live_error %} stale{% endif %}"
-     {% if staffing_live_fresh_at %}data-live-source-fresh-at="{{ staffing_live_fresh_at.isoformat() }}"{% endif %}>
-  <strong>{% if staffing_live_label == "Live Odoo" %}Live Odoo{% else %}Odoo preview{% endif %}</strong>
-  {% if staffing_live_unavailable %}
-    <span>Live Odoo locations are unavailable. Planned seats are still shown.</span>
-  {% else %}
-    {% if staffing_live_stale %}
-      <span>Odoo location data is stale. These are the last verified locations.</span>
-    {% elif staffing_live_error %}
-      <span>Odoo location sync reported a problem. These are the last verified locations.</span>
-    {% else %}
-      <span>Planned seats stay in place. The badges show Odoo's current location.</span>
-    {% endif %}
-  {% endif %}
-  {% if staffing_live_fresh_at and staffing_live_fresh_local %}
-    <span class="staffing-live-fresh">Source checked <time datetime="{{ staffing_live_fresh_at.isoformat() }}">{{ staffing_live_fresh_local.strftime('%-I:%M %p %Z') }}</time> · Plant time</span>
-  {% endif %}
-</div>
-{% endif %}
 <div class="layout">
 
   <!-- LEFT: Unscheduled + Time Off -->
@@ -81,22 +61,6 @@
         {% endif %}
       </ul>
     </div>
-
-    {% if staffing_live_enabled and live_unscheduled_locations %}
-    <div class="section live-unscheduled">
-      <h3>{{ staffing_live_label }} · Not scheduled <span class="count">{{ live_unscheduled_locations|length }}</span></h3>
-      <ul>
-        {% for live in live_unscheduled_locations %}
-          <li data-name="{{ live.person_name }}" data-odoo-employee-id="{{ live.employee_odoo_id }}">
-            {% if live.profile_person_name %}<a href="/staffing/people/{{ live.profile_person_name|urlencode }}" class="person-card-link">{{ live.person_name }}</a>{% else %}<span class="live-person-name">{{ live.person_name }}</span>{% endif %}
-            {% if live.identity_disambiguator %}<span class="live-identity-note">{{ live.identity_disambiguator }}</span>{% endif %}
-            <span class="live-location-badge status-{{ live.status }}">{% if live.status == 'unmapped_location' %}{{ live.raw_odoo_work_center or 'Unknown Odoo location' }} · Odoo only — mapping needed{% else %}{{ live.display_text }}{% endif %}</span>
-            {% if live.source_stale %}<span class="live-source-stale">Source stale</span>{% endif %}
-          </li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% endif %}
 
     {% if is_saturday_recruiting %}
     <div class="section saturday-off">
@@ -342,18 +306,13 @@
                 <summary>
                   <span class="dd-summary-text">
                     {% set active_training_trainees = active_training_blocks | map(attribute='trainee') | list %}
-                    {% set inbound_live = (live_inbound_by_wc or {}).get(row.loc.name, ()) %}
                     {% if visible_assigned %}
                       {% for a in visible_assigned %}<span class="lvl-{{ a.level }}{% if late_names_set and a.name in late_names_set %} att-late-flag{% endif %}"{% if late_names_set and a.name in late_names_set %} title="Not clocked in — more than 15 min past shift start"{% endif %}>{% if late_names_set and a.name in late_names_set %}<span class="att-late-icon" aria-hidden="true">⚠</span>{% endif %}{{ scheduled_operator_name(a.name) }}{{ cert_badges(a.name, person_certs) }}{{ goat_badges(a.name, goat_holders()) }}{% if a.name in active_training_trainees %}<span class="training-print-label">Training</span>{% endif %}{% if saturday_availability_by_name and a.name in saturday_availability_by_name %}<span class="saturday-availability-badge">{{ saturday_availability_by_name[a.name] }}</span>{% endif %}{% if partial_hours_by_name and a.name in partial_hours_by_name %}<button type="button" class="partial-hours-badge clearable" data-day="{{ day }}" data-name="{{ a.name }}" title="Click to clear this partial for {{ a.name }} — they actually worked through it" aria-label="Clear partial time off for {{ a.name }}">{{ partial_range_by_name.get(a.name) or (partial_hours_by_name[a.name] ~ 'h') }}<span class="partial-clear-mark" aria-hidden="true"> ✕</span></button>{% endif %}</span>{% if not loop.last or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}{% endfor %}
                     {% endif %}
                     {% if _wc_attribs_for_row %}
                       {% for attrib in _wc_attribs_for_row %}<span class="lvl-attribution" title="Worked {{ attrib.first_label }}–{{ attrib.last_label }} (click ✕ to remove)">{{ attrib.person_name }}{{ cert_badges(attrib.person_name, person_certs) }}{{ goat_badges(attrib.person_name, goat_holders()) }}{% if attrib.time_range %}<span class="attribution-range">{{ attrib.time_range }}</span>{% endif %}<button type="button" class="attribution-clear" data-attribution-id="{{ attrib.id }}" data-name="{{ attrib.person_name }}" title="Remove this attribution — Jose Luis actually didn't work here" aria-label="Remove attribution for {{ attrib.person_name }}">✕</button></span>{% if not loop.last %}<span class="sep">, </span>{% endif %}{% endfor %}
-                    {% elif not visible_assigned and not inbound_live %}
+                    {% elif not visible_assigned %}
                       <span class="empty">—</span>
-                    {% endif %}
-                    {% if inbound_live %}
-                      {% if visible_assigned or _wc_attribs_for_row %}<span class="sep">, </span>{% endif %}
-                      {% for live in inbound_live %}<span class="lvl-live-inbound" title="{{ staffing_live_label }} · transferred in">{{ live.person_name }}</span>{% if not loop.last %}<span class="sep">, </span>{% endif %}{% endfor %}
                     {% endif %}
                   </span>
                   <button type="button" class="dd-clear sched-clear" data-loc="{{ row.loc.name }}"
@@ -384,31 +343,6 @@
                   {% if not row.pool %}<div class="dd-empty">— no trained operators —</div>{% endif %}
                 </div>
               </details>
-              {% if staffing_live_enabled %}
-                <div class="planned-live-locations" aria-label="{{ staffing_live_label }} locations">
-                  {% for planned in row.assigned %}
-                    {% set live = live_locations_by_employee_id.get(planned.employee_odoo_id) %}
-                    {% if live %}
-                      <span class="planned-live-person" data-person="{{ planned.name }}" data-odoo-employee-id="{{ live.employee_odoo_id }}">
-                        <span class="planned-live-name">{{ planned.name }}</span>
-                        <span class="live-location-badge status-{{ live.status }}{% if live.working_elsewhere %} working-elsewhere{% endif %}">
-                          {% if live.working_elsewhere %}Working elsewhere · {% endif %}{% if live.status == 'unmapped_location' %}{{ live.raw_odoo_work_center or 'Unknown Odoo location' }} · Odoo only — mapping needed{% else %}{{ live.display_text }}{% endif %}
-                        </span>
-                        {% if live.source_stale %}<span class="live-source-stale">Source stale</span>{% endif %}
-                      </span>
-                    {% endif %}
-                  {% endfor %}
-                  {% for live in (live_inbound_by_wc or {}).get(row.loc.name, ()) %}
-                    <span class="planned-live-person live-inbound" data-person="{{ live.person_name }}" data-odoo-employee-id="{{ live.employee_odoo_id }}">
-                      <span class="planned-live-name">{{ live.person_name }}</span>
-                      <span class="live-location-badge status-{{ live.status }}">
-                        {% if live.status == 'unmapped_location' %}{{ live.raw_odoo_work_center or 'Unknown Odoo location' }} · Odoo only — mapping needed{% else %}{{ live.display_text }}{% endif %}
-                      </span>
-                      {% if live.source_stale %}<span class="live-source-stale">Source stale</span>{% endif %}
-                    </span>
-                  {% endfor %}
-                </div>
-              {% endif %}
             </td>
             <td class="wc-note-cell">
               <textarea name="wc_note__{{ row.loc.name }}" rows="1" placeholder="—" maxlength="500"{% if viewing_posted %} readonly{% endif %}>{{ row.wc_note }}</textarea>

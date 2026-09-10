@@ -493,6 +493,53 @@ def test_incremental_and_open_rows_merge_dedupe_and_store_as_one_cycle(
     assert transaction["cursor_id"] == 902
 
 
+def test_incremental_sync_does_not_save_staffing_schedule(
+    install_dependencies,
+    monkeypatch,
+):
+    from zira_dashboard import plant_day, staffing, timeclock_windows
+
+    baseline_at = NOW - timedelta(hours=1)
+    backend = TransactionalMirrorBackend(
+        attendance_sync.SyncState(
+            cursor_write_date=None,
+            cursor_id=None,
+            last_incremental_completed_at=baseline_at,
+            last_full_sweep_completed_at=baseline_at,
+            full_sweep_generation=1,
+            baseline_completed_at=baseline_at,
+        )
+    )
+    install_dependencies(
+        CompleteOdooSource(changes=[_row(901, write_date=NOW)]),
+        backend,
+    )
+    monkeypatch.setattr(plant_day, "today", lambda: NOW.date())
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(day=day, assignments={}),
+    )
+    save_calls = []
+
+    def fail_on_schedule_save(schedule, **kwargs):
+        save_calls.append((schedule, kwargs))
+        raise AssertionError("attendance sync must not save a staffing schedule")
+
+    monkeypatch.setattr(staffing, "save_schedule", fail_on_schedule_save)
+    monkeypatch.setattr(
+        timeclock_windows,
+        "current_attendance_windows",
+        lambda: ({"Adrian A.": [("Dismantler 1",)]}, NOW),
+    )
+
+    result = attendance_sync.run_incremental_sync(now_utc=NOW)
+
+    assert result.success is True
+    assert result.affected_days == frozenset({NOW.date()})
+    assert save_calls == []
+
+
 def test_failed_open_page_keeps_prior_cursor_and_last_good_mirror(
     install_dependencies,
 ):

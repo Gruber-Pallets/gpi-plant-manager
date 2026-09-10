@@ -9,7 +9,6 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import replace
 from datetime import date, datetime, timedelta, UTC
 from urllib.parse import urlencode
 
@@ -22,7 +21,6 @@ from .. import (
     attendance,
     attendance_location_policy,
     attendance_location_snapshot,
-    attendance_timeline,
     auto_schedule_capacity,
     company_holidays,
     current_schedule_validation,
@@ -99,76 +97,6 @@ def _live_location_active() -> bool:
     except Exception:  # noqa: BLE001 -- preserve legacy actions on unreadable rollout state
         log.exception("Could not read attendance-location rollout state")
         return False
-
-
-def _staffing_live_context(
-    day: date,
-    today: date,
-    planned_by_wc: Mapping[str, Sequence[str]],
-    *,
-    policy,
-    as_of_utc: datetime,
-    spans: Sequence[attendance_timeline.LocationSpan] = (),
-    planned_employee_ids: Mapping[str, int] | None = None,
-    current_attendance_ids: frozenset[int] = frozenset(),
-    known_local_people_by_id: Mapping[int, str] | None = None,
-) -> dict:
-    """Build a plan-plus-live overlay from one rollout/health/timeline snapshot."""
-    label = "Live Odoo" if policy.mode == "live" else "Odoo preview"
-    base = {
-        "staffing_live_enabled": bool(day == today and policy.mirror_owned),
-        "staffing_live_label": label,
-        "staffing_live_unavailable": False,
-        "staffing_live_stale": bool(policy.stale),
-        "staffing_live_error": policy.error,
-        "staffing_live_fresh_at": policy.refreshed_at,
-        "staffing_live_fresh_local": (
-            policy.refreshed_at.astimezone(shift_config.SITE_TZ)
-            if policy.refreshed_at is not None
-            else None
-        ),
-        "staffing_live_locations": (),
-        "live_locations_by_employee_id": {},
-        "live_unscheduled_locations": (),
-        "live_inbound_by_wc": {},
-    }
-    if not base["staffing_live_enabled"]:
-        return base
-    if not policy.available:
-        return {**base, "staffing_live_unavailable": True}
-    try:
-        locations = staffing_view.build_live_locations(
-            planned_by_wc,
-            spans,
-            as_of_utc=as_of_utc,
-            planned_employee_ids=planned_employee_ids or {},
-            current_attendance_ids=current_attendance_ids,
-            known_local_people_by_id=known_local_people_by_id or {},
-        )
-        locations = tuple(
-            replace(
-                location,
-                source_fresh_at=policy.refreshed_at,
-                source_stale=bool(policy.stale),
-            )
-            for location in locations
-        )
-    except Exception:  # noqa: BLE001 -- show visible source failure, never schedule fallback
-        log.exception("Could not build live Odoo Staffing locations for %s", day)
-        return {**base, "staffing_live_unavailable": True}
-    return {
-        **base,
-        "staffing_live_locations": locations,
-        "live_locations_by_employee_id": {
-            location.employee_odoo_id: location for location in locations
-        },
-        "live_unscheduled_locations": tuple(
-            location
-            for location in locations
-            if location.planned_work_center is None
-        ),
-        "live_inbound_by_wc": staffing_view.inbound_live_by_work_center(locations),
-    }
 
 
 def _server_timing_header(phases: dict) -> str:
@@ -2012,25 +1940,6 @@ def staffing_page(
         publish_errors=publish_errors,
         training_reservations_by_center=training_picker_reservations,
     )
-    staffing_live_context = _staffing_live_context(
-        d,
-        today,
-        sched.assignments or {},
-        policy=staffing_live_policy,
-        as_of_utc=staffing_mirror_snapshot.verified_cap_utc,
-        spans=staffing_mirror_snapshot.spans,
-        planned_employee_ids={
-            person.name: person.employee_id
-            for person in roster
-            if person.employee_id is not None
-        },
-        current_attendance_ids=staffing_mirror_snapshot.current_attendance_ids,
-        known_local_people_by_id={
-            person.employee_id: person.name
-            for person in roster
-            if person.employee_id is not None
-        },
-    )
     unscheduled_count = len(bay_model.get("unassigned") or ())
     auto_on_count = len(enabled_auto_work_centers)
     rotation_auto_summary = {
@@ -2367,7 +2276,6 @@ def staffing_page(
                 # time_off_names/entries, partial_*_by_name, people_meta,
                 # all_active_people). See staffing_view.build_staffing_bays.
                 **bay_model,
-                **staffing_live_context,
                 "smart_defaults_by_loc": smart_defaults_by_loc,
                 "cleared_partials_today": cleared_partials_today,
                 "attendance_by_name": attendance_by_name,

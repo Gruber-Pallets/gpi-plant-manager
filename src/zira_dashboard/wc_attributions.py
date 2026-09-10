@@ -554,22 +554,11 @@ sample / fluke and shouldn't surface as work to attribute. Matches the
 dashboards' existing ACTIVE_UNITS_THRESHOLD."""
 
 
-def live_occupied_work_centers(day: date) -> set[str]:
-    """Work centers that already have a live Odoo occupant on ``day``."""
-    try:
-        from . import staffing_live_assign
-
-        return staffing_live_assign.live_occupied_work_centers(day)
-    except Exception:
-        return set()
-
-
 def unattributed_for_day(day: date, client) -> list[dict]:
     """Walk metered WCs for ``day``. Return rows for WCs that:
       1. Produced more than UNATTRIBUTED_MIN_UNITS (filters flukes)
       2. Are NOT in the schedule's assignments
       3. Are NOT in the attributions table
-      4. Are NOT already occupied by a live Odoo work-center transfer
 
     Each result dict: ``{wc_name, units, first_sample_utc, last_sample_utc}``.
     """
@@ -614,8 +603,6 @@ def unattributed_for_day(day: date, client) -> list[dict]:
         # Use the LOCATION display name when available (matches the schedule).
         wc = meter_to_loc_name.get(r.station.meter_id, r.station.name)
         if wc in scheduled_wcs or wc in attributed_wcs:
-            continue
-        if wc in live_occupied_work_centers(day):
             continue
         # Pull first/last sample times from active_intervals for time bounds.
         ais = r.active_intervals

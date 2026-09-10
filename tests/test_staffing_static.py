@@ -35,6 +35,20 @@ def _hours_js():
     return Path("src/zira_dashboard/static/staffing_hours.js").read_text()
 
 
+def test_scheduler_has_no_odoo_work_center_preview():
+    template = _template()
+    for forbidden in (
+        "Odoo preview",
+        "staffing-live-banner",
+        "planned-live-locations",
+        "live-unscheduled",
+        "live-location-badge",
+        "live-inbound",
+        "Working elsewhere",
+    ):
+        assert forbidden not in template
+
+
 def test_staffing_subnav_has_hours_tab():
     html = Path("src/zira_dashboard/templates/_staffing_subnav.html").read_text()
 
