@@ -100,16 +100,6 @@ def assigned_operators_for_wc(wc_name: str, day: date) -> list[str]:
     return list(planned_operators_by_work_center(day).get(wc_name, ()))
 
 
-def live_people_at_work_center(wc_name: str, day: date) -> list[str]:
-    """Roster names currently at this work center in Odoo, for today only."""
-    try:
-        from . import staffing_live_assign
-
-        return staffing_live_assign.live_people_at_work_center(wc_name, day)
-    except Exception:
-        return []
-
-
 def _shift_elapsed_fraction(day: date) -> float:
     """Fraction of today's shift that has elapsed, 0.0..1.0.
 

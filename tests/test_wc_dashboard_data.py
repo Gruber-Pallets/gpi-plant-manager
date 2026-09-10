@@ -4,6 +4,8 @@ Pure functions only — these tests don't need a DB and run unconditionally.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def test_slug_simple():
     from zira_dashboard.wc_dashboard_data import slug_for_wc
@@ -113,6 +115,14 @@ def test_planned_operators_by_work_center_returns_complete_filtered_plan(monkeyp
     }
 
 
+def test_retired_live_seat_reader_is_absent():
+    from zira_dashboard import wc_dashboard_data
+
+    source = Path("src/zira_dashboard/wc_dashboard_data.py").read_text()
+    assert not hasattr(wc_dashboard_data, "live_people_at_work_center")
+    assert "staffing_live_assign" not in source
+
+
 def test_assigned_operators_for_wc_remains_plan_only(monkeypatch):
     from zira_dashboard import attendance, staffing, wc_dashboard_data
 
@@ -126,11 +136,6 @@ def test_assigned_operators_for_wc_remains_plan_only(monkeypatch):
         ),
     )
     monkeypatch.setattr(attendance, "full_day_absent_names", lambda d: set())
-    monkeypatch.setattr(
-        wc_dashboard_data,
-        "live_people_at_work_center",
-        lambda _wc_name, _day: ["Christian C."],
-    )
 
     assert wc_dashboard_data.assigned_operators_for_wc(
         "Repair 1", _date(2026, 5, 13)
