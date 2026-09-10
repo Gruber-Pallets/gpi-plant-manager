@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-10
 
+### Plan live operator names without changing the Scheduler
+
+- **A new plan will make live dashboards show the staffing plan in gray and people who are really signed into that work area in dark text.** The Plant Scheduler will stay a planning sheet, and the working midday bar charts will not change. Nothing on screen has changed yet.
+
 ### Floor-app moves now fill the staffing board
 
 #### Fixes
