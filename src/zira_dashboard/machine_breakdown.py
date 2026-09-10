@@ -15,6 +15,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
+from .current_operators import (
+    OperatorDeparture,
+    OperatorPresence,
+    OperatorSourceSnapshot,
+    source_from_location_snapshot,
+)
+
 BREAKDOWN_NO_OUTPUT_MINUTES = 60
 """Default minutes of no output (while an operator is clocked in) before a
 station is flagged as broken down."""
@@ -32,32 +39,6 @@ class StationSignal:
 class BreakdownCandidate:
     wc_name: str
     stop_utc: datetime
-
-
-@dataclass(frozen=True)
-class OperatorPresence:
-    person_name: str
-    wc_name: str
-    arrival_utc: datetime
-    employee_odoo_id: int | None = None
-
-
-@dataclass(frozen=True)
-class OperatorDeparture:
-    person_name: str
-    wc_name: str
-    arrival_utc: datetime
-    departure_utc: datetime
-    employee_odoo_id: int | None = None
-
-
-@dataclass(frozen=True)
-class OperatorSourceSnapshot:
-    presences: tuple[OperatorPresence, ...]
-    departures: tuple[OperatorDeparture, ...]
-    available: bool
-    mirror_owned: bool
-    complete: bool = True
 
 
 class BreakdownRows(list):
@@ -633,68 +614,7 @@ def _operator_source_from_legacy_windows(
 
 def _operator_source_from_staffing_snapshot(snapshot) -> OperatorSourceSnapshot:
     """Use Task 11's atomic policy/timeline generation for breakdown reads."""
-    policy = snapshot.policy
-    if not policy.mirror_owned:
-        return OperatorSourceSnapshot((), (), True, False, True)
-    if not policy.available or policy.stale:
-        return OperatorSourceSnapshot((), (), False, True, False)
-
-    verified_cap = snapshot.verified_cap_utc
-    current_attendance_ids = snapshot.current_attendance_ids
-    presences: list[OperatorPresence] = []
-    departures: list[OperatorDeparture] = []
-    complete = True
-    for span in snapshot.spans:
-        is_current = bool(
-            span.start_utc <= verified_cap < span.end_utc
-            or (
-                span.start_utc <= verified_cap == span.end_utc
-                and current_attendance_ids.intersection(span.attendance_ids)
-            )
-        )
-        if span.status == "exempt_no_location":
-            # This worker's department intentionally has no station location,
-            # so they are outside breakdown operator scope rather than an
-            # incomplete source row.
-            continue
-        if span.status != "valid" or not span.app_work_center_name:
-            if is_current:
-                complete = False
-            continue
-        if is_current:
-            presences.append(
-                OperatorPresence(
-                    span.employee_name,
-                    span.app_work_center_name,
-                    span.start_utc,
-                    span.employee_odoo_id,
-                )
-            )
-        elif span.start_utc < span.end_utc <= verified_cap:
-            departures.append(
-                OperatorDeparture(
-                    span.employee_name,
-                    span.app_work_center_name,
-                    span.start_utc,
-                    span.end_utc,
-                    span.employee_odoo_id,
-                )
-            )
-    def identity_order(value):
-        return (
-            value.employee_odoo_id is None,
-            value.employee_odoo_id or 0,
-            value.person_name,
-            value.wc_name,
-            value.arrival_utc,
-        )
-    return OperatorSourceSnapshot(
-        tuple(sorted(presences, key=identity_order)),
-        tuple(sorted(departures, key=identity_order)),
-        True,
-        True,
-        complete,
-    )
+    return source_from_location_snapshot(snapshot)
 
 
 def _operator_source_snapshot(day: date, now: datetime) -> OperatorSourceSnapshot:
