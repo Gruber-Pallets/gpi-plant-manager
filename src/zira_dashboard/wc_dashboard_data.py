@@ -75,9 +75,11 @@ def wc_by_slug(slug: str):
 
 
 def assigned_operators_for_wc(wc_name: str, day: date) -> list[str]:
-    """Return the names assigned to this specific WC in the published
-    schedule for `day`, excluding full-day absent people for live display.
-    Empty list if unassigned. Only this WC — not the whole group.
+    """Return the names assigned to this specific WC for `day`.
+
+    Starts from the published schedule, drops full-day absences, then adds
+    anyone currently at this center in Odoo so a live transfer is visible
+    before the saved plan catches up.
     """
     from . import staffing
     try:
@@ -90,9 +92,22 @@ def assigned_operators_for_wc(wc_name: str, day: date) -> list[str]:
         absent = set(attendance.full_day_absent_names(day))
     except Exception:
         absent = set()
-    if not absent:
-        return names
-    return [name for name in names if name not in absent]
+    if absent:
+        names = [name for name in names if name not in absent]
+    for live_name in live_people_at_work_center(wc_name, day):
+        if live_name not in names:
+            names.append(live_name)
+    return names
+
+
+def live_people_at_work_center(wc_name: str, day: date) -> list[str]:
+    """Roster names currently at this work center in Odoo, for today only."""
+    try:
+        from . import staffing_live_assign
+
+        return staffing_live_assign.live_people_at_work_center(wc_name, day)
+    except Exception:
+        return []
 
 
 def _shift_elapsed_fraction(day: date) -> float:

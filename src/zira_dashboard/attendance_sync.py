@@ -287,6 +287,13 @@ def run_incremental_sync(*, now_utc: datetime | None = None) -> SyncResult:
             )
         except Exception:  # noqa: BLE001 - discovery cannot relabel a committed sync
             _log.exception("could not enqueue Odoo attendance department repairs")
+        if result.success:
+            try:
+                from . import staffing_live_assign
+
+                staffing_live_assign.apply_after_attendance_sync(result.affected_days)
+            except Exception:  # noqa: BLE001 - seating cannot relabel a committed sync
+                _log.exception("could not apply live Odoo assignments after incremental sync")
         return result
     except Exception as exc:  # noqa: BLE001 - rollback before failure recording
         _record_failure_safely("incremental", exc)

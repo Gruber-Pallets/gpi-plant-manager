@@ -308,6 +308,7 @@ def _staffing_live_context(
         "staffing_live_locations": (),
         "live_locations_by_employee_id": {},
         "live_unscheduled_locations": (),
+        "live_inbound_by_wc": {},
     }
     if not base["staffing_live_enabled"]:
         return base
@@ -344,6 +345,7 @@ def _staffing_live_context(
             for location in locations
             if location.planned_work_center is None
         ),
+        "live_inbound_by_wc": staffing_view.inbound_live_by_work_center(locations),
     }
 
 

@@ -10,6 +10,15 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-09-10
+
+### Floor-app moves now fill the staffing board
+
+#### Fixes
+
+- **When someone is moved to a new work area in the plant-floor app, Plant Manager now puts them on that work area's staffing list.** Before, the recycling board already knew they were there, but Staffing and the work-center screen still looked empty. The next time attendance updates, the list catches up by itself.
+- **A work area that already has a person from the floor app no longer asks you to assign it again.** That extra to-do was leftover from looking only at the morning plan.
+
 ## 2026-09-08
 
 ### Time-off approval emails

@@ -525,6 +525,39 @@ def test_full_day_off_planned_seat_still_renders_contradictory_live_badge(monkey
     assert "Working elsewhere · Bay 8" in rendered
 
 
+def test_staffing_destination_row_renders_inbound_live_transfer():
+    location = staffing.Location("Repair 1", "Repair", "Repair 1", "Recycled", None)
+    row = {
+        "loc": location,
+        "assigned": [],
+        "present_assigned": [],
+    }
+    inbound = staffing_view.StaffingPersonLocation(
+        employee_odoo_id=8,
+        person_name="Christian C.",
+        planned_work_center="Hand Build #2",
+        live_work_center="Repair 1",
+        raw_odoo_work_center="Repair #1",
+        status="valid",
+        since_utc=NOW,
+        source_fresh_at=NOW,
+        profile_person_name="Christian C.",
+    )
+
+    rendered = _render_template_fragment(
+        '<div class="planned-live-locations"',
+        "</div>",
+        row=row,
+        staffing_live_label="Odoo preview",
+        live_locations_by_employee_id={},
+        live_inbound_by_wc={"Repair 1": (inbound,)},
+    )
+
+    assert "Christian C." in rendered
+    assert "Repair 1" in rendered
+    assert "live-inbound" in rendered
+
+
 def test_staffing_freshness_renders_plant_time_with_utc_datetime_attribute():
     rendered = _render_template_fragment(
         '<div class="staffing-live-banner',

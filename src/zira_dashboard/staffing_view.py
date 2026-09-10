@@ -68,6 +68,29 @@ class StaffingPersonLocation:
         return "Location unavailable"
 
 
+def inbound_live_by_work_center(
+    locations: Sequence[StaffingPersonLocation],
+) -> dict[str, tuple[StaffingPersonLocation, ...]]:
+    """Group valid live people onto the work center they are in now.
+
+    People already planned at that same center stay on the planned seat and
+    are omitted here so the destination row does not render them twice.
+    """
+    inbound: dict[str, list[StaffingPersonLocation]] = {}
+    for location in locations:
+        if (
+            location.status != "valid"
+            or not location.live_work_center
+            or location.planned_work_center == location.live_work_center
+        ):
+            continue
+        inbound.setdefault(location.live_work_center, []).append(location)
+    return {
+        work_center: tuple(people)
+        for work_center, people in inbound.items()
+    }
+
+
 def build_live_locations(
     planned_by_wc: Mapping[str, Sequence[str]],
     spans: Sequence[LocationSpan],

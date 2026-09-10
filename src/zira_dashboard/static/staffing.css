@@ -695,6 +695,10 @@
   .planned-live-locations { margin-top: 0.3rem; display: grid; gap: 0.2rem; }
   .planned-live-person { display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
   .planned-live-name { color: var(--muted); font-size: 0.7rem; }
+  .lvl-live-inbound {
+    color: #93c5fd;
+    font-weight: 700;
+  }
   .live-location-badge {
     display: inline-flex; align-items: center; max-width: 100%;
     border-radius: 999px; padding: 0.08rem 0.45rem;
