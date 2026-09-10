@@ -12,6 +12,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-10
 
+### Live boards now show who is really at each work area
+
+#### Fixes
+
+- **Planned names stay gray until the person signs into that same work area.** A dark name means Odoo shows the person is really there now.
+- **People who move during the day now show at the work area they actually signed into.** The midday bars and old work history still stay the same.
+- **The Plant Scheduler is only a plan again.** Odoo attendance no longer moves names on the planning sheet.
+
 ### Plan live operator names without changing the Scheduler
 
 - **A new plan will make live dashboards show the staffing plan in gray and people who are really signed into that work area in dark text.** The Plant Scheduler will stay a planning sheet, and the working midday bar charts will not change. Nothing on screen has changed yet.

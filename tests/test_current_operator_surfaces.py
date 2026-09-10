@@ -19,6 +19,7 @@ from zira_dashboard import (
     staffing,
     wc_attributions,
 )
+from zira_dashboard.assignment_windows import WorkSegment
 from zira_dashboard.deps import templates
 from zira_dashboard.routes import departments
 from zira_dashboard.stations import Station
@@ -325,6 +326,143 @@ def test_real_transfer_bar_is_unchanged_when_current_rows_are_attached():
     assert {key: value for key, value in bars[0].items() if key != "current_operators"} == (
         before[0]
     )
+
+
+def _build_and_render_midday_transfer(current_rows):
+    def at(hour, minute=0):
+        return datetime(2026, 9, 10, hour, minute, tzinfo=UTC)
+
+    credits = production_segments.credit_work_segments(
+        (
+            WorkSegment("Repair 4", "Humberto S.", at(12), at(19, 33), "punch"),
+            WorkSegment("Repair 4", "Ana M.", at(19, 35), at(19, 50), "punch"),
+        ),
+        wc_totals={"Repair 4": 548.0},
+        samples_by_wc={
+            "Repair 4": (
+                (at(18), 516.0),
+                (at(19, 40), 32.0),
+            )
+        },
+        productive_minutes=lambda person, *_args: {
+            "Humberto S.": 420.0,
+            "Ana M.": 15.0,
+        }[person],
+        live_cap_utc=at(19, 50),
+    )
+    scored = production_segments.score_work_segments(
+        credits,
+        target_per_hour={"Repair 4": 100.0},
+    )
+    segments, split_by_wc, producers, _continuous = (
+        departments._prepare_segment_display(
+            scored,
+            break_windows=(),
+            window_start_utc=at(12),
+            window_end_utc=at(19, 50),
+            is_live=True,
+        )
+    )
+    bars = recycling_data.build_bars(
+        "Repair",
+        agg_active_names={"Repair 4"},
+        agg_category={"Repair 4": "Repair"},
+        agg_units={"Repair 4": 548},
+        agg_expected={"Repair 4": 725.0},
+        agg_who_today={"Repair 4": "Ana M."},
+        is_range=False,
+        agg_downtime={},
+        agg_segments=segments,
+        agg_segment_display=split_by_wc,
+        agg_producers=producers,
+        is_live=True,
+    )
+    departments._present_current_operator_rows(
+        bars,
+        {"Repair 4": current_rows},
+        configured_stations=[
+            Station("repair-4", "Repair 4", "Repair", "Recycling")
+        ],
+        categories=("Repair",),
+        is_live=True,
+        is_range=False,
+        row_kind="bar",
+    )
+    return bars[0], _render_bar_with_item(bars[0], orientation="horizontal")
+
+
+def test_midday_transfer_math_and_markup_change_only_current_operator_labels():
+    original_rows = OPERATOR_ROWS
+    substitute_rows = (
+        current_operators.OperatorDisplayRow(
+            "Different Current Person", 21, planned=False, physically_present=True
+        ),
+        current_operators.OperatorDisplayRow(
+            "Different Planned Person", 22, planned=True, physically_present=False
+        ),
+    )
+
+    original_bar, original_html = _build_and_render_midday_transfer(original_rows)
+    substitute_bar, substitute_html = _build_and_render_midday_transfer(substitute_rows)
+
+    segment_fields = (
+        "person_name",
+        "person_label",
+        "time_label",
+        "actual_units",
+        "goal_units",
+        "result",
+        "result_label",
+        "runway_units",
+        "runway_pct",
+        "start_pct",
+        "actual_pct",
+        "shortfall_start_pct",
+        "shortfall_pct",
+        "finish_pct",
+    )
+    assert [
+        tuple(segment[field] for field in segment_fields)
+        for segment in original_bar["segments"]
+    ] == [
+        tuple(segment[field] for field in segment_fields)
+        for segment in substitute_bar["segments"]
+    ]
+    assert {
+        key: value for key, value in original_bar.items() if key != "current_operators"
+    } == {
+        key: value for key, value in substitute_bar.items() if key != "current_operators"
+    }
+
+    assert (
+        '<span class="name-primary current-operator planned-only">Planned Person</span>'
+        in original_html
+    )
+    assert (
+        '<span class="name-primary current-operator physically-present">Christian C.</span>'
+        in original_html
+    )
+    assert (
+        '<span class="name-primary current-operator physically-present">'
+        "Different Current Person</span>"
+        in substitute_html
+    )
+    assert (
+        '<span class="name-primary current-operator planned-only">'
+        "Different Planned Person</span>"
+        in substitute_html
+    )
+
+    def without_current_label_differences(html, rows):
+        for row in rows:
+            html = html.replace(row.person_name, "CURRENT OPERATOR")
+        return html.replace("planned-only", "current-state").replace(
+            "physically-present", "current-state"
+        )
+
+    assert without_current_label_differences(
+        original_html, original_rows
+    ) == without_current_label_differences(substitute_html, substitute_rows)
 
 
 def _range_day(current_operator_rows):
