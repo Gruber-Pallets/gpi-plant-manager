@@ -11,6 +11,7 @@ from zira_dashboard import (
     attendance,
     attendance_timeline,
     current_operators,
+    goat_watch,
     live_cache,
     machine_breakdown,
     production_segments,
@@ -635,6 +636,111 @@ def test_current_only_rows_require_nonempty_configured_live_matching_category():
     assert historical_rows == []
 
 
+def test_department_goat_wrapper_passes_nonempty_planned_work_centers(monkeypatch):
+    captured = {}
+
+    def contenders_for_now(_day, _now, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(goat_watch, "contenders_for_now", contenders_for_now)
+
+    assert departments._goat_watch_contenders(
+        DAY,
+        NOW,
+        {"Dismantler 3": OPERATOR_ROWS},
+        {
+            "Dismantler 1": ["Planned Person"],
+            "Dismantler 3": [],
+            staffing.TIME_OFF_KEY: ["Absent Person"],
+        },
+    ) == []
+    assert captured == {
+        "current_operator_rows_by_wc": {"Dismantler 3": OPERATOR_ROWS},
+        "eligible_planned_work_centers": {"Dismantler 1"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("station", "expected_url"),
+    [
+        (
+            Station(
+                "dismantler-3",
+                "Dismantler 3",
+                "Dismantler",
+                "Recycling",
+            ),
+            "/wc/dismantler-3?day=2026-09-10",
+        ),
+        (
+            Station("new-1", "New 1", "New", "New"),
+            "/wc/new-1?day=2026-09-10",
+        ),
+    ],
+)
+def test_current_only_recycling_and_new_rows_receive_single_day_links(
+    station,
+    expected_url,
+):
+    active_wc_names: set[str] = set()
+    production_maps = {
+        "category": {},
+        "units": {},
+        "expected": {},
+        "who": {},
+        "downtime": {},
+    }
+    bars = recycling_data.build_bars(
+        station.category,
+        agg_active_names=active_wc_names,
+        agg_category=production_maps["category"],
+        agg_units=production_maps["units"],
+        agg_expected=production_maps["expected"],
+        agg_who_today=production_maps["who"],
+        is_range=False,
+        agg_downtime=production_maps["downtime"],
+    )
+    departments._present_current_operator_rows(
+        bars,
+        {station.name: OPERATOR_ROWS},
+        configured_stations=[station],
+        categories=(station.category,),
+        is_live=True,
+        is_range=False,
+        row_kind="bar",
+    )
+
+    links = departments._operator_links_for_rows(
+        DAY,
+        bars,
+        is_range=False,
+    )
+
+    assert active_wc_names == set()
+    assert all(values == {} for values in production_maps.values())
+    assert links == {station.name: expected_url}
+    assert departments._operator_links_for_rows(
+        DAY,
+        bars,
+        is_range=True,
+    ) == {}
+
+
+def test_operator_links_ignore_invalid_dashboard_urls(monkeypatch):
+    monkeypatch.setattr(
+        departments.wc_dashboard_data,
+        "dashboard_url_for_wc_day",
+        lambda *_args: "",
+    )
+
+    assert departments._operator_links_for_rows(
+        DAY,
+        [{"name": "Dismantler 3"}],
+        is_range=False,
+    ) == {}
+
+
 def _bar(*, name: str = "Dismantler 3", current_rows=OPERATOR_ROWS):
     return {
         "name": name,
@@ -680,6 +786,13 @@ def _render_bar_with_item(item, *, orientation: str) -> str:
     )
 
 
+def _assert_two_current_names_have_one_delimiter(html: str) -> None:
+    delimiter = '<span class="current-operator-delimiter"> + </span>'
+    assert html.count(delimiter) == 1
+    assert html.index("Planned Person</span>") < html.index(delimiter)
+    assert html.index(delimiter) < html.index("Christian C.</span>")
+
+
 def test_horizontal_and_vertical_labels_render_presence_classes():
     for orientation in ("horizontal", "vertical"):
         html = _render_bar(orientation=orientation)
@@ -695,6 +808,7 @@ def test_horizontal_and_vertical_labels_render_presence_classes():
         assert 'title="Past Worker — 100 / 90 expected (111%)"' not in html
         assert "from Odoo" not in html
         assert "unplanned" not in html
+        _assert_two_current_names_have_one_delimiter(html)
 
 
 def test_bar_title_keeps_legacy_name_without_current_rows():
@@ -741,6 +855,7 @@ def test_downtime_label_renders_presence_classes():
         in html
     )
     assert 'title="Past Worker — Working 60m · Down 0m"' not in html
+    _assert_two_current_names_have_one_delimiter(html)
 
 
 def test_downtime_title_keeps_legacy_name_without_current_rows():

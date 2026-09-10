@@ -309,6 +309,21 @@ def _present_current_operator_rows(
     return rows
 
 
+def _operator_links_for_rows(day, *row_groups, is_range):
+    if is_range:
+        return {}
+    links = {}
+    for rows in row_groups:
+        for row in rows:
+            name = row["name"]
+            if name in links:
+                continue
+            href = wc_dashboard_data.dashboard_url_for_wc_day(name, day)
+            if href:
+                links[name] = href
+    return links
+
+
 def _who_by_wc(
     assignments: dict[str, list[str]],
     day,
@@ -1064,16 +1079,16 @@ def _render_recycling(
     if is_today:
         assignments_todo_by_wc, all_active_people = _assign_popover_context(today, client)
 
-    operator_links_by_wc: dict[str, str] = {}
-    if not is_range:
-        for name in agg_active_names:
-            href = wc_dashboard_data.dashboard_url_for_wc_day(name, start_d)
-            if href:
-                operator_links_by_wc[name] = href
-
     dismantler_bars = _sorted_bars(_bars("Dismantler"), "dismantler-bars")
     repair_bars = _sorted_bars(_bars("Repair"), "repair-bars")
     downtime_rows = _downtime_rows()
+    operator_links_by_wc = _operator_links_for_rows(
+        start_d,
+        dismantler_bars,
+        repair_bars,
+        downtime_rows,
+        is_range=is_range,
+    )
 
     response = templates.TemplateResponse(
         request,
@@ -1124,6 +1139,7 @@ def _render_recycling(
                     today,
                     now,
                     current_operator_rows,
+                    schedule_today_assignments,
                 )
                 if is_today
                 else []
@@ -1137,13 +1153,24 @@ def _render_recycling(
     return response
 
 
-def _goat_watch_contenders(day, now_utc, current_operator_rows_by_wc):
+def _goat_watch_contenders(
+    day,
+    now_utc,
+    current_operator_rows_by_wc,
+    schedule_assignments,
+):
     try:
         from .. import goat_watch
+        eligible_planned_work_centers = {
+            name
+            for name, operators in schedule_assignments.items()
+            if name != staffing.TIME_OFF_KEY and operators
+        }
         return goat_watch.contenders_for_now(
             day,
             now_utc,
             current_operator_rows_by_wc=current_operator_rows_by_wc,
+            eligible_planned_work_centers=eligible_planned_work_centers,
         )
     except Exception:
         return []
@@ -1340,10 +1367,12 @@ def _render_new_dept(
         agg_category=aggregate.agg_category,
     )
     new_people = sum(item["total_recycling_people"] for item in per_day)
-    operator_links_by_wc = {
-        wc_name: wc_dashboard_data.dashboard_url_for_wc_day(wc_name, end_d)
-        for wc_name in aggregate.agg_active_names
-    }
+    operator_links_by_wc = _operator_links_for_rows(
+        end_d,
+        new_bars,
+        downtime_rows,
+        is_range=is_range,
+    )
 
     # Inline-assign popover: today only. Mirrors the recycling route so the
     # "(no assignment)" bars on /new become click-to-attribute buttons.

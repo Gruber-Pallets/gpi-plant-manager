@@ -172,6 +172,7 @@ def contenders_for_now(
     current_operator_rows_by_wc: (
         dict[str, tuple[OperatorDisplayRow, ...]] | None
     ) = None,
+    eligible_planned_work_centers: set[str] | None = None,
 ) -> list[Contender]:
     """One row per group whose leading WC projects >= 98 % of GOAT.
 
@@ -213,6 +214,11 @@ def contenders_for_now(
                     continue
                 operator_rows = ()
             else:
+                if eligible_planned_work_centers is None:
+                    if not _primary_operator(loc.name, day):
+                        continue
+                elif loc.name not in eligible_planned_work_centers:
+                    continue
                 operator_rows = tuple(
                     current_operator_rows_by_wc.get(loc.name, ())
                 )

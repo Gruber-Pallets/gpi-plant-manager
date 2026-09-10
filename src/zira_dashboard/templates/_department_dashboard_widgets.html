@@ -85,6 +85,7 @@
             {% elif b.current_operators %}
               {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
               {% for operator in b.current_operators %}
+                {% if not loop.first %}<span class="current-operator-delimiter"> + </span>{% endif %}
                 {{ operator_name(operator.person_name, operator_href, true, "physically-present" if operator.physically_present else "planned-only") }}
               {% endfor %}
               <span class="name-secondary">{{ b.name }}</span>
@@ -133,6 +134,7 @@
           {% elif b.current_operators %}
             {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
             {% for operator in b.current_operators %}
+              {% if not loop.first %}<span class="current-operator-delimiter"> + </span>{% endif %}
               {{ operator_name(operator.person_name, operator_href, true, "physically-present" if operator.physically_present else "planned-only") }}
             {% endfor %}
             <span class="name-secondary">{{ b.name }}</span>
@@ -299,6 +301,7 @@
               {% elif d.current_operators %}
                 {% set operator_href = operator_links_by_wc.get(d.name) if operator_links_by_wc else none %}
                 {% for operator in d.current_operators %}
+                  {% if not loop.first %}<span class="current-operator-delimiter"> + </span>{% endif %}
                   {{ operator_name(operator.person_name, operator_href, false, "physically-present" if operator.physically_present else "planned-only") }}
                 {% endfor %}
                 <span class="name-secondary">{{ d.name }}</span>

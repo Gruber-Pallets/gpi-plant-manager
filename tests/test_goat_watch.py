@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from zira_dashboard import (
     current_operators,
     db,
@@ -219,9 +221,79 @@ def test_live_contender_uses_frozen_current_operator_rows(monkeypatch):
         day,
         now,
         current_operator_rows_by_wc={"Dismantler 3": rows},
+        eligible_planned_work_centers={"Dismantler 3"},
     )
 
     assert contenders[0].current_operators == rows
+
+
+@pytest.mark.parametrize(
+    "ineligible_rows",
+    [
+        (),
+        (
+            current_operators.OperatorDisplayRow(
+                "Unplanned Physical Person", 8, False, True
+            ),
+        ),
+    ],
+)
+def test_frozen_goat_path_keeps_plan_eligibility_separate_from_labels(
+    monkeypatch,
+    ineligible_rows,
+):
+    day = date(2026, 9, 10)
+    now = datetime(2026, 9, 10, 18, 0, tzinfo=UTC)
+    eligible_rows = (
+        current_operators.OperatorDisplayRow("Scheduled Person", 11, True, True),
+    )
+    monkeypatch.setattr(goat_watch, "_final_break_passed", lambda *_args: True)
+    monkeypatch.setattr(goat_watch, "_shift_elapsed_fraction", lambda *_args: 0.5)
+    monkeypatch.setattr(goat_watch, "_group_names_today", lambda: ["Dismantler"])
+    monkeypatch.setattr(
+        "zira_dashboard.awards.goat",
+        lambda _group: {
+            "units": 180,
+            "name": "Record Holder",
+            "day": date(2026, 9, 1),
+        },
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.members",
+        lambda *_args: [
+            SimpleNamespace(name="Dismantler 3"),
+            SimpleNamespace(name="Dismantler 2"),
+        ],
+    )
+    monkeypatch.setattr(
+        goat_watch,
+        "_wc_units_today",
+        lambda wc_name, _day: {
+            "Dismantler 3": 120,
+            "Dismantler 2": 100,
+        }[wc_name],
+    )
+    monkeypatch.setattr(
+        goat_watch,
+        "_primary_operator",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("frozen GOAT path must not reread the schedule")
+        ),
+    )
+
+    contenders = goat_watch.contenders_for_now(
+        day,
+        now,
+        current_operator_rows_by_wc={
+            "Dismantler 3": ineligible_rows,
+            "Dismantler 2": eligible_rows,
+        },
+        eligible_planned_work_centers={"Dismantler 2"},
+    )
+
+    assert [(row.wc, row.person, row.current_operators) for row in contenders] == [
+        ("Dismantler 2", "Scheduled Person", eligible_rows)
+    ]
 
 
 def test_live_contender_banner_renders_current_presence_classes():
