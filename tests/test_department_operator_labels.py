@@ -41,7 +41,8 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
         timeclock_windows,
         wc_attributions,
     )
-    from zira_dashboard.routes import departments, staffing as staffing_routes
+    from zira_dashboard import attendance_location_snapshot
+    from zira_dashboard.routes import departments
     from zira_dashboard.stations import Station
 
     day = date(2026, 6, 2)
@@ -134,8 +135,8 @@ def test_department_day_data_shows_transfer_at_current_wc_but_keeps_both_active(
 
     monkeypatch.setattr(attendance_timeline, "timeline_for_range", canonical_spans)
     monkeypatch.setattr(
-        staffing_routes,
-        "_read_staffing_response_snapshot",
+        attendance_location_snapshot,
+        "read_location_snapshot",
         lambda *_args, **_kwargs: SimpleNamespace(
             policy=live_cache.AttendanceReadPolicy(
                 True,
@@ -317,10 +318,11 @@ def test_department_canonical_segment_selection_honors_strict_day_and_staleness(
 ):
     from zira_dashboard import (
         attendance_location_policy,
+        attendance_location_snapshot,
         attendance_timeline,
         live_cache,
     )
-    from zira_dashboard.routes import departments, staffing as staffing_routes
+    from zira_dashboard.routes import departments
 
     day = date(2026, 6, 2)
     start = datetime(2026, 6, 2, 12, tzinfo=timezone.utc)
@@ -339,8 +341,8 @@ def test_department_canonical_segment_selection_honors_strict_day_and_staleness(
     )
     policy = {"value": live_cache.AttendanceReadPolicy(False, True, None)}
     monkeypatch.setattr(
-        staffing_routes,
-        "_read_staffing_response_snapshot",
+        attendance_location_snapshot,
+        "read_location_snapshot",
         lambda *_args, **_kwargs: SimpleNamespace(
             policy=policy["value"], spans=(span,), verified_cap_utc=end
         ),

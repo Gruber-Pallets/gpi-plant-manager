@@ -1506,12 +1506,12 @@ def test_mirror_transfer_snapshot_moves_worker_and_records_exact_departure():
 
 
 def test_off_or_incomplete_baseline_operator_source_keeps_legacy_windows(monkeypatch):
-    from zira_dashboard.routes import staffing as staffing_routes
+    from zira_dashboard import attendance_location_snapshot
 
     arrival = _now() - timedelta(hours=1)
     monkeypatch.setattr(
-        staffing_routes,
-        "_read_staffing_response_snapshot",
+        attendance_location_snapshot,
+        "read_location_snapshot",
         lambda day, as_of_utc: _frozen_staffing_snapshot(
             (), mirror_owned=False
         ),
@@ -1535,7 +1535,7 @@ def test_off_or_incomplete_baseline_operator_source_keeps_legacy_windows(monkeyp
 
 
 def test_complete_mirror_operator_source_never_falls_back_to_legacy(monkeypatch):
-    from zira_dashboard.routes import staffing as staffing_routes
+    from zira_dashboard import attendance_location_snapshot
 
     arrival = _now() - timedelta(hours=1)
     span = _location_span(
@@ -1548,8 +1548,8 @@ def test_complete_mirror_operator_source_never_falls_back_to_legacy(monkeypatch)
         attendance_id=91,
     )
     monkeypatch.setattr(
-        staffing_routes,
-        "_read_staffing_response_snapshot",
+        attendance_location_snapshot,
+        "read_location_snapshot",
         lambda day, as_of_utc: _frozen_staffing_snapshot(
             (span,), current_attendance_ids=(91,)
         ),

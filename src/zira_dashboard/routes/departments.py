@@ -89,10 +89,14 @@ def _canonical_department_segments(
     Unavailable or stale canonical data fails closed instead of collapsing
     duplicate employees into the legacy name-only map.
     """
-    from .. import assignment_windows, attendance_location_policy, attendance_timeline
-    from . import staffing as staffing_routes
+    from .. import (
+        assignment_windows,
+        attendance_location_policy,
+        attendance_location_snapshot,
+        attendance_timeline,
+    )
 
-    snapshot = staffing_routes._read_staffing_response_snapshot(  # noqa: SLF001
+    snapshot = attendance_location_snapshot.read_location_snapshot(
         day, as_of_utc=now_utc
     )
     policy = snapshot.policy

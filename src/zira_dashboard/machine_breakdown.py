@@ -699,9 +699,9 @@ def _operator_source_from_staffing_snapshot(snapshot) -> OperatorSourceSnapshot:
 
 def _operator_source_snapshot(day: date, now: datetime) -> OperatorSourceSnapshot:
     """Freeze one canonical operator source for a complete breakdown read."""
-    from .routes import staffing as staffing_routes
+    from . import attendance_location_snapshot
 
-    staffing_snapshot = staffing_routes._read_staffing_response_snapshot(
+    staffing_snapshot = attendance_location_snapshot.read_location_snapshot(
         day, as_of_utc=now
     )
     if staffing_snapshot.policy.mirror_owned:

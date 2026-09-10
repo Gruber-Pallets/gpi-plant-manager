@@ -163,7 +163,7 @@ def test_span_ending_exactly_at_as_of_is_not_live():
 
 
 def test_exact_cap_current_selection_uses_contributing_raw_interval_identity():
-    from zira_dashboard.routes import staffing as staffing_routes
+    from zira_dashboard import attendance_location_snapshot
 
     cap = NOW
     rows = (
@@ -222,7 +222,9 @@ def test_exact_cap_current_selection_uses_contributing_raw_interval_identity():
         ),
     )
 
-    current_attendance_ids = staffing_routes._current_attendance_ids_at(rows, cap)
+    current_attendance_ids = attendance_location_snapshot.current_attendance_ids_at(
+        rows, cap
+    )
     locations = staffing_view.build_live_locations(
         {},
         spans,
@@ -237,244 +239,45 @@ def test_exact_cap_current_selection_uses_contributing_raw_interval_identity():
     )
 
 
-def test_staffing_snapshot_survives_sync_commit_interleaving(monkeypatch):
-    from zira_dashboard import attendance_mirror
-    from zira_dashboard.routes import staffing as staffing_routes
-
-    first_row = {
-        "odoo_attendance_id": 91,
-        "employee_odoo_id": 101,
-        "check_in_utc": NOW - timedelta(hours=1),
-        "check_out_utc": None,
-    }
-    calls = []
-
-    def snapshot_overlapping(*_args):
-        calls.append(len(calls) + 1)
-        return SimpleNamespace(
-            health=attendance_mirror.MirrorHealth(
-                last_incremental_completed_at=NOW - timedelta(seconds=10),
-                last_full_sweep_completed_at=NOW - timedelta(seconds=10),
-                baseline_completed_at=NOW - timedelta(seconds=10),
-                oldest_recalc_requested_at=None,
-                last_error=None,
-            ),
-            rows=(first_row,),
-        )
-
-    monkeypatch.setattr(
-        staffing_routes.attendance_location_policy,
-        "get_rollout_config",
-        lambda: SimpleNamespace(mode="shadow"),
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance_mirror,
-        "snapshot_overlapping",
-        snapshot_overlapping,
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance_timeline,
-        "_plant_day_bounds",
-        lambda _day: (NOW - timedelta(hours=16), NOW + timedelta(hours=8)),
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance_timeline,
-        "_rows_with_employee_department_fallback",
-        lambda rows, **_kwargs: rows,
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance_timeline,
-        "project_rows",
-        lambda rows, **_kwargs: (
-            _span(
-                "Alex",
-                "valid",
-                app_wc="Bay 3",
-                employee_id=rows[0]["employee_odoo_id"],
-            ),
-        ),
-    )
-    monkeypatch.setattr(staffing_routes.attendance, "person_id_to_name", lambda: {"101": "Alex"})
-    snapshot = staffing_routes._read_staffing_response_snapshot(
-        NOW.date(), as_of_utc=NOW
-    )
-
-    assert calls == [1]
-    assert set(snapshot.attendance_source.payload) == {"101"}
-    assert snapshot.spans[0].employee_odoo_id == 101
-
-
-def test_staffing_response_derives_policy_presence_and_spans_from_atomic_snapshot(
-    monkeypatch,
-):
-    from zira_dashboard import attendance_mirror
-    from zira_dashboard.routes import staffing as staffing_routes
-
-    verified_at = NOW - timedelta(seconds=10)
-    raw_row = {
-        "odoo_attendance_id": 91,
-        "employee_odoo_id": 101,
-        "check_in_utc": NOW - timedelta(hours=1),
-        "check_out_utc": None,
-    }
-    atomic = SimpleNamespace(
-        health=attendance_mirror.MirrorHealth(
-            last_incremental_completed_at=verified_at,
-            last_full_sweep_completed_at=verified_at,
-            baseline_completed_at=verified_at,
-            oldest_recalc_requested_at=None,
-            last_error=None,
-        ),
-        rows=(raw_row,),
-    )
-    atomic_calls = []
-    monkeypatch.setattr(
-        staffing_routes.attendance_location_policy,
-        "get_rollout_config",
-        lambda: SimpleNamespace(mode="shadow"),
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance_mirror,
-        "snapshot_overlapping",
-        lambda *args: atomic_calls.append(args) or atomic,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        staffing_routes.live_cache,
-        "attendance_read_policy",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Staffing must not perform a separate health read")
-        ),
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance_timeline,
-        "_plant_day_bounds",
-        lambda _day: (NOW - timedelta(hours=16), NOW + timedelta(hours=8)),
-    )
-    monkeypatch.setattr(
-        staffing_routes,
-        "_project_staffing_location_spans",
-        lambda _day, **_kwargs: (
-            _span("Alex", "valid", app_wc="Bay 3", employee_id=101, end_utc=verified_at),
-        ),
-    )
-
-    snapshot = staffing_routes._read_staffing_response_snapshot(
-        NOW.date(), as_of_utc=NOW
-    )
-
-    assert len(atomic_calls) == 1
-    assert snapshot.policy.mirror_owned is True
-    assert snapshot.policy.refreshed_at == verified_at
-    assert snapshot.attendance_source.payload["101"]["currently_open"] is True
-    assert snapshot.spans[0].employee_odoo_id == 101
-    assert snapshot.current_attendance_ids == frozenset({91})
-
-
-def test_staffing_snapshot_caps_open_span_and_uses_half_open_selection(monkeypatch):
-    from zira_dashboard import attendance_mirror
+def test_staffing_live_context_uses_frozen_snapshot_half_open_selection():
     from zira_dashboard.routes import staffing as staffing_routes
 
     verified_at = NOW
-    health_refreshed_at = NOW + timedelta(seconds=10)
-    row = {
-        "odoo_attendance_id": 91,
-        "employee_odoo_id": 101,
-        "check_in_utc": NOW - timedelta(hours=1),
-        "check_out_utc": None,
-    }
-    closed_row = {
-        "odoo_attendance_id": 92,
-        "employee_odoo_id": 202,
-        "check_in_utc": NOW - timedelta(hours=1),
-        "check_out_utc": verified_at,
-    }
-    projected_as_of = []
-    monkeypatch.setattr(
-        staffing_routes.attendance_timeline,
-        "_plant_day_bounds",
-        lambda _day: (NOW - timedelta(hours=16), NOW + timedelta(hours=8)),
+    policy = SimpleNamespace(
+        mode="shadow",
+        mirror_owned=True,
+        available=True,
+        refreshed_at=verified_at,
+        stale=False,
+        error=None,
     )
-    monkeypatch.setattr(
-        staffing_routes.attendance_location_policy,
-        "get_rollout_config",
-        lambda: SimpleNamespace(mode="shadow"),
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance_mirror,
-        "snapshot_overlapping",
-        lambda *_args: SimpleNamespace(
-            health=attendance_mirror.MirrorHealth(
-                last_incremental_completed_at=health_refreshed_at,
-                last_full_sweep_completed_at=health_refreshed_at,
-                baseline_completed_at=health_refreshed_at,
-                oldest_recalc_requested_at=None,
-                last_error=None,
-            ),
-            rows=(row, closed_row),
-        ),
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance_timeline,
-        "_rows_with_employee_department_fallback",
-        lambda rows, **_kwargs: rows,
-    )
-
-    def project_rows(_rows, **kwargs):
-        projected_as_of.append(kwargs["as_of_utc"])
-        span = _span(
-            "Alex",
-            "valid",
-            app_wc="Bay 3",
-            employee_id=101,
-            attendance_ids=(91,),
-        )
-        return (
-            LocationSpan(
-                **{
-                    **span.__dict__,
-                    "start_utc": NOW - timedelta(hours=1),
-                    "end_utc": kwargs["as_of_utc"] + timedelta(minutes=1),
-                }
-            ),
-        )
-
-    monkeypatch.setattr(staffing_routes.attendance_timeline, "project_rows", project_rows)
-    monkeypatch.setattr(
-        staffing_routes.attendance,
-        "person_id_to_name",
-        lambda: {"101": "Alex"},
-    )
-    snapshot = staffing_routes._read_staffing_response_snapshot(
-        NOW.date(), as_of_utc=NOW
+    open_span = _span(
+        "Alex",
+        "valid",
+        app_wc="Bay 3",
+        employee_id=101,
+        end_utc=verified_at,
+        attendance_ids=(91,),
     )
     closed_at_selection = _span(
         "Closed",
         "valid",
         app_wc="Bay 8",
         employee_id=202,
-        end_utc=snapshot.verified_cap_utc,
+        end_utc=verified_at,
         attendance_ids=(92,),
     )
     context = staffing_routes._staffing_live_context(
         NOW.date(),
         NOW.date(),
         {"Bay 3": ["Alex"], "Bay 8": ["Closed"]},
-        policy=snapshot.policy,
-        as_of_utc=snapshot.verified_cap_utc,
-        spans=(*snapshot.spans, closed_at_selection),
+        policy=policy,
+        as_of_utc=verified_at,
+        spans=(open_span, closed_at_selection),
         planned_employee_ids={"Alex": 101, "Closed": 202},
-        current_attendance_ids=snapshot.current_attendance_ids,
+        current_attendance_ids=frozenset({91}),
     )
 
-    assert projected_as_of == [verified_at]
-    assert snapshot.spans[0].end_utc == verified_at
-    assert snapshot.verified_cap_utc == verified_at
-    assert snapshot.policy.refreshed_at == verified_at
-    assert snapshot.attendance_source.refreshed_at == verified_at
-    assert snapshot.attendance_source.payload["101"]["currently_open"] is True
-    assert snapshot.attendance_source.payload["202"]["currently_open"] is False
-    assert snapshot.current_attendance_ids == frozenset({91})
     assert set(context["live_locations_by_employee_id"]) == {101}
     assert context["live_locations_by_employee_id"][101].source_fresh_at == verified_at
     assert context["staffing_live_fresh_at"] == verified_at
@@ -588,6 +391,7 @@ def test_staffing_template_has_distinct_shadow_live_and_unavailable_labels():
 
 
 def test_staffing_live_context_uses_injected_frozen_timeline_snapshot(monkeypatch):
+    from zira_dashboard import attendance_location_snapshot
     from zira_dashboard.routes import staffing as staffing_routes
 
     policy = SimpleNamespace(
@@ -600,8 +404,8 @@ def test_staffing_live_context_uses_injected_frozen_timeline_snapshot(monkeypatc
     )
     spans = (_span("Alice", "valid", app_wc="Bay 8", employee_id=101),)
     monkeypatch.setattr(
-        staffing_routes,
-        "_project_staffing_location_spans",
+        attendance_location_snapshot,
+        "project_location_spans",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("frozen Staffing context must not re-query the timeline")
         ),
@@ -757,6 +561,7 @@ def test_unscheduled_identity_links_only_exact_known_local_people():
 
 
 def test_staffing_live_context_labels_live_and_preserves_unavailability(monkeypatch):
+    from zira_dashboard import attendance_location_snapshot
     from zira_dashboard.routes import staffing as staffing_routes
 
     unavailable = SimpleNamespace(
@@ -768,8 +573,8 @@ def test_staffing_live_context_labels_live_and_preserves_unavailability(monkeypa
         error="mirror read failed",
     )
     monkeypatch.setattr(
-        staffing_routes,
-        "_project_staffing_location_spans",
+        attendance_location_snapshot,
+        "project_location_spans",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("unavailable source must not project")
         ),
@@ -784,36 +589,3 @@ def test_staffing_live_context_labels_live_and_preserves_unavailability(monkeypa
     assert context["staffing_live_error"] == "mirror read failed"
     assert context["staffing_live_fresh_at"] == unavailable.refreshed_at
 
-
-def test_projected_staffing_spans_use_canonical_roster_name_by_employee_id(monkeypatch):
-    from zira_dashboard.routes import staffing as staffing_routes
-
-    raw_span = _span("Alice Full Odoo Name", "valid", app_wc="Bay 8")
-    policy = SimpleNamespace(refreshed_at=NOW - timedelta(seconds=10))
-    monkeypatch.setattr(
-        staffing_routes.attendance_timeline,
-        "_plant_day_bounds",
-        lambda _day: (NOW - timedelta(hours=8), NOW + timedelta(hours=8)),
-    )
-    monkeypatch.setattr(staffing_routes.attendance_mirror, "rows_overlapping", lambda *_args: ({},))
-    monkeypatch.setattr(
-        staffing_routes.attendance_timeline,
-        "_rows_with_employee_department_fallback",
-        lambda rows, **_kwargs: rows,
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance_timeline,
-        "project_rows",
-        lambda *_args, **_kwargs: (raw_span,),
-    )
-    monkeypatch.setattr(
-        staffing_routes.attendance,
-        "person_id_to_name",
-        lambda: {str(raw_span.employee_odoo_id): "Alice A."},
-    )
-
-    spans = staffing_routes._project_staffing_location_spans(
-        NOW.date(), as_of_utc=NOW, policy=policy
-    )
-
-    assert spans[0].employee_name == "Alice A."

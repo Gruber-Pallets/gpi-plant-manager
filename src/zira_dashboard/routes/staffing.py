@@ -9,7 +9,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import date, datetime, timedelta, UTC
 from urllib.parse import urlencode
 
@@ -21,14 +21,13 @@ from .. import (
     app_settings,
     attendance,
     attendance_location_policy,
-    attendance_mirror,
+    attendance_location_snapshot,
     attendance_timeline,
     auto_schedule_capacity,
     company_holidays,
     current_schedule_validation,
     db,
     late_report,
-    live_cache,
     optional_workday,
     rotation_store,
     rotation_suggestions,
@@ -72,17 +71,6 @@ class _ScheduleMetadataConflict(RuntimeError):
     """A metadata write could not prove a stable optional-workday identity."""
 
 
-@dataclass(frozen=True)
-class _StaffingMirrorSnapshot:
-    """One atomic mirror generation projected into every Staffing consumer."""
-
-    policy: live_cache.AttendanceReadPolicy
-    attendance_source: live_cache.AttendanceSourceSnapshot | None
-    spans: tuple[attendance_timeline.LocationSpan, ...]
-    verified_cap_utc: datetime
-    current_attendance_ids: frozenset[int]
-
-
 class _Phase:
     """Tiny context manager that records milliseconds elapsed under a name.
 
@@ -111,172 +99,6 @@ def _live_location_active() -> bool:
     except Exception:  # noqa: BLE001 -- preserve legacy actions on unreadable rollout state
         log.exception("Could not read attendance-location rollout state")
         return False
-
-
-def _project_staffing_location_spans(
-    day: date,
-    *,
-    as_of_utc: datetime,
-    policy,
-    rows: Sequence[Mapping[str, object]] | None = None,
-):
-    """Project one Staffing timeline from the already-frozen health policy."""
-    if policy.refreshed_at is None:
-        raise RuntimeError("attendance mirror has no verified freshness")
-    start_utc, end_utc = attendance_timeline._plant_day_bounds(day)
-    if rows is None:
-        rows = attendance_mirror.rows_overlapping(start_utc, end_utc)
-    if not rows:
-        return ()
-    rows = attendance_timeline._rows_with_employee_department_fallback(
-        rows,
-        include_wage_type=True,
-    )
-    verified_cap = min(as_of_utc, policy.refreshed_at)
-    spans = attendance_timeline.project_rows(
-        rows,
-        as_of_utc=verified_cap,
-        verified_through_utc=verified_cap,
-        map_work_center=work_centers_store.app_work_center_name_for_odoo_id,
-        requires_work_center=attendance_timeline._department_requires_work_center_for_mirror,
-        expected_department_id=attendance_timeline._expected_department_id_for_app_work_center,
-    )
-    canonical_by_id = attendance.person_id_to_name()
-    return tuple(
-        replace(
-            span,
-            end_utc=min(span.end_utc, verified_cap),
-            employee_name=canonical_by_id.get(
-                str(span.employee_odoo_id), span.employee_name
-            ),
-        )
-        for span in spans
-        if span.start_utc <= verified_cap
-    )
-
-
-def _current_attendance_ids_at(
-    rows: Sequence[Mapping[str, object]], verified_cap: datetime
-) -> frozenset[int]:
-    """Identify raw intervals that are current at the exact verified cap."""
-    if verified_cap.utcoffset() is None:
-        raise ValueError("verified_cap must be timezone-aware")
-    current_ids: set[int] = set()
-    for row in rows:
-        check_in = row["check_in_utc"]
-        if not isinstance(check_in, datetime) or check_in.utcoffset() is None:
-            raise ValueError("mirror check_in_utc must be timezone-aware")
-        check_out = row.get("check_out_utc")
-        if check_out is not None and (
-            not isinstance(check_out, datetime) or check_out.utcoffset() is None
-        ):
-            raise ValueError("mirror check_out_utc must be timezone-aware or null")
-        if check_in <= verified_cap and (
-            check_out is None or verified_cap < check_out
-        ):
-            current_ids.add(int(row["odoo_attendance_id"]))
-    return frozenset(current_ids)
-
-
-def _read_staffing_response_snapshot(
-    day: date, *, as_of_utc: datetime
-) -> _StaffingMirrorSnapshot:
-    """Read rollout, mirror health, and rows once for one Staffing response."""
-    if as_of_utc.utcoffset() is None:
-        raise ValueError("as_of_utc must be timezone-aware")
-    try:
-        mode = attendance_location_policy.get_rollout_config().mode
-    except Exception as exc:  # Preserve the legacy rollback path.
-        policy = live_cache.AttendanceReadPolicy(
-            False, True, None, str(exc), "off"
-        )
-        return _StaffingMirrorSnapshot(policy, None, (), as_of_utc, frozenset())
-    if mode == "off":
-        policy = live_cache.attendance_read_policy_from_health(
-            mode, None, now_utc=as_of_utc
-        )
-        return _StaffingMirrorSnapshot(policy, None, (), as_of_utc, frozenset())
-
-    start_utc, end_utc = attendance_timeline._plant_day_bounds(day)
-    try:
-        atomic = attendance_mirror.snapshot_overlapping(start_utc, end_utc)
-    except Exception as exc:  # Saved shadow/live must not fall through to legacy.
-        log.exception("Could not read the atomic Staffing mirror snapshot for %s", day)
-        policy = live_cache.AttendanceReadPolicy(
-            True, False, None, str(exc), mode
-        )
-        source = live_cache.AttendanceSourceSnapshot(
-            None, None, True, False, str(exc), False, True
-        )
-        return _StaffingMirrorSnapshot(policy, source, (), as_of_utc, frozenset())
-
-    policy = live_cache.attendance_read_policy_from_health(
-        mode, atomic.health, now_utc=as_of_utc
-    )
-    if not policy.mirror_owned:
-        return _StaffingMirrorSnapshot(policy, None, (), as_of_utc, frozenset())
-    verified_cap = (
-        min(as_of_utc, policy.refreshed_at)
-        if policy.refreshed_at is not None
-        else as_of_utc
-    )
-    if policy.refreshed_at is not None and policy.refreshed_at != verified_cap:
-        policy = replace(policy, refreshed_at=verified_cap)
-    if not policy.available or policy.refreshed_at is None:
-        source = live_cache.AttendanceSourceSnapshot(
-            None,
-            policy.refreshed_at,
-            True,
-            False,
-            policy.error,
-            policy.stale,
-            True,
-        )
-        return _StaffingMirrorSnapshot(
-            policy, source, (), verified_cap, frozenset()
-        )
-    try:
-        rows = atomic.rows
-        current_attendance_ids = _current_attendance_ids_at(rows, verified_cap)
-        payload = attendance_mirror.day_presence_from_rows(
-            day, rows, as_of_utc=verified_cap
-        )
-        spans = _project_staffing_location_spans(
-            day,
-            as_of_utc=verified_cap,
-            policy=policy,
-            rows=rows,
-        )
-    except Exception as exc:  # noqa: BLE001 -- one failed snapshot stays unavailable
-        log.exception("Could not read the frozen Staffing mirror snapshot for %s", day)
-        failed_policy = replace(policy, available=False, error=str(exc))
-        source = live_cache.AttendanceSourceSnapshot(
-            None,
-            policy.refreshed_at,
-            True,
-            False,
-            str(exc),
-            policy.stale,
-            True,
-        )
-        return _StaffingMirrorSnapshot(
-            failed_policy, source, (), verified_cap, frozenset()
-        )
-    return _StaffingMirrorSnapshot(
-        policy,
-        live_cache.AttendanceSourceSnapshot(
-            payload,
-            policy.refreshed_at,
-            True,
-            True,
-            policy.error,
-            policy.stale,
-            True,
-        ),
-        spans,
-        verified_cap,
-        current_attendance_ids,
-    )
 
 
 def _staffing_live_context(
@@ -1907,7 +1729,7 @@ def staffing_page(
     except ValueError:
         d = _next_working_day(today)
     staffing_live_as_of = datetime.now(UTC)
-    staffing_mirror_snapshot = _read_staffing_response_snapshot(
+    staffing_mirror_snapshot = attendance_location_snapshot.read_location_snapshot(
         d, as_of_utc=staffing_live_as_of
     )
     staffing_live_policy = staffing_mirror_snapshot.policy
