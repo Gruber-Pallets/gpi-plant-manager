@@ -475,6 +475,11 @@
     transform: translateY(-50%);
   }
   .current-empty { color: var(--bad); }
+  .current-operator.physically-present { color: var(--fg); }
+  .current-operator.planned-only {
+    color: var(--muted);
+    font-weight: 500;
+  }
   .bar-target-line {
     position: absolute;
     top: -2px; bottom: -2px;

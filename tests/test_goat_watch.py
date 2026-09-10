@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 
 from zira_dashboard import (
+    current_operators,
     db,
     goat_categories,
     goat_watch,
     production_history,
     shift_config,
 )
+from zira_dashboard.deps import templates
 
 
 def test_next_business_day_uses_configured_fallback_when_shared_lookup_raises(
@@ -179,3 +182,94 @@ def test_active_alerts_do_not_replay_day_29_alert_after_day_30(monkeypatch):
 
     assert goat_watch.active_alerts(today) == []
     assert requested_through == [achieved_day]
+
+
+def test_live_contender_uses_frozen_current_operator_rows(monkeypatch):
+    day = date(2026, 9, 10)
+    now = datetime(2026, 9, 10, 18, 0, tzinfo=UTC)
+    rows = (
+        current_operators.OperatorDisplayRow("Planned Person", 11, True, False),
+        current_operators.OperatorDisplayRow("Christian C.", 8, False, True),
+    )
+    monkeypatch.setattr(goat_watch, "_final_break_passed", lambda *_args: True)
+    monkeypatch.setattr(goat_watch, "_shift_elapsed_fraction", lambda *_args: 0.5)
+    monkeypatch.setattr(goat_watch, "_group_names_today", lambda: ["Dismantler"])
+    monkeypatch.setattr(
+        "zira_dashboard.awards.goat",
+        lambda _group: {
+            "units": 200,
+            "name": "Record Holder",
+            "day": date(2026, 9, 1),
+        },
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.work_centers_store.members",
+        lambda *_args: [SimpleNamespace(name="Dismantler 3")],
+    )
+    monkeypatch.setattr(goat_watch, "_wc_units_today", lambda *_args: 100)
+    monkeypatch.setattr(
+        goat_watch,
+        "_primary_operator",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("live GOAT must not read the schedule again")
+        ),
+    )
+
+    contenders = goat_watch.contenders_for_now(
+        day,
+        now,
+        current_operator_rows_by_wc={"Dismantler 3": rows},
+    )
+
+    assert contenders[0].current_operators == rows
+
+
+def test_live_contender_banner_renders_current_presence_classes():
+    contender = SimpleNamespace(
+        group="Dismantler",
+        wc="Dismantler 3",
+        projected=220,
+        record_units=200,
+        record_holder="Record Holder",
+        record_day=date(2026, 9, 1),
+        current_operators=(
+            current_operators.OperatorDisplayRow(
+                "Planned Person", 11, True, False
+            ),
+            current_operators.OperatorDisplayRow(
+                "Christian C.", 8, False, True
+            ),
+        ),
+    )
+
+    html = templates.get_template("_goat_watch_banner.html").render(
+        goat_alerts_active=[],
+        goat_contenders=[contender],
+    )
+
+    assert "goat-watch-person current-operator planned-only" in html
+    assert "goat-watch-person current-operator physically-present" in html
+    assert "Planned Person" in html
+    assert "Christian C." in html
+
+
+def test_persisted_goat_alert_keeps_historical_winner_markup():
+    html = templates.get_template("_goat_watch_banner.html").render(
+        goat_alerts_active=[
+            {
+                "id": 7,
+                "group_name": "Dismantler",
+                "person": "Historical Winner",
+                "units": 250,
+                "wc_name": "Dismantler 3",
+                "achieved_day": date(2026, 9, 9),
+                "prior_record_units": 200,
+                "prior_record_holder": "Prior Holder",
+                "prior_record_day": date(2026, 9, 1),
+            }
+        ],
+        goat_contenders=[],
+    )
+
+    assert "<b>Historical Winner</b>" in html
+    assert "current-operator planned-only" not in html

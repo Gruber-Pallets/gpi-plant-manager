@@ -13,6 +13,8 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from .. import (
+    attendance_location_snapshot,
+    current_operators,
     layout_store,
     production_segments,
     recycling_range,
@@ -53,6 +55,7 @@ _RANGE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="dept-range")
 class _CanonicalDepartmentProjection:
     segments: tuple
     cap_utc: datetime
+    location_snapshot: attendance_location_snapshot.LocationSnapshot | None
 
 
 def _breakdown_windows_for_segment(breakdown_windows, segment):
@@ -92,7 +95,6 @@ def _canonical_department_segments(
     from .. import (
         assignment_windows,
         attendance_location_policy,
-        attendance_location_snapshot,
         attendance_timeline,
     )
 
@@ -106,8 +108,9 @@ def _canonical_department_segments(
             min(window_end_utc, snapshot.verified_cap_utc),
         )
         if not policy.available or policy.refreshed_at is None or policy.stale:
-            return _CanonicalDepartmentProjection((), canonical_cap)
+            return _CanonicalDepartmentProjection((), canonical_cap, snapshot)
         spans = snapshot.spans
+        projection_snapshot = snapshot
     else:
         try:
             permanently_strict = attendance_location_policy.day_is_strict(day)
@@ -122,8 +125,9 @@ def _canonical_department_segments(
                 as_of_utc=now_utc,
             )
         except Exception:
-            return _CanonicalDepartmentProjection((), window_end_utc)
+            return _CanonicalDepartmentProjection((), window_end_utc, None)
         canonical_cap = window_end_utc
+        projection_snapshot = None
 
     return _CanonicalDepartmentProjection(
         assignment_windows.work_segments_from_timeline(
@@ -132,6 +136,7 @@ def _canonical_department_segments(
             window_end_utc=canonical_cap,
         ),
         canonical_cap,
+        projection_snapshot,
     )
 
 
@@ -234,6 +239,12 @@ def _present_assignments(
         wc_name: [name for name in (ops or []) if name not in absent]
         for wc_name, ops in (assignments or {}).items()
     }
+
+
+def _attach_current_operator_rows(rows, by_work_center):
+    for row in rows:
+        row["current_operators"] = tuple(by_work_center.get(row["name"], ()))
+    return rows
 
 
 def _who_by_wc(
@@ -398,6 +409,40 @@ def _department_day_data(
             # stale time-off/absence marker, so Odoo wins for that person.
             excluded_people=_absent_today - set(attendance_windows),
         )
+    location_snapshot = (
+        canonical_projection.location_snapshot
+        if canonical_projection is not None
+        else None
+    )
+    if location_snapshot is not None:
+        try:
+            operator_source = current_operators.source_from_location_snapshot(
+                location_snapshot
+            )
+        except Exception:
+            operator_source = current_operators.OperatorSourceSnapshot(
+                (), (), False, True, False
+            )
+    else:
+        operator_source = current_operators.OperatorSourceSnapshot(
+            (), (), False, False, False
+        )
+    if is_live_dashboard:
+        from .. import attendance
+
+        try:
+            planned_employee_ids = attendance.name_to_person_id()
+        except Exception:
+            planned_employee_ids = {}
+    else:
+        planned_employee_ids = {}
+    current_operator_rows = current_operators.build_display_by_work_center(
+        sched.assignments,
+        planned_employee_ids=planned_employee_ids,
+        absent_names=_absent_today,
+        source=operator_source,
+        is_today=is_live_dashboard,
+    )
     # Keep every resolved segment for station activation and pace math, but on
     # today's live board show a person only at the WC whose segment remains
     # open through now. Otherwise a transfer (Repair 2 -> Dismantler 2) leaves
@@ -677,6 +722,7 @@ def _department_day_data(
         "per_wc_station_obj": per_wc_station_obj,
         "active_wc_names": active_wc_names,
         "schedule_assignments": present_assignments,
+        "current_operator_rows": current_operator_rows,
         "group_buckets": group_buckets,
         "shift_start_label": shift_start_local.strftime("%H:%M"),
     }
@@ -853,7 +899,7 @@ def _render_recycling(
     customs_all = widget_customizer.load_all("recycling")
 
     def _bars(category: str) -> list[dict]:
-        return build_bars(
+        bars = build_bars(
             category,
             agg_active_names=agg_active_names,
             agg_category=agg_category,
@@ -867,18 +913,24 @@ def _render_recycling(
             agg_producers=aggregate.single_day_producers,
             is_live=aggregate.single_day_is_live,
         )
+        return _attach_current_operator_rows(
+            bars, aggregate.single_day_current_operator_rows
+        )
 
     def _sorted_bars(items: list, widget_id: str) -> list:
         return sort_bars(items, widget_id, customs_all=customs_all)
 
     def _downtime_rows():
-        return build_downtime_rows(
+        rows = build_downtime_rows(
             agg_active_names=agg_active_names,
             agg_category=agg_category,
             agg_downtime=agg_downtime,
             total_elapsed=total_elapsed,
             agg_who_today=agg_who_today,
             is_range=is_range,
+        )
+        return _attach_current_operator_rows(
+            rows, aggregate.single_day_current_operator_rows
         )
 
     now_local = now.astimezone(shift_config.SITE_TZ)
@@ -924,6 +976,10 @@ def _render_recycling(
             if href:
                 operator_links_by_wc[name] = href
 
+    dismantler_bars = _sorted_bars(_bars("Dismantler"), "dismantler-bars")
+    repair_bars = _sorted_bars(_bars("Repair"), "repair-bars")
+    downtime_rows = _downtime_rows()
+
     response = templates.TemplateResponse(
         request,
         "recycling.html",
@@ -949,9 +1005,9 @@ def _render_recycling(
             "pph_per_person": round(pph_per_person, 1),
             "pph_per_person_ex_d4": round(pph_per_person_ex_d4, 1),
             "elapsed_minutes": total_elapsed,
-            "dismantler_bars": _sorted_bars(_bars("Dismantler"), "dismantler-bars"),
-            "repair_bars": _sorted_bars(_bars("Repair"), "repair-bars"),
-            "downtime_rows": _downtime_rows(),
+            "dismantler_bars": dismantler_bars,
+            "repair_bars": repair_bars,
+            "downtime_rows": downtime_rows,
             "dismantler_progress": dism_progress,
             "repair_progress": repair_progress,
             "dismantler_group_target": dism_group_target,
@@ -969,7 +1025,13 @@ def _render_recycling(
             # and persisted NEW GOAT alerts (visible through next
             # business day).
             "goat_contenders": (
-                _goat_watch_contenders(today, now) if is_today else []
+                _goat_watch_contenders(
+                    today,
+                    now,
+                    aggregate.single_day_current_operator_rows,
+                )
+                if is_today
+                else []
             ),
             "goat_alerts_active": _goat_watch_active_alerts(today),
             "ribbon_announce": _ribbon_announce(today),
@@ -980,10 +1042,14 @@ def _render_recycling(
     return response
 
 
-def _goat_watch_contenders(day, now_utc):
+def _goat_watch_contenders(day, now_utc, current_operator_rows_by_wc):
     try:
         from .. import goat_watch
-        return goat_watch.contenders_for_now(day, now_utc)
+        return goat_watch.contenders_for_now(
+            day,
+            now_utc,
+            current_operator_rows_by_wc=current_operator_rows_by_wc,
+        )
     except Exception:
         return []
 
@@ -1118,6 +1184,9 @@ def _render_new_dept(
         is_live=aggregate.single_day_is_live,
     )
     new_bars = sort_bars(new_bars, "new-bars", customs_all=customs_all)
+    _attach_current_operator_rows(
+        new_bars, aggregate.single_day_current_operator_rows
+    )
     downtime_rows = build_downtime_rows(
         agg_active_names=aggregate.agg_active_names,
         agg_category=aggregate.agg_category,
@@ -1126,6 +1195,9 @@ def _render_new_dept(
         agg_who_today=aggregate.agg_who_today,
         is_range=is_range,
         categories=("New",),
+    )
+    _attach_current_operator_rows(
+        downtime_rows, aggregate.single_day_current_operator_rows
     )
 
     total_units = aggregate.total_units

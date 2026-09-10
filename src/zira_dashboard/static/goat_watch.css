@@ -93,6 +93,11 @@ html[data-tv-theme="dark"] .goat-alert-dismiss:hover { background: rgba(255,255,
   min-width: 6.5rem;
 }
 .goat-watch-person { font-weight: 700; }
+.goat-watch-person.current-operator.physically-present { color: var(--fg); }
+.goat-watch-person.current-operator.planned-only {
+  color: var(--muted);
+  font-weight: 500;
+}
 .goat-watch-wc { color: var(--muted); }
 .goat-watch-projection b { color: var(--accent); font-weight: 800; }
 .goat-watch-record { color: var(--muted); font-size: 0.85rem; }

@@ -1,8 +1,8 @@
-{%- macro operator_name(name, href, show_badges=false) -%}
+{%- macro operator_name(name, href, show_badges=false, state_class=none) -%}
   {%- if href and not tv_mode -%}
-    <a href="{{ href }}" class="name-primary operator-dashboard-link">{{ name }}{%- if show_badges -%}{{ goat_badges(name, goat_holders()) }}{%- endif -%}</a>
+    <a href="{{ href }}" class="name-primary operator-dashboard-link{% if state_class %} current-operator {{ state_class }}{% endif %}">{{ name }}{%- if show_badges -%}{{ goat_badges(name, goat_holders()) }}{%- endif -%}</a>
   {%- else -%}
-    <span class="name-primary">{{ name }}{%- if show_badges -%}{{ goat_badges(name, goat_holders()) }}{%- endif -%}</span>
+    <span class="name-primary{% if state_class %} current-operator {{ state_class }}{% endif %}">{{ name }}{%- if show_badges -%}{{ goat_badges(name, goat_holders()) }}{%- endif -%}</span>
   {%- endif -%}
 {%- endmacro %}
 
@@ -81,6 +81,12 @@
           <div class="vbar-name">
             {% if is_range %}
               <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
+            {% elif b.current_operators %}
+              {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
+              {% for operator in b.current_operators %}
+                {{ operator_name(operator.person_name, operator_href, true, "physically-present" if operator.physically_present else "planned-only") }}
+              {% endfor %}
+              <span class="name-secondary">{{ b.name }}</span>
             {% elif b.sole_producer_name %}
               {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
               {{ operator_name(b.sole_producer_name, operator_href, true) }}
@@ -122,6 +128,12 @@
         <div class="name">
           {% if is_range %}
             <span class="name-primary">{{ b.name }}{{ goat_badges(b.name, goat_holders()) }}</span>
+          {% elif b.current_operators %}
+            {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
+            {% for operator in b.current_operators %}
+              {{ operator_name(operator.person_name, operator_href, true, "physically-present" if operator.physically_present else "planned-only") }}
+            {% endfor %}
+            <span class="name-secondary">{{ b.name }}</span>
           {% elif b.sole_producer_name %}
             {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
             {{ operator_name(b.sole_producer_name, operator_href, true) }}
@@ -281,6 +293,12 @@
             <div class="downtime-vbar-name">
               {% if is_range %}
                 <span class="name-primary">{{ d.name }}</span>
+              {% elif d.current_operators %}
+                {% set operator_href = operator_links_by_wc.get(d.name) if operator_links_by_wc else none %}
+                {% for operator in d.current_operators %}
+                  {{ operator_name(operator.person_name, operator_href, false, "physically-present" if operator.physically_present else "planned-only") }}
+                {% endfor %}
+                <span class="name-secondary">{{ d.name }}</span>
               {% elif d.who and d.who != d.name %}
                 {% set operator_href = operator_links_by_wc.get(d.name) if operator_links_by_wc else none %}
                 {{ operator_name(d.who, operator_href) }}

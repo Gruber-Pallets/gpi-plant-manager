@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, UTC
 
+from .current_operators import OperatorDisplayRow
+
 CONTENDER_THRESHOLD = 0.98  # 98 % of GOAT → show in live banner
 
 
@@ -70,6 +72,7 @@ class Contender:
     record_units: int
     record_holder: str
     record_day: date
+    current_operators: tuple[OperatorDisplayRow, ...] = ()
 
 
 def _final_break_passed(day: date, now_utc: datetime) -> bool:
@@ -162,12 +165,20 @@ def _shift_elapsed_fraction(day: date, now_utc: datetime) -> float:
     return max(0.0, min(1.0, elapsed / full))
 
 
-def contenders_for_now(day: date, now_utc: datetime) -> list[Contender]:
+def contenders_for_now(
+    day: date,
+    now_utc: datetime,
+    *,
+    current_operator_rows_by_wc: (
+        dict[str, tuple[OperatorDisplayRow, ...]] | None
+    ) = None,
+) -> list[Contender]:
     """One row per group whose leading WC projects >= 98 % of GOAT.
 
     Returns [] before the final break of the day or when no group has
-    a leader meeting the threshold. Each row names the WC's primary
-    operator and projected end-of-day total at current pace.
+    a leader meeting the threshold. Dashboard callers provide the frozen
+    current-operator rows already built from their canonical attendance
+    snapshot; this function never re-reads attendance.
     """
     if not _final_break_passed(day, now_utc):
         return []
@@ -196,9 +207,16 @@ def contenders_for_now(day: date, now_utc: datetime) -> list[Contender]:
             projected = int(round(units_today / elapsed_frac))
             if projected < threshold:
                 continue
-            person = _primary_operator(loc.name, day)
-            if not person:
-                continue
+            if current_operator_rows_by_wc is None:
+                person = _primary_operator(loc.name, day)
+                if not person:
+                    continue
+                operator_rows = ()
+            else:
+                operator_rows = tuple(
+                    current_operator_rows_by_wc.get(loc.name, ())
+                )
+                person = operator_rows[0].person_name if operator_rows else ""
             candidate = Contender(
                 group=group_name,
                 person=person,
@@ -208,6 +226,7 @@ def contenders_for_now(day: date, now_utc: datetime) -> list[Contender]:
                 record_units=record_units,
                 record_holder=str(goat.get("name") or ""),
                 record_day=goat.get("day"),  # date or None
+                current_operators=operator_rows,
             )
             if best is None or candidate.projected > best.projected:
                 best = candidate

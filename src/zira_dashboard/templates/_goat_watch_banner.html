@@ -47,7 +47,13 @@
       {% for c in goat_contenders %}
         <div class="goat-watch-row">
           <span class="goat-watch-group">{{ c.group|upper }}</span>
-          <span class="goat-watch-person">{{ c.person }}</span>
+          <span class="goat-watch-current">
+            {% for operator in c.current_operators %}
+              <span class="goat-watch-person current-operator {{ 'physically-present' if operator.physically_present else 'planned-only' }}">{{ operator.person_name }}</span>{% if not loop.last %}<span aria-hidden="true"> + </span>{% endif %}
+            {% else %}
+              <span class="goat-watch-person current-empty">No one here now</span>
+            {% endfor %}
+          </span>
           <span class="goat-watch-wc">· {{ c.wc }} ·</span>
           <span class="goat-watch-projection">projecting <b>{{ c.projected }}</b></span>
           <span class="goat-watch-record">(record {{ c.record_units }} — {{ c.record_holder }}{% if c.record_day %}, {{ c.record_day }}{% endif %})</span>
