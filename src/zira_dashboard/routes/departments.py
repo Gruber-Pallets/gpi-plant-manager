@@ -247,6 +247,68 @@ def _attach_current_operator_rows(rows, by_work_center):
     return rows
 
 
+def _present_current_operator_rows(
+    rows,
+    by_work_center,
+    *,
+    configured_stations,
+    categories,
+    is_live,
+    is_range,
+    row_kind,
+):
+    """Attach live labels and append configured, presentation-only stations."""
+    display_rows = by_work_center if is_live and not is_range else {}
+    _attach_current_operator_rows(rows, display_rows)
+    if not display_rows:
+        return rows
+
+    station_categories = {
+        station.name: station.category for station in configured_stations
+    }
+    existing_names = {row["name"] for row in rows}
+    for name in sorted(display_rows):
+        operators = tuple(display_rows[name])
+        if (
+            not operators
+            or name in existing_names
+            or station_categories.get(name) not in categories
+        ):
+            continue
+        if row_kind == "bar":
+            row = {
+                "name": name,
+                "who": None,
+                "units": 0,
+                "pct_of_target": None,
+                "expected": 0,
+                "color": None,
+                "downtime_minutes": 0,
+                "uses_split_format": False,
+                "producer_names": (),
+                "sole_producer_name": None,
+                "show_segment_worker_names": False,
+                "segments": [],
+                "has_segments": False,
+                "has_worker_history": False,
+                "no_one_here_now": False,
+                "pct": 0.0,
+                "target_pct": None,
+            }
+        else:
+            row = {
+                "name": name,
+                "who": None,
+                "working": 0,
+                "down": 0,
+                "working_pct": 0.0,
+                "down_pct": 0.0,
+            }
+        row["current_operators"] = operators
+        rows.append(row)
+    return rows
+
+
 def _who_by_wc(
     assignments: dict[str, list[str]],
     day,
@@ -706,23 +768,6 @@ def _department_day_data(
             per_wc_who[wc_name] = person_name
     per_wc_category = {r.station.name: r.station.category for r in active_results}
     per_wc_station_obj = {r.station.name: r.station for r in active_results}
-    station_by_name = {station.name: station for station in stations}
-    result_by_name = {result.station.name: result for result in results}
-    current_display_names = set(current_operator_rows).intersection(station_by_name)
-    active_wc_names = production_active_wc_names | current_display_names
-    for wc_name in current_display_names - production_active_wc_names:
-        result = result_by_name.get(wc_name)
-        per_wc_units[wc_name] = int(result.units) if result is not None else 0
-        per_wc_downtime[wc_name] = (
-            int(result.downtime_minutes) if result is not None else 0
-        )
-        per_wc_expected[wc_name] = 0.0
-        per_wc_state[wc_name] = (
-            _state(result, now, is_today_d) if result is not None else "Offline"
-        )
-        per_wc_who[wc_name] = None
-        per_wc_category[wc_name] = station_by_name[wc_name].category
-        per_wc_station_obj[wc_name] = station_by_name[wc_name]
 
     return {
         "total_units": total_units,
@@ -743,7 +788,7 @@ def _department_day_data(
         "per_wc_who": per_wc_who,
         "per_wc_category": per_wc_category,
         "per_wc_station_obj": per_wc_station_obj,
-        "active_wc_names": active_wc_names,
+        "active_wc_names": production_active_wc_names,
         "schedule_assignments": present_assignments,
         "current_operator_rows": current_operator_rows,
         "group_buckets": group_buckets,
@@ -751,12 +796,14 @@ def _department_day_data(
     }
 
 
-def _recycling_day_data(d, now, is_today_d, align_to_standard=False):
+def _recycling_day_data(
+    d, now, is_today_d, align_to_standard=False, *, stations=None
+):
     data = _department_day_data(
         d,
         now,
         is_today_d,
-        stations=recycling_stations(),
+        stations=recycling_stations() if stations is None else stations,
         labor_department="Recycled",
         group_categories=("Dismantler", "Repair"),
         align_to_standard=align_to_standard,
@@ -779,12 +826,12 @@ def _new_stations() -> list[Station]:
     ]
 
 
-def _new_day_data(d, now, is_today_d, align_to_standard=False):
+def _new_day_data(d, now, is_today_d, align_to_standard=False, *, stations=None):
     return _department_day_data(
         d,
         now,
         is_today_d,
-        stations=_new_stations(),
+        stations=_new_stations() if stations is None else stations,
         labor_department="New",
         group_categories=("New",),
         align_to_standard=align_to_standard,
@@ -863,14 +910,27 @@ def _render_recycling(
     # starve the DB pool (maxconn=30) or hammer the Zira API on multi-month
     # ranges. Single-day stays inline so the most common case doesn't queue
     # behind a busy pool.
+    configured_stations = recycling_stations()
+
     def _compute_day(d):
-        return _recycling_day_data(d, now, d == today, align_to_standard=is_range)
+        return _recycling_day_data(
+            d,
+            now,
+            d == today,
+            align_to_standard=is_range,
+            stations=configured_stations,
+        )
 
     if len(days) > 1:
         per_day = list(_RANGE_POOL.map(_compute_day, days))
     else:
         per_day = [_compute_day(d) for d in days]
 
+    current_operator_rows = (
+        per_day[0].get("current_operator_rows", {})
+        if is_today and per_day
+        else {}
+    )
     aggregate = recycling_range.aggregate_range(per_day, days, is_range=is_range)
     total_units = aggregate.total_units
     total_downtime = aggregate.total_downtime
@@ -936,8 +996,14 @@ def _render_recycling(
             agg_producers=aggregate.single_day_producers,
             is_live=aggregate.single_day_is_live,
         )
-        return _attach_current_operator_rows(
-            bars, aggregate.single_day_current_operator_rows
+        return _present_current_operator_rows(
+            bars,
+            current_operator_rows,
+            configured_stations=configured_stations,
+            categories=(category,),
+            is_live=aggregate.single_day_is_live,
+            is_range=is_range,
+            row_kind="bar",
         )
 
     def _sorted_bars(items: list, widget_id: str) -> list:
@@ -952,8 +1018,14 @@ def _render_recycling(
             agg_who_today=agg_who_today,
             is_range=is_range,
         )
-        return _attach_current_operator_rows(
-            rows, aggregate.single_day_current_operator_rows
+        return _present_current_operator_rows(
+            rows,
+            current_operator_rows,
+            configured_stations=configured_stations,
+            categories=("Dismantler", "Repair"),
+            is_live=aggregate.single_day_is_live,
+            is_range=is_range,
+            row_kind="downtime",
         )
 
     now_local = now.astimezone(shift_config.SITE_TZ)
@@ -1051,7 +1123,7 @@ def _render_recycling(
                 _goat_watch_contenders(
                     today,
                     now,
-                    aggregate.single_day_current_operator_rows,
+                    current_operator_rows,
                 )
                 if is_today
                 else []
@@ -1178,16 +1250,29 @@ def _render_new_dept(
         days.append(cursor)
         cursor += timedelta(days=1)
 
+    configured_stations = _new_stations()
+
     def _compute_day(d):
-        return _new_day_data(d, now, d == today, align_to_standard=is_range)
+        return _new_day_data(
+            d,
+            now,
+            d == today,
+            align_to_standard=is_range,
+            stations=configured_stations,
+        )
 
     if len(days) > 1:
         per_day = list(_RANGE_POOL.map(_compute_day, days))
     else:
         per_day = [_compute_day(d) for d in days]
 
+    current_operator_rows = (
+        per_day[0].get("current_operator_rows", {})
+        if is_today and per_day
+        else {}
+    )
     aggregate = recycling_range.aggregate_range(per_day, days, is_range=is_range)
-    configured_new_meter_count = len(_new_stations())
+    configured_new_meter_count = len(configured_stations)
     new_progress = aggregate_buckets([
         item["group_buckets"]["New"] for item in per_day
     ])
@@ -1206,10 +1291,16 @@ def _render_new_dept(
         agg_producers=aggregate.single_day_producers,
         is_live=aggregate.single_day_is_live,
     )
-    new_bars = sort_bars(new_bars, "new-bars", customs_all=customs_all)
-    _attach_current_operator_rows(
-        new_bars, aggregate.single_day_current_operator_rows
+    _present_current_operator_rows(
+        new_bars,
+        current_operator_rows,
+        configured_stations=configured_stations,
+        categories=("New",),
+        is_live=aggregate.single_day_is_live,
+        is_range=is_range,
+        row_kind="bar",
     )
+    new_bars = sort_bars(new_bars, "new-bars", customs_all=customs_all)
     downtime_rows = build_downtime_rows(
         agg_active_names=aggregate.agg_active_names,
         agg_category=aggregate.agg_category,
@@ -1219,8 +1310,14 @@ def _render_new_dept(
         is_range=is_range,
         categories=("New",),
     )
-    _attach_current_operator_rows(
-        downtime_rows, aggregate.single_day_current_operator_rows
+    _present_current_operator_rows(
+        downtime_rows,
+        current_operator_rows,
+        configured_stations=configured_stations,
+        categories=("New",),
+        is_live=aggregate.single_day_is_live,
+        is_range=is_range,
+        row_kind="downtime",
     )
 
     total_units = aggregate.total_units

@@ -32,7 +32,7 @@ OPERATOR_ROWS = (
 )
 
 
-def test_zero_production_station_is_active_from_unplanned_physical_presence(
+def test_zero_production_current_operator_is_appended_only_after_bar_build(
     monkeypatch,
 ):
     station = Station("dismantler-3", "Dismantler 3", "Dismantler", "Recycling")
@@ -140,8 +140,96 @@ def test_zero_production_station_is_active_from_unplanned_physical_presence(
         ),
     )
     assert live["schedule_assignments"]["Dismantler 3"] == []
-    assert live["active_wc_names"] == {"Dismantler 3"}
-    assert live["per_wc_units"] == {"Dismantler 3": 0}
+    assert live["active_wc_names"] == set()
+    assert live["per_wc_units"] == {}
+    assert live["per_wc_downtime"] == {}
+    assert live["per_wc_expected"] == {}
+    assert live["per_wc_state"] == {}
+    assert live["per_wc_who"] == {}
+    assert live["per_wc_category"] == {}
+    assert live["per_wc_station_obj"] == {}
+
+    built = recycling_data.build_bars(
+        "Dismantler",
+        agg_active_names=live["active_wc_names"],
+        agg_category=live["per_wc_category"],
+        agg_units=live["per_wc_units"],
+        agg_expected=live["per_wc_expected"],
+        agg_who_today=live["per_wc_who"],
+        is_range=False,
+        agg_downtime=live["per_wc_downtime"],
+    )
+    assert built == []
+
+    presented = departments._present_current_operator_rows(
+        built,
+        live["current_operator_rows"],
+        configured_stations=[station],
+        categories=("Dismantler",),
+        is_live=True,
+        is_range=False,
+        row_kind="bar",
+    )
+
+    assert presented == [
+        {
+            "name": "Dismantler 3",
+            "who": None,
+            "units": 0,
+            "pct_of_target": None,
+            "expected": 0,
+            "color": None,
+            "downtime_minutes": 0,
+            "uses_split_format": False,
+            "producer_names": (),
+            "sole_producer_name": None,
+            "show_segment_worker_names": False,
+            "segments": [],
+            "has_segments": False,
+            "has_worker_history": False,
+            "no_one_here_now": False,
+            "pct": 0.0,
+            "target_pct": None,
+            "current_operators": (
+                current_operators.OperatorDisplayRow(
+                    "Christian C.", 8, planned=False, physically_present=True
+                ),
+            ),
+        }
+    ]
+
+    downtime_rows = departments._present_current_operator_rows(
+        recycling_data.build_downtime_rows(
+            agg_active_names=live["active_wc_names"],
+            agg_category=live["per_wc_category"],
+            agg_downtime=live["per_wc_downtime"],
+            total_elapsed=240,
+            agg_who_today=live["per_wc_who"],
+            is_range=False,
+            categories=("Dismantler",),
+        ),
+        live["current_operator_rows"],
+        configured_stations=[station],
+        categories=("Dismantler",),
+        is_live=True,
+        is_range=False,
+        row_kind="downtime",
+    )
+    assert downtime_rows == [
+        {
+            "name": "Dismantler 3",
+            "who": None,
+            "working": 0,
+            "down": 0,
+            "working_pct": 0.0,
+            "down_pct": 0.0,
+            "current_operators": (
+                current_operators.OperatorDisplayRow(
+                    "Christian C.", 8, planned=False, physically_present=True
+                ),
+            ),
+        }
+    ]
 
 
 def test_canonical_department_projection_reuses_exact_location_snapshot(monkeypatch):
@@ -218,8 +306,16 @@ def test_real_transfer_bar_is_unchanged_when_current_rows_are_attached():
     )
     before = deepcopy(bars)
 
-    returned = departments._attach_current_operator_rows(
-        bars, {"Repair 4": OPERATOR_ROWS}
+    returned = departments._present_current_operator_rows(
+        bars,
+        {"Repair 4": OPERATOR_ROWS},
+        configured_stations=[
+            Station("repair-4", "Repair 4", "Repair", "Recycling")
+        ],
+        categories=("Repair",),
+        is_live=True,
+        is_range=False,
+        row_kind="bar",
     )
 
     assert returned is bars
@@ -239,14 +335,14 @@ def _range_day(current_operator_rows):
         "available": 60,
         "uptime_minutes": 60,
         "total_man_hours": 1.0,
-        "active_wc_names": {"Dismantler 3"},
-        "per_wc_units": {"Dismantler 3": 100},
-        "per_wc_downtime": {"Dismantler 3": 0},
-        "per_wc_expected": {"Dismantler 3": 90.0},
-        "per_wc_who": {"Dismantler 3": "Christian C."},
-        "per_wc_category": {"Dismantler 3": "Dismantler"},
-        "per_wc_station_obj": {"Dismantler 3": object()},
-        "schedule_assignments": {"Dismantler 3": []},
+        "active_wc_names": {"Repair 1"},
+        "per_wc_units": {"Repair 1": 100},
+        "per_wc_downtime": {"Repair 1": 0},
+        "per_wc_expected": {"Repair 1": 90.0},
+        "per_wc_who": {"Repair 1": "Production Worker"},
+        "per_wc_category": {"Repair 1": "Repair"},
+        "per_wc_station_obj": {"Repair 1": object()},
+        "schedule_assignments": {"Repair 1": ["Production Worker"]},
         "per_wc_segments": {},
         "per_wc_segment_display": {},
         "per_wc_producers": {},
@@ -255,7 +351,7 @@ def _range_day(current_operator_rows):
     }
 
 
-def test_range_aggregate_carries_current_rows_only_for_single_day():
+def test_range_aggregate_maps_ignore_current_operator_rows():
     single = recycling_range.aggregate_range(
         [_range_day({"Dismantler 3": OPERATOR_ROWS})],
         [DAY],
@@ -270,10 +366,63 @@ def test_range_aggregate_carries_current_rows_only_for_single_day():
         is_range=True,
     )
 
-    assert single.single_day_current_operator_rows == {
-        "Dismantler 3": OPERATOR_ROWS
+    for result in (single, ranged):
+        assert result.agg_active_names == {"Repair 1"}
+        assert result.agg_units == {"Repair 1": 100 if result is single else 200}
+        assert result.agg_downtime == {"Repair 1": 0}
+        assert result.agg_expected == {
+            "Repair 1": 90.0 if result is single else 180.0
+        }
+        assert result.agg_category == {"Repair 1": "Repair"}
+        assert not hasattr(result, "single_day_current_operator_rows")
+
+
+def test_current_only_rows_require_nonempty_configured_live_matching_category():
+    dismantler = Station(
+        "dismantler-3", "Dismantler 3", "Dismantler", "Recycling"
+    )
+    empty_dismantler = Station(
+        "dismantler-2", "Dismantler 2", "Dismantler", "Recycling"
+    )
+    repair = Station("repair-1", "Repair 1", "Repair", "Recycling")
+    by_work_center = {
+        "Dismantler 3": OPERATOR_ROWS,
+        "Repair 1": OPERATOR_ROWS,
+        "Dismantler 4": OPERATOR_ROWS,
+        "Dismantler 2": (),
     }
-    assert ranged.single_day_current_operator_rows == {}
+
+    presented = departments._present_current_operator_rows(
+        [],
+        by_work_center,
+        configured_stations=[dismantler, empty_dismantler, repair],
+        categories=("Dismantler",),
+        is_live=True,
+        is_range=False,
+        row_kind="bar",
+    )
+    range_rows = departments._present_current_operator_rows(
+        [],
+        by_work_center,
+        configured_stations=[dismantler, empty_dismantler, repair],
+        categories=("Dismantler",),
+        is_live=True,
+        is_range=True,
+        row_kind="bar",
+    )
+    historical_rows = departments._present_current_operator_rows(
+        [],
+        by_work_center,
+        configured_stations=[dismantler, empty_dismantler, repair],
+        categories=("Dismantler",),
+        is_live=False,
+        is_range=False,
+        row_kind="bar",
+    )
+
+    assert [row["name"] for row in presented] == ["Dismantler 3"]
+    assert range_rows == []
+    assert historical_rows == []
 
 
 def _bar(*, name: str = "Dismantler 3", current_rows=OPERATOR_ROWS):

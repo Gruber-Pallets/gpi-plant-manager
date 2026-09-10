@@ -2,9 +2,6 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from .current_operators import OperatorDisplayRow
-
-
 @dataclass(frozen=True)
 class RangeAggregate:
     total_units: int
@@ -25,9 +22,6 @@ class RangeAggregate:
     single_day_segment_display: dict[str, bool]
     single_day_producers: dict[str, tuple[str, ...]]
     single_day_is_live: bool
-    single_day_current_operator_rows: dict[
-        str, tuple[OperatorDisplayRow, ...]
-    ]
 
 
 def aggregate_range(
@@ -52,9 +46,6 @@ def aggregate_range(
     single_day_segment_display: dict[str, bool] = {}
     single_day_producers: dict[str, tuple[str, ...]] = {}
     single_day_is_live = False
-    single_day_current_operator_rows: dict[
-        str, tuple[OperatorDisplayRow, ...]
-    ] = {}
 
     for item, day in zip(per_day, days, strict=True):
         del day
@@ -74,9 +65,6 @@ def aggregate_range(
             single_day_segment_display = item.get("per_wc_segment_display", {})
             single_day_producers = item.get("per_wc_producers", {})
             single_day_is_live = bool(item.get("is_live_dashboard", False))
-            single_day_current_operator_rows = item.get(
-                "current_operator_rows", {}
-            )
 
     return RangeAggregate(
         total_units=total_units,
@@ -97,5 +85,4 @@ def aggregate_range(
         single_day_segment_display=single_day_segment_display,
         single_day_producers=single_day_producers,
         single_day_is_live=single_day_is_live,
-        single_day_current_operator_rows=single_day_current_operator_rows,
     )
