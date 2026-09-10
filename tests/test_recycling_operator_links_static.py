@@ -9,7 +9,7 @@ RECYCLING_CSS = (ROOT / "src/zira_dashboard/static/recycling.css").read_text()
 
 def test_recycling_person_names_link_to_operator_dashboard():
     assert "operator_links_by_wc.get(b.name)" in DEPARTMENT_WIDGETS
-    assert 'class="name-primary operator-dashboard-link' in DEPARTMENT_WIDGETS
+    assert "operator-dashboard-link{% if state_class %}" in DEPARTMENT_WIDGETS
 
 
 def test_recycling_operator_links_keep_name_styling():

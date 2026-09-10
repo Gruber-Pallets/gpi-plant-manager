@@ -4,6 +4,8 @@ from copy import deepcopy
 from datetime import UTC, date, datetime, time
 from types import SimpleNamespace
 
+import pytest
+
 from zira_dashboard import (
     assignment_windows,
     attendance,
@@ -405,6 +407,55 @@ def test_midday_transfer_math_and_markup_change_only_current_operator_labels():
     original_bar, original_html = _build_and_render_midday_transfer(original_rows)
     substitute_bar, substitute_html = _build_and_render_midday_transfer(substitute_rows)
 
+    assert original_bar["units"] == 548
+    assert original_bar["expected"] == 725
+    assert original_bar["has_segments"] is True
+    assert original_bar["has_worker_history"] is True
+    assert original_bar["producer_names"] == ("Humberto S.", "Ana M.")
+    assert len(original_bar["segments"]) == 2
+    humberto, ana = original_bar["segments"]
+    assert (humberto["person_name"], ana["person_name"]) == (
+        "Humberto S.",
+        "Ana M.",
+    )
+    assert (humberto["person_label"], ana["person_label"]) == (
+        "Humberto S.",
+        "Ana M.",
+    )
+    assert (humberto["time_label"], ana["time_label"]) == (
+        "7a-2:33p",
+        "since 2:35p",
+    )
+    assert (humberto["actual_units"], ana["actual_units"]) == (516.0, 32.0)
+    assert (humberto["goal_units"], ana["goal_units"]) == (700.0, 25.0)
+    assert (humberto["result"], ana["result"]) == ("behind", "ahead")
+    assert (humberto["result_label"], ana["result_label"]) == (
+        "184 behind",
+        "7 ahead",
+    )
+    assert (humberto["runway_units"], ana["runway_units"]) == (700.0, 32.0)
+
+    scale = 805.2  # (700-unit first runway + 32-unit second runway) × 1.1
+    assert [humberto["runway_pct"], ana["runway_pct"]] == pytest.approx(
+        [700.0 / scale * 100.0, 32.0 / scale * 100.0]
+    )
+    assert [humberto["start_pct"], ana["start_pct"]] == pytest.approx(
+        [0.0, 700.0 / scale * 100.0]
+    )
+    assert [humberto["actual_pct"], ana["actual_pct"]] == pytest.approx(
+        [516.0 / scale * 100.0, 32.0 / scale * 100.0]
+    )
+    assert [
+        humberto["shortfall_start_pct"],
+        ana["shortfall_start_pct"],
+    ] == pytest.approx([516.0 / scale * 100.0, 732.0 / scale * 100.0])
+    assert [humberto["shortfall_pct"], ana["shortfall_pct"]] == pytest.approx(
+        [184.0 / scale * 100.0, 0.0]
+    )
+    assert [humberto["finish_pct"], ana["finish_pct"]] == pytest.approx(
+        [700.0 / scale * 100.0, 725.0 / scale * 100.0]
+    )
+
     segment_fields = (
         "person_name",
         "person_label",
@@ -455,9 +506,30 @@ def test_midday_transfer_math_and_markup_change_only_current_operator_labels():
 
     def without_current_label_differences(html, rows):
         for row in rows:
-            html = html.replace(row.person_name, "CURRENT OPERATOR")
-        return html.replace("planned-only", "current-state").replace(
-            "physically-present", "current-state"
+            state_class = (
+                "physically-present" if row.physically_present else "planned-only"
+            )
+            exact_element = (
+                f'<span class="name-primary current-operator {state_class}">'
+                f"{row.person_name}</span>"
+            )
+            assert html.count(exact_element) == 1
+            html = html.replace(
+                exact_element,
+                '<span class="name-primary current-operator current-state">'
+                "CURRENT OPERATOR</span>",
+                1,
+            )
+        exact_title = (
+            'title="'
+            + " + ".join(row.person_name for row in rows)
+            + ' — 548 / 725 expected (75.6%)"'
+        )
+        assert html.count(exact_title) == 1
+        return html.replace(
+            exact_title,
+            'title="CURRENT OPERATORS — 548 / 725 expected (75.6%)"',
+            1,
         )
 
     assert without_current_label_differences(
