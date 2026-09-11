@@ -57,6 +57,62 @@ def test_complete_kinds_skips_errored_and_truncated():
     assert "late" not in complete  # rows(2) < count(9) -> truncated by a cap
 
 
+def test_complete_kinds_covers_saturday_recruiting_and_unexpected_workers():
+    """Both sections always render, so their departures must be resolvable.
+
+    They were missing from the reconcile maps, so ``_complete_kinds`` skipped
+    them and their rows could enter ``inbox_open_items`` but never leave —
+    prod accumulated 9 orphans going back to 2026-07-24.
+    """
+    snapshot = {
+        "source_errors": [],
+        "sections": [
+            {"id": "saturday_recruiting", "count": 0, "rows": []},
+            {"id": "unexpected_workers", "count": 0, "rows": []},
+        ],
+    }
+
+    complete = inbox_reconcile._complete_kinds(snapshot)
+
+    assert "saturday_recruiting" in complete
+    assert "unexpected_workers" in complete
+
+
+def test_errored_saturday_or_unexpected_source_still_blocks_auto_resolve():
+    snapshot = {
+        "source_errors": [{"source": "Saturday Recruiting"}, {"source": "Unexpected Workers"}],
+        "sections": [
+            {"id": "saturday_recruiting", "count": 0, "rows": []},
+            {"id": "unexpected_workers", "count": 0, "rows": []},
+        ],
+    }
+
+    complete = inbox_reconcile._complete_kinds(snapshot)
+
+    assert "saturday_recruiting" not in complete
+    assert "unexpected_workers" not in complete
+
+
+def test_every_snapshot_section_can_auto_resolve_its_departures():
+    """Ratchet: a section the mirror accepts must also be able to clear.
+
+    ``_open_now_from_snapshot`` falls back to the raw section id, so ANY
+    section's rows enter ``inbox_open_items``. ``_complete_kinds`` only knows
+    an allowlist, so a section missing from it leaks rows forever. Adding a
+    section without wiring both maps must fail here rather than in production.
+    """
+    section_ids = set(inbox_reconcile._SECTION_KIND)
+
+    for section_id in section_ids:
+        kinds = inbox_reconcile._SECTION_KINDS.get(section_id)
+        assert kinds, f"{section_id} has no reconcile kinds"
+        for kind in kinds:
+            assert kind in inbox_reconcile._KIND_SOURCE, (
+                f"{kind} has no _KIND_SOURCE label, so an errored source cannot "
+                "block its auto-resolve"
+            )
+
+
 def test_open_now_keeps_absence_pto_kind_inside_time_off_section():
     snapshot = {
         "queue": [{

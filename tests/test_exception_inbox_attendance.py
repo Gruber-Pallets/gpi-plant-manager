@@ -169,6 +169,36 @@ def test_shadow_uses_timeline_location_but_keeps_legacy_production_action(monkey
     assert sections["assignments"]["rows"][0]["action"]["type"] == "assignment"
 
 
+def test_every_rendered_section_is_wired_into_the_reconcile_mirror(monkeypatch):
+    """Ratchet: a section the inbox renders must be able to clear itself.
+
+    inbox_reconcile._open_now_from_snapshot falls back to the raw section id,
+    so every section's rows land in inbox_open_items. _complete_kinds only
+    knows _SECTION_KIND, so a section missing from it can never be reported
+    departed and its rows accumulate forever (prod held 9 such orphans back to
+    2026-07-24). Adding a section without wiring both maps fails here.
+    """
+    _empty_legacy(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_auto_lunch_alert", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "build_snapshot",
+        lambda *_a, **_k: _attendance_snapshot(mode="shadow", production_mode="shadow"),
+    )
+
+    snapshot = exception_inbox.build_snapshot()
+    rendered = [section["id"] for section in snapshot["sections"]]
+    unwired = [
+        section_id for section_id in rendered if section_id not in inbox_reconcile._SECTION_KIND
+    ]
+
+    assert rendered, "snapshot rendered no sections"
+    assert unwired == [], (
+        f"sections {unwired} render into the inbox but are missing from "
+        "inbox_reconcile._SECTION_KIND, so their rows can never auto-resolve"
+    )
+
+
 def test_shadow_comparison_rows_stay_out_of_the_operational_inbox(monkeypatch):
     """Shadow findings are rollout evidence, not work Dale can do.
 
