@@ -540,20 +540,20 @@ def test_disabling_total_fallback_never_allocates_total_only_output():
     assert [(row.person_name, row.actual_units) for row in credits] == [("Alex", 0.0)]
 
 
-def test_unassigned_runs_use_original_sample_adjacency_and_active_interval_identity():
+def test_unassigned_runs_split_on_assigned_samples_and_real_coverage_gaps():
     samples = [
         (t(12, 5), 2),
         (t(12, 10), 3),
         (t(12, 15), 5),  # assigned: splits the uncovered stream
         (t(12, 20), 7),
-        (t(12, 35), 11),  # second active interval: splits again
+        (t(12, 35), 11),  # after a hole in active coverage: splits again
         (t(12, 40), 13),
     ]
 
     runs = unassigned_runs_for_samples(
         samples,
         {t(12, 15)},
-        ((t(12), t(12, 30)), (t(12, 30), t(13))),
+        ((t(12), t(12, 30)), (t(12, 32), t(13))),
         wc_name="Repair 4",
     )
 
@@ -580,7 +580,12 @@ def test_unassigned_runs_skip_samples_outside_active_intervals_and_split_groups(
     ]
 
 
-def test_touching_active_intervals_keep_exact_boundary_sample_in_second_run():
+def test_touching_active_intervals_stay_one_production_run():
+    """Touching intervals mean the meter never stopped, so the run continues.
+
+    The meter reports one interval per consecutive reading pair, so an
+    uninterrupted run always arrives as a chain of touching intervals.
+    """
     runs = unassigned_runs_for_samples(
         [(t(12, 55), 5), (t(13), 7)],
         set(),
@@ -589,8 +594,40 @@ def test_touching_active_intervals_keep_exact_boundary_sample_in_second_run():
     )
 
     assert [(run.start_utc, run.end_utc, run.units, run.sample_count) for run in runs] == [
+        (t(12, 55), t(13), 12.0, 2),
+    ]
+
+
+def test_sample_at_a_disconnected_interval_start_begins_the_next_run():
+    runs = unassigned_runs_for_samples(
+        [(t(12, 55), 5), (t(13, 5), 7)],
+        set(),
+        ((t(12), t(13)), (t(13, 5), t(14))),
+        wc_name="Repair 4",
+    )
+
+    assert [(run.start_utc, run.end_utc, run.units, run.sample_count) for run in runs] == [
         (t(12, 55), t(12, 55), 5.0, 1),
-        (t(13), t(13), 7.0, 1),
+        (t(13, 5), t(13, 5), 7.0, 1),
+    ]
+
+
+def test_meter_active_intervals_group_one_uninterrupted_uncovered_run():
+    """Guard the seam against the leaderboard's real active-interval shape.
+
+    ``leaderboard._active_intervals`` emits one interval per consecutive
+    reading pair. Grouping must read that chain as a single production run
+    instead of one run -- and one Exception Inbox item -- per meter reading.
+    """
+    from zira_dashboard.leaderboard import _active_intervals
+
+    samples = [(t(12, minute), 1 + minute % 2) for minute in range(8)]
+    intervals = _active_intervals(samples, t(20))
+
+    runs = unassigned_runs_for_samples(samples, set(), tuple(intervals), wc_name="Dismantler 2")
+
+    assert [(run.start_utc, run.end_utc, run.sample_count) for run in runs] == [
+        (t(12, 0), t(12, 7), 8),
     ]
 
 

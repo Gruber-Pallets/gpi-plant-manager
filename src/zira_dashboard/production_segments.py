@@ -76,6 +76,12 @@ def unassigned_runs_for_samples(
     run therefore has equal start and end timestamps. Adjacency is evaluated
     against the original sample order, so an assigned sample always splits two
     uncovered groups even when all three timestamps share an active interval.
+
+    The meter reports one active interval per consecutive reading pair, so an
+    uninterrupted production run arrives as a chain of touching intervals.
+    Those are coalesced first: only a real hole in active coverage -- a
+    stopped meter, a break, a testing window, or a breakdown exclusion --
+    separates two runs.
     """
     normalized_intervals: list[tuple[datetime, datetime]] = []
     for raw_start, raw_end in active_intervals:
@@ -88,6 +94,13 @@ def unassigned_runs_for_samples(
     for previous, current in zip(normalized_intervals, normalized_intervals[1:], strict=False):
         if current[0] < previous[1]:
             raise ValueError("active intervals cannot overlap")
+    coalesced: list[tuple[datetime, datetime]] = []
+    for start, end in normalized_intervals:
+        if coalesced and coalesced[-1][1] == start:
+            coalesced[-1] = (coalesced[-1][0], end)
+            continue
+        coalesced.append((start, end))
+    normalized_intervals = coalesced
 
     assigned = {
         _aware_utc(timestamp, "assigned sample time") for timestamp in assigned_sample_times
