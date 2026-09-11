@@ -164,15 +164,20 @@ def test_shadow_uses_timeline_location_but_keeps_legacy_production_action(monkey
     assert "missing_wc" not in sections
     assert "missing_wc" not in exception_inbox.build_summary()["sections"]
     assert sections["attendance_missing_location"]["count"] == 1
-    assert sections["production_unassigned_run"]["rows"][0]["comparison_only"] is True
-    assert sections["production_unassigned_run"]["rows"][0]["action"] is None
+    assert sections["production_unassigned_run"]["rows"] == []
     assert sections["assignments"]["count"] == 1
     assert sections["assignments"]["rows"][0]["action"]["type"] == "assignment"
 
 
-def test_shadow_comparison_run_counts_as_follow_up_not_urgent(monkeypatch):
-    """A shadow row has no action, so it must not drive the red urgent count."""
-    _empty_legacy(monkeypatch)
+def test_shadow_comparison_rows_stay_out_of_the_operational_inbox(monkeypatch):
+    """Shadow findings are rollout evidence, not work Dale can do.
+
+    They have no action and cannot move credit, and attendance_readiness
+    already records them in the shadow-health report the cutover decision
+    reads. The Exception Inbox is the operational queue, so they stay out
+    of it until the strict cutover makes them real.
+    """
+    _empty_legacy(monkeypatch, assignments=(_legacy_assignment(),))
     monkeypatch.setattr(exception_inbox, "_auto_lunch_alert", lambda *_a, **_k: None)
     issues = (
         _issue(
@@ -194,11 +199,39 @@ def test_shadow_comparison_run_counts_as_follow_up_not_urgent(monkeypatch):
     summary = exception_inbox.build_summary()
     sections = {section["id"]: section for section in snapshot["sections"]}
 
+    assert sections["production_unassigned_run"]["count"] == 0
+    assert sections["production_unassigned_run"]["rows"] == []
+    assert not [
+        row
+        for row in snapshot["queue"]
+        if str(row["item_key"]).startswith("production_unassigned_run")
+    ]
+    assert snapshot["follow_up_total"] == summary["follow_up_total"] == 0
+    # The legacy production signal still owns the day in shadow mode.
+    assert sections["assignments"]["count"] == 1
+    assert sections["assignments"]["rows"][0]["action"]["type"] == "assignment"
+
+
+def test_strict_run_still_reaches_the_inbox_after_cutover(monkeypatch):
+    _empty_legacy(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_auto_lunch_alert", lambda *_a, **_k: None)
+    issue = _issue(
+        "production_unassigned_run",
+        "production_unassigned_run:Dismantler 2:2026-08-31T13:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "build_snapshot",
+        lambda *_a, **_k: _attendance_snapshot(
+            mode="live", production_mode="strict", issues=(issue,)
+        ),
+    )
+
+    snapshot = exception_inbox.build_snapshot()
+    sections = {section["id"]: section for section in snapshot["sections"]}
+
     assert sections["production_unassigned_run"]["count"] == 1
-    assert sections["production_unassigned_run"]["rows"][0]["badge"] == "Shadow comparison"
-    assert snapshot["urgent_total"] == summary["urgent_total"] == 0
-    assert snapshot["follow_up_total"] == summary["follow_up_total"] == 1
-    assert snapshot["total"] == summary["total"] == 1
+    assert snapshot["urgent_total"] == 1
 
 
 def test_live_strict_replaces_legacy_aggregate_with_distinct_run(monkeypatch):

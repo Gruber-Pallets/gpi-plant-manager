@@ -348,6 +348,30 @@ def is_dismissible_test_work_center(labels: Sequence[object]) -> bool:
     return bool(normalized) and all(label and "test" in label.casefold() for label in normalized)
 
 
+def _without_comparison_only_issues(snapshot) -> AttendanceExceptionSnapshot:
+    """Drop shadow-comparison production findings from the operational queue.
+
+    While the rollout is in shadow the legacy matcher still owns every day's
+    credit, so a comparison run carries no action and nothing about it can be
+    worked — it only reports that the two matchers disagree.
+    ``attendance_readiness`` already records the same runs in the shadow-health
+    report that gates the cutover, so hiding them here loses no rollout
+    evidence; it keeps the Exception Inbox to work that is real. At the strict
+    cutover the same findings arrive with ``comparison_only`` false and show up
+    as urgent, actionable rows.
+
+    A comparison ``production_source_unavailable`` still shows: that one means
+    the strict pipeline stopped producing data at all, which is worth a look
+    rather than a silent gap in the trial.
+    """
+    issues = tuple(
+        issue
+        for issue in snapshot.issues
+        if not (issue.comparison_only and issue.kind == "production_unassigned_run")
+    )
+    return snapshot if issues == snapshot.issues else replace(snapshot, issues=issues)
+
+
 def _without_resolved_unmapped_issues(
     snapshot, resolved_ids: set[int]
 ) -> AttendanceExceptionSnapshot:
@@ -409,6 +433,7 @@ def _attendance_snapshot(today: date, source_errors: list[dict]):
     for source in snapshot.source_errors:
         if not any(error.get("source") == source for error in source_errors):
             source_errors.append({"source": source})
+    snapshot = _without_comparison_only_issues(snapshot)
     try:
         resolved_ids = missing_wc.resolved_ids()
     except Exception:  # noqa: BLE001 - read failure must keep raw issues visible
