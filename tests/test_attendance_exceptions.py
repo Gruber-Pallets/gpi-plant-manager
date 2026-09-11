@@ -539,6 +539,25 @@ def test_shadow_mode_computes_run_comparisons_without_changing_legacy_actions(so
     assert snapshot.production_mode == "shadow"
     assert issue.comparison_only is True
     assert issue.item_key == ("production_unassigned_run:Dismantler 1:2026-08-31T12:55:00+00:00")
+    # Shadow rows carry no action and cannot change credit, so they belong in
+    # the follow-up tier instead of the urgent operational queue.
+    assert issue.priority == "muted"
+
+
+def test_strict_unassigned_run_is_urgent_once_the_day_is_actionable(source, monkeypatch):
+    run = UnassignedRun(
+        "Dismantler 1", NOW - timedelta(minutes=5), NOW - timedelta(minutes=4), 2.0, 1
+    )
+    monkeypatch.setattr(attendance_location_policy, "strict_days", lambda: {DAY})
+    monkeypatch.setattr(production_history, "unassigned_runs_for_day", lambda *_a, **_k: (run,))
+
+    issue = _one(
+        attendance_exceptions.build_snapshot(DAY, now_utc=NOW),
+        "production_unassigned_run",
+    )
+
+    assert issue.comparison_only is False
+    assert issue.priority == "urgent"
 
 
 @pytest.mark.parametrize("rollout_mode", ["shadow", "off"])

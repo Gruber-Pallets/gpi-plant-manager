@@ -170,6 +170,37 @@ def test_shadow_uses_timeline_location_but_keeps_legacy_production_action(monkey
     assert sections["assignments"]["rows"][0]["action"]["type"] == "assignment"
 
 
+def test_shadow_comparison_run_counts_as_follow_up_not_urgent(monkeypatch):
+    """A shadow row has no action, so it must not drive the red urgent count."""
+    _empty_legacy(monkeypatch)
+    monkeypatch.setattr(exception_inbox, "_auto_lunch_alert", lambda *_a, **_k: None)
+    issues = (
+        _issue(
+            "production_unassigned_run",
+            "production_unassigned_run:Dismantler 2:2026-08-31T13:00:00+00:00",
+            priority="muted",
+            comparison=True,
+        ),
+    )
+    monkeypatch.setattr(
+        attendance_exceptions,
+        "build_snapshot",
+        lambda *_a, **_k: _attendance_snapshot(
+            mode="shadow", production_mode="shadow", issues=issues
+        ),
+    )
+
+    snapshot = exception_inbox.build_snapshot()
+    summary = exception_inbox.build_summary()
+    sections = {section["id"]: section for section in snapshot["sections"]}
+
+    assert sections["production_unassigned_run"]["count"] == 1
+    assert sections["production_unassigned_run"]["rows"][0]["badge"] == "Shadow comparison"
+    assert snapshot["urgent_total"] == summary["urgent_total"] == 0
+    assert snapshot["follow_up_total"] == summary["follow_up_total"] == 1
+    assert snapshot["total"] == summary["total"] == 1
+
+
 def test_live_strict_replaces_legacy_aggregate_with_distinct_run(monkeypatch):
     _empty_legacy(monkeypatch, assignments=(_legacy_assignment(),))
     issue = _issue(

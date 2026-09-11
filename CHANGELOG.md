@@ -18,6 +18,7 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 - **"Production Without a Worker" notes no longer pile up.** A machine that ran for 20 minutes with nobody signed into it used to make a brand-new note every time the meter counted, so one problem filled the Inbox with a dozen look-alike notes. Now you get one note that covers the whole stretch, with the real start time, end time, and total count.
 - **Each note tells the whole story.** Instead of "1 units", a note now shows everything the machine made while no one was signed into it. Two machines with a problem means two notes.
+- **Test-run notes no longer show up as red "urgent" work.** Plant Manager is still practicing a new way to match people to machines, and it writes down where the two ways disagree. Those practice notes have no button to press, so they now sit quietly under "follow-up" instead of setting off the red alarm on the Inbox. They turn back into real, urgent work the day the new way goes live.
 
 ## 2026-09-10
 

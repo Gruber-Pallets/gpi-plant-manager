@@ -493,7 +493,11 @@ def _run_issues(
                 units=float(run.units),
                 sample_count=int(run.sample_count),
                 reason="positive_production_has_no_valid_odoo_worker",
-                priority="urgent",
+                # A shadow comparison carries no action and cannot move credit:
+                # the legacy matcher still owns the day. Urgency is reserved for
+                # rows the inbox can actually act on, so comparison findings sit
+                # in the follow-up tier until the strict cutover makes them real.
+                priority="muted" if comparison else "urgent",
                 comparison_only=comparison,
                 target_odoo_department_id=None,
                 end_is_open=False,
