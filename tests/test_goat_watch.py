@@ -296,7 +296,7 @@ def test_frozen_goat_path_keeps_plan_eligibility_separate_from_labels(
     ]
 
 
-def test_live_contender_banner_renders_current_presence_classes():
+def test_live_contender_banner_renders_producers_after_departure():
     contender = SimpleNamespace(
         group="Dismantler",
         wc="Dismantler 3",
@@ -304,6 +304,7 @@ def test_live_contender_banner_renders_current_presence_classes():
         record_units=200,
         record_holder="Record Holder",
         record_day=date(2026, 9, 1),
+        producer_names=("Earlier Producer", "Shared Producer"),
         current_operators=(
             current_operators.OperatorDisplayRow(
                 "Planned Person", 11, True, False
@@ -319,10 +320,12 @@ def test_live_contender_banner_renders_current_presence_classes():
         goat_contenders=[contender],
     )
 
-    assert "goat-watch-person current-operator planned-only" in html
-    assert "goat-watch-person current-operator physically-present" in html
-    assert "Planned Person" in html
-    assert "Christian C." in html
+    assert "Earlier Producer" in html
+    assert "Shared Producer" in html
+    assert "Planned Person" not in html
+    assert "Christian C." not in html
+    assert "No one here now" not in html
+    assert "physically-present" not in html
 
 
 def test_persisted_goat_alert_keeps_historical_winner_markup():
@@ -345,3 +348,81 @@ def test_persisted_goat_alert_keeps_historical_winner_markup():
 
     assert "<b>Historical Winner</b>" in html
     assert "current-operator planned-only" not in html
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_hand_build_contender_names_credited_producers(monkeypatch, available):
+    day = date(2026, 9, 14)
+    now = datetime(2026, 9, 14, 20, tzinfo=UTC)
+    monkeypatch.setattr(goat_watch, "_final_break_passed", lambda *_: True)
+    monkeypatch.setattr(goat_watch, "_shift_elapsed_fraction", lambda *_: 1.0)
+    monkeypatch.setattr(goat_watch, "_group_names_today", lambda: ["Hand Builds"])
+    monkeypatch.setattr("zira_dashboard.awards.goat", lambda _: {
+        "units": 390, "name": "Record Holder", "day": date(2026, 9, 11),
+    })
+    monkeypatch.setattr("zira_dashboard.work_centers_store.members", lambda *_: [
+        SimpleNamespace(name="Hand Build #1"),
+    ])
+    monkeypatch.setattr(goat_watch, "_wc_units_today", lambda *_: 412)
+    calls = []
+
+    def attribution(d, client, *, now_utc):
+        calls.append((d, now_utc))
+        if not available:
+            raise production_history.ProductionSourceUnavailable("snapshot unavailable")
+        return {
+            (17, "Earlier Producer"): {"Hand Build #1": {"units": 300}},
+            "Shared Producer": {"Hand Build #1": {"units": 112}},
+            "New Arrival": {"Hand Build #1": {"units": 0}},
+            "Other Station": {"Repair 1": {"units": 500}},
+        }
+
+    monkeypatch.setattr(production_history, "attribution_for", attribution)
+    contenders = goat_watch.contenders_for_now(
+        day, now, current_operator_rows_by_wc={},
+        eligible_planned_work_centers={"Hand Build #1"},
+    )
+    assert len(contenders) == 1
+    assert calls == [(day, now)]
+    assert contenders[0].projected == 412
+    assert contenders[0].producer_names == (
+        ("Earlier Producer", "Shared Producer") if available else ()
+    )
+    html = templates.get_template("_goat_watch_banner.html").render(
+        goat_alerts_active=[], goat_contenders=contenders,
+    )
+    assert "No one here now" not in html
+    assert "New Arrival" not in html
+    assert "Other Station" not in html
+    assert ("Producer unknown" in html) is not available
+    assert ("Earlier Producer" in html) is available
+
+
+def test_no_contenders_does_not_load_production_attribution(monkeypatch):
+    monkeypatch.setattr(goat_watch, "_final_break_passed", lambda *_: True)
+    monkeypatch.setattr(goat_watch, "_shift_elapsed_fraction", lambda *_: 0.5)
+    monkeypatch.setattr(goat_watch, "_group_names_today", lambda: [])
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("No attribution lookup is needed without contenders")
+
+    monkeypatch.setattr(production_history, "attribution_for", unexpected)
+    assert goat_watch.contenders_for_now(
+        date(2026, 9, 14), datetime(2026, 9, 14, 20, tzinfo=UTC),
+    ) == []
+
+
+def test_credited_producers_orders_and_deduplicates_positive_credit(monkeypatch):
+    monkeypatch.setattr(production_history, "attribution_for", lambda *args, **kwargs: {
+        "Small Share": {"Hand Build #1": {"units": 12}},
+        (17, "Main Producer"): {"Hand Build #1": {"units": 100}},
+        "Main Producer": {"Hand Build #1": {"units": 50}},
+        "No Pallets": {"Hand Build #1": {"units": 0}},
+        "Other Station": {"Repair 1": {"units": 5}},
+    })
+    assert goat_watch._credited_producers(
+        date(2026, 9, 14), datetime(2026, 9, 14, 20, tzinfo=UTC),
+    ) == {
+        "Hand Build #1": ("Main Producer", "Small Share"),
+        "Repair 1": ("Other Station",),
+    }

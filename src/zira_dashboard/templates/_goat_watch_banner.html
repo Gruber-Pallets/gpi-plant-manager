@@ -7,8 +7,8 @@
       dismissed and are within their next-business-day window. One
       row per group that broke its record. Each has a Dismiss button.
 
-   2. Live contenders — operators currently projecting >= 98 % of
-      their group's GOAT record. Only fires after the final break
+   2. Live contenders — stations currently projecting >= 98 % of
+      their group's GOAT record, labeled with credited producers. Only fires after the final break
       of the day. One row per group.
 
    Inputs (set in routes/departments.py):
@@ -47,11 +47,11 @@
       {% for c in goat_contenders %}
         <div class="goat-watch-row">
           <span class="goat-watch-group">{{ c.group|upper }}</span>
-          <span class="goat-watch-current">
-            {% for operator in c.current_operators %}
-              <span class="goat-watch-person current-operator {{ 'physically-present' if operator.physically_present else 'planned-only' }}">{{ operator.person_name }}</span>{% if not loop.last %}<span aria-hidden="true"> + </span>{% endif %}
+          <span class="goat-watch-producers">
+            {% for name in c.producer_names %}
+              <span class="goat-watch-person">{{ name }}</span>{% if not loop.last %}<span aria-hidden="true"> + </span>{% endif %}
             {% else %}
-              <span class="goat-watch-person current-empty">No one here now</span>
+              <span class="goat-watch-person">Producer unknown</span>
             {% endfor %}
           </span>
           <span class="goat-watch-wc">· {{ c.wc }} ·</span>

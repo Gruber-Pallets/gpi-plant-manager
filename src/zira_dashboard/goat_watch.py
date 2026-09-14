@@ -18,10 +18,13 @@ creates them when a result strictly beats the prior record.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, UTC
+import logging
 
 from .current_operators import OperatorDisplayRow
+
+logger = logging.getLogger(__name__)
 
 CONTENDER_THRESHOLD = 0.98  # 98 % of GOAT → show in live banner
 
@@ -73,6 +76,7 @@ class Contender:
     record_holder: str
     record_day: date
     current_operators: tuple[OperatorDisplayRow, ...] = ()
+    producer_names: tuple[str, ...] = ()
 
 
 def _final_break_passed(day: date, now_utc: datetime) -> bool:
@@ -177,9 +181,9 @@ def contenders_for_now(
     """One row per group whose leading WC projects >= 98 % of GOAT.
 
     Returns [] before the final break of the day or when no group has
-    a leader meeting the threshold. Dashboard callers provide the frozen
-    current-operator rows already built from their canonical attendance
-    snapshot; this function never re-reads attendance.
+    a leader meeting the threshold. Dashboard callers provide frozen
+    current-operator rows for compatibility. Display names come from the
+    shared production attribution for this day, including departed workers.
     """
     if not _final_break_passed(day, now_utc):
         return []
@@ -238,7 +242,40 @@ def contenders_for_now(
                 best = candidate
         if best is not None:
             out.append(best)
+    if out:
+        producers = _credited_producers(day, now_utc)
+        out = [replace(c, producer_names=producers.get(c.wc, ())) for c in out]
     return out
+
+
+def _credited_producers(day: date, now_utc: datetime) -> dict[str, tuple[str, ...]]:
+    """Names with positive production credit, including workers who left.
+
+    Use the shared all-station matcher: the host dashboard's live presence
+    map covers only its own department and cannot identify past producers.
+    """
+    from . import production_history
+    from .deps import client
+
+    try:
+        attribution = production_history.attribution_for(day, client, now_utc=now_utc)
+    except Exception:
+        logger.warning("GOAT Watch producer attribution unavailable for %s", day)
+        return {}
+    by_wc: dict[str, dict[str, float]] = {}
+    for identity, stations in attribution.items():
+        name = identity[1] if isinstance(identity, tuple) else identity
+        if not name:
+            continue
+        for wc, totals in stations.items():
+            units = float(totals.get("units") or 0)
+            if units > 0:
+                names = by_wc.setdefault(wc, {})
+                names[name] = names.get(name, 0.0) + units
+    return {
+        wc: tuple(sorted(names, key=lambda name: (-names[name], name)))
+        for wc, names in by_wc.items()
+    }
 
 
 # ---------- persisted NEW GOAT alerts ----------
