@@ -523,3 +523,18 @@ def test_department_day_data_uses_latest_open_odoo_work_center(monkeypatch):
         "Dismantler 3": "Jesus Ma.",
     }
     assert live["per_wc_expected"] == {"Repair 2": 400.0, "Dismantler 3": 440.0}
+
+
+def test_live_department_window_is_empty_before_shift():
+    from zira_dashboard.routes import departments
+
+    shift_start = datetime(2026, 9, 15, 6, tzinfo=timezone.utc)
+    shift_end = datetime(2026, 9, 15, 15, tzinfo=timezone.utc)
+    before_shift = datetime(2026, 9, 15, 0, 19, tzinfo=timezone.utc)
+
+    assert departments._live_window_end(
+        before_shift,
+        shift_start,
+        shift_end,
+        is_today=True,
+    ) == shift_start

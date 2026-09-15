@@ -12,9 +12,11 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-15
 
-### Plan to keep dashboards open before work starts
+### Dashboards stay open overnight
 
-- **A fix is planned for the error page that can appear before the morning shift.** The dashboard will stay open and show a fresh, empty day until work begins. Nothing on screen has changed yet.
+#### Fixes
+
+- **The Recycling dashboard no longer turns into an error page before the morning shift starts.** It stays open and shows a fresh, empty day until work begins.
 
 ## 2026-09-14
 

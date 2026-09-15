@@ -268,6 +268,43 @@ def test_canonical_department_projection_reuses_exact_location_snapshot(monkeypa
     assert projection.location_snapshot is snapshot
 
 
+def test_canonical_department_projection_skips_empty_window(monkeypatch):
+    snapshot = SimpleNamespace(
+        policy=live_cache.AttendanceReadPolicy(
+            mirror_owned=True,
+            available=True,
+            refreshed_at=NOW,
+            mode="shadow",
+        ),
+        spans=(),
+        verified_cap_utc=NOW,
+        current_attendance_ids=frozenset(),
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.attendance_location_snapshot.read_location_snapshot",
+        lambda *_args, **_kwargs: snapshot,
+    )
+    monkeypatch.setattr(
+        assignment_windows,
+        "work_segments_from_timeline",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an empty pre-shift window must not reach timeline conversion"
+        ),
+    )
+    shift_start = datetime.combine(DAY, time(7), tzinfo=UTC)
+
+    projection = departments._canonical_department_segments(
+        DAY,
+        shift_start,
+        shift_start,
+        now_utc=shift_start,
+    )
+
+    assert projection.segments == ()
+    assert projection.cap_utc == shift_start
+    assert projection.location_snapshot is snapshot
+
+
 def test_real_transfer_bar_is_unchanged_when_current_rows_are_attached():
     bars = recycling_data.build_bars(
         "Repair",

@@ -78,6 +78,18 @@ def _breakdown_windows_for_segment(breakdown_windows, segment):
     return matched
 
 
+def _live_window_end(
+    now_local: datetime,
+    shift_start_local: datetime,
+    shift_end_local: datetime,
+    *,
+    is_today: bool,
+) -> datetime:
+    if not is_today:
+        return shift_end_local
+    return max(shift_start_local, min(now_local, shift_end_local))
+
+
 def _canonical_department_segments(
     day,
     window_start_utc,
@@ -128,6 +140,13 @@ def _canonical_department_segments(
             return _CanonicalDepartmentProjection((), window_end_utc, None)
         canonical_cap = window_end_utc
         projection_snapshot = None
+
+    if canonical_cap <= window_start_utc:
+        return _CanonicalDepartmentProjection(
+            (),
+            window_start_utc,
+            projection_snapshot,
+        )
 
     return _CanonicalDepartmentProjection(
         assignment_windows.work_segments_from_timeline(
@@ -443,7 +462,12 @@ def _department_day_data(
     shift_start_local = datetime.combine(d, shift_config.shift_start_for(d), tzinfo=shift_config.SITE_TZ)
     shift_end_local = datetime.combine(d, shift_config.shift_end_for(d), tzinfo=shift_config.SITE_TZ)
     now_local = now.astimezone(shift_config.SITE_TZ)
-    window_end_local = min(now_local, shift_end_local) if is_today_d else shift_end_local
+    window_end_local = _live_window_end(
+        now_local,
+        shift_start_local,
+        shift_end_local,
+        is_today=is_today_d,
+    )
     window_start_utc = shift_start_local.astimezone(UTC)
     window_end_utc = window_end_local.astimezone(UTC)
     shift_end_utc = shift_end_local.astimezone(UTC)
