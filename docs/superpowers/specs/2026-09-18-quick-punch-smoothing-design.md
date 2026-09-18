@@ -40,6 +40,11 @@ first picks followed by a move. Roughly half of all short stints were under
   Odoo attendance records.
 - **Patterns:** same-station gap, quick detour, and wrong first pick.
 - **Limit:** one fixed 5-minute limit for all rules. It is not a Settings knob.
+- **Real work is never erased (added during the build):** the wrong-first-pick
+  rule applies only when that station's meter proves no pallets were made
+  during the short stint. A short first stint with real production is real
+  work. Found when an existing test's 5-minute Repair 2 stint with 34 pallets
+  would otherwise have been folded away, leaving those pallets unassigned.
 
 ## Rules
 
@@ -57,9 +62,12 @@ A boundary at exactly 5:00 counts as quick (`<=`).
    - it starts a presence block, meaning no stint for this person ends within
      5 minutes before its start (start of day, or back from being away longer
      than 5 minutes);
-   - it lasts 5 minutes or less; and
+   - it lasts 5 minutes or less;
    - the person's next stint is at a different station and starts no more than
-     5 minutes after it ends.
+     5 minutes after it ends; and
+   - the station's meter data is known and shows no pallets during the stint
+     (`start <= sample time < end`, the same window pallet credit uses). With
+     no meter data for the station, the rule does not fire.
 
    The short stint joins the next stint, which now starts at the short stint's
    start, so any small gap is filled too. Repeat until stable, measuring the
@@ -112,6 +120,13 @@ real gap, and the existing display join covers it.
   punch history as the caller's spans carry. Timeline spans arrive already
   clipped to the range the caller read, so a stint cut at that boundary is
   judged by its visible length.
+- **Meter data:** `work_segments_from_timeline` takes an optional
+  `production_times_by_wc` (from `quick_punch_smoothing.production_times_from_samples`).
+  All three callers pass the same samples they credit, so dashboards, People
+  Performance, and leaderboards agree. The department route already loads
+  meters before building stints. `_strict_inputs_for_day` builds stints after
+  its samples are validated. `production_scores_for_timeline` rebuilds them
+  once its samples are parsed.
 - **Order preserved:** people and stints that smoothing does not touch keep
   their original order in the output. A merged stint takes the position of its
   earliest input stint.
@@ -168,7 +183,9 @@ Pure unit tests in `tests/test_quick_punch_smoothing.py`:
   not.
 - A detour with multiple blips inside 5 minutes is absorbed.
 - Wrong first pick at the start of the day and after a break longer than
-  5 minutes is absorbed into the next station.
+  5 minutes is absorbed into the next station, but only when that station's
+  meter shows no pallets during it. A pallet at the stint start keeps it; one
+  at the stint end does not. Missing meter data keeps it.
 - A mid-day A → B(short) → C is left alone.
 - The rule order is proven: a sequence where the wrong-first-pick rule alone
   gives the wrong answer.
@@ -184,6 +201,8 @@ Integration tests:
   person instead of going unassigned.
 - `coalesce_display_scores` regression: Jose's two lunch-split stints join even
   with another person's stint between them.
+- Each caller passes its meter data to smoothing. The department transfer test,
+  where a 5-minute Repair 2 stint made 34 pallets, keeps that stint.
 
 Validation: focused tests, then the full suite
 (`ZIRA_API_KEY=test .venv/bin/python -m pytest -q`) and lint, before pushing.
