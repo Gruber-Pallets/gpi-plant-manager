@@ -138,15 +138,18 @@ real gap, and the existing display join covers it.
   meters before building stints. `_strict_inputs_for_day` builds stints after
   its samples are validated. `production_scores_for_timeline` rebuilds them
   once its samples are parsed.
-- **People Performance scores one station at a time.** It must still hand
-  smoothing the whole day's spans and one day-wide meter map, and then keep
-  only that station's stints. Smoothing one station's spans in isolation would
-  bridge location conflicts it cannot see and double-count detours.
+- **People Performance stays on real punches (decided during the build).**
+  That page draws each person's day from real spans and joins each score to
+  its span by exact person, station, start, and end, so smoothed stints would
+  show as "metric unavailable". `production_scores_for_timeline` calls the
+  funnel with `smooth=False`. People Performance picks up the smoothing once
+  the follow-up feature corrects the Odoo records themselves. Until then its
+  numbers can differ from the leaderboards by a smoothed blip's few minutes.
 - **Known edge:** a department dashboard only has meter data for its own
-  stations. A short first pick at another department's station is therefore
-  kept on that dashboard, while leaderboards and People Performance, which
-  have every meter, may fold it away. The difference is at most 5 minutes at
-  the start of one stint.
+  stations. There, a short first pick at another department's station is kept,
+  and a detour to one is merged even if it made pallets, because that meter is
+  unknown. The leaderboards, which have every meter, can decide differently.
+  The difference is at most 5 minutes.
 - **Order preserved:** people and stints that smoothing does not touch keep
   their original order in the output. A merged stint takes the position of its
   earliest input stint.
@@ -155,7 +158,6 @@ real gap, and the existing display join covers it.
   other wiring:
   - department dashboards (`routes/departments.py`: `/recycling`,
     `/tv/recycling`, `/new`, `/tv/new`);
-  - People Performance scores (`production_history.production_scores_for_timeline`);
   - strict daily inputs (`production_history._strict_inputs_for_day`), which
     feed attribution, leaderboards, player cards, awards, GOAT Watch, and the
     Exception Inbox's unassigned-pallet runs
@@ -169,6 +171,8 @@ real gap, and the existing display join covers it.
   station now" (staffing, `/wc` dashboards, machine breakdowns), attendance
   exception checks, readiness, and People Performance location ribbons. These
   keep showing real punches.
+- People Performance scores and ribbons, until Odoo itself is corrected (see
+  above).
 - The legacy rollback path (`assignment_windows.resolve_segments`), which is not
   used in production today.
 - Already-saved past results, such as awarded trophies, are not rewritten.
