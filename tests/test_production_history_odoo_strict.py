@@ -174,6 +174,80 @@ def test_work_segments_from_timeline_keeps_only_clipped_positive_valid_spans():
     ]
 
 
+def _segment_shape(segments):
+    return [
+        (segment.person_odoo_id, segment.wc_name, segment.start_utc, segment.end_utc)
+        for segment in segments
+    ]
+
+
+def test_work_segments_from_timeline_smooths_quick_punches_before_clipping():
+    spans = (
+        # Long before the window, only 2 minutes inside it: not a wrong first pick.
+        span(1, "Ana", at(11), at(12, 2), wc="Repair 1"),
+        span(1, "Ana", at(12, 2), at(14)),
+        # Signed out 3 minutes and came back to the same station.
+        span(2, "Bob", at(13), at(14)),
+        span(2, "Bob", at(14, 3), at(15)),
+    )
+
+    # Both stations idle, so the wrong-first-pick rule is live: only clipping
+    # AFTER smoothing keeps Ana's 62-minute Repair 1 stint.
+    segments = work_segments_from_timeline(
+        spans,
+        window_start_utc=START,
+        window_end_utc=END,
+        production_times_by_wc={"Repair 1": (), "Repair 4": ()},
+    )
+
+    assert _segment_shape(segments) == [
+        (1, "Repair 1", START, at(12, 2)),
+        (1, "Repair 4", at(12, 2), at(14)),
+        (2, "Repair 4", at(13), at(15)),
+    ]
+
+
+def test_work_segments_from_timeline_never_bridges_a_location_conflict():
+    spans = (
+        span(1, "Ana", at(13), at(14)),
+        span(1, "Ana", at(14), at(14, 2), status="conflicting_location", wc=None),
+        span(1, "Ana", at(14, 2), at(15)),
+        span(2, "Bob", at(13), at(14)),
+        span(2, "Bob", at(14), at(14, 2), status="missing_required_location", wc=None),
+        span(2, "Bob", at(14, 2), at(15)),
+    )
+
+    segments = work_segments_from_timeline(spans, window_start_utc=START, window_end_utc=END)
+
+    assert _segment_shape(segments) == [
+        (1, "Repair 4", at(13), at(14)),
+        (1, "Repair 4", at(14, 2), at(15)),
+        (2, "Repair 4", at(13), at(15)),
+    ]
+
+
+def test_samples_in_a_smoothed_gap_are_credited_to_the_person():
+    from zira_dashboard.production_segments import credit_work_segments
+
+    spans = (
+        span(1, "Ana", at(13), at(14)),
+        span(1, "Ana", at(14, 3), at(15)),
+    )
+    segments = work_segments_from_timeline(spans, window_start_utc=START, window_end_utc=END)
+
+    credits = credit_work_segments(
+        segments,
+        wc_totals={"Repair 4": 30},
+        samples_by_wc={"Repair 4": [(at(13, 30), 10), (at(14, 1), 8), (at(14, 30), 12)]},
+        productive_minutes=lambda *_args: 60,
+        allow_total_fallback=False,
+    )["Repair 4"]
+
+    named = sum(row.actual_units for row in credits if row.person_name == "Ana")
+    unassigned = sum(row.actual_units for row in credits if row.person_name is None)
+    assert (named, unassigned) == (30.0, 0.0)
+
+
 def test_strict_inputs_accept_detached_projection_and_explicit_meter_locations(monkeypatch):
     from zira_dashboard import attendance_mirror, attendance_timeline, wc_attributions
 
@@ -246,6 +320,68 @@ def test_strict_inputs_accept_detached_projection_and_explicit_meter_locations(m
 
     assert [segment.person_odoo_id for segment in inputs.segments] == [101]
     assert seen == [locations]
+
+
+@pytest.mark.parametrize(
+    ("repair_1_samples", "expected"),
+    (
+        (
+            ((at(12, 2), 5),),
+            [
+                (1, "Repair 1", START, at(12, 3)),
+                (1, "Repair 4", at(12, 3), END),
+            ],
+        ),
+        ((), [(1, "Repair 4", START, END)]),
+    ),
+)
+def test_strict_inputs_smooth_a_wrong_first_pick_only_when_its_meter_was_idle(
+    monkeypatch, repair_1_samples, expected
+):
+    from zira_dashboard import wc_attributions
+
+    health = SimpleNamespace(baseline_completed_at=START, last_incremental_completed_at=END)
+    totals = (
+        station_total(
+            wc="Repair 1",
+            units=sum(units for _at, units in repair_1_samples),
+            samples=repair_1_samples,
+        ),
+        station_total(units=40, samples=((at(13), 40),)),
+    )
+    monkeypatch.setattr(
+        production_history, "_metered_leaderboard", lambda *_a, **_k: list(totals)
+    )
+    monkeypatch.setattr(
+        wc_attributions, "testing_windows_for_day", lambda _day, rows=None: {}
+    )
+    monkeypatch.setattr(
+        wc_attributions, "breakdown_windows_for_day", lambda _day, rows=None: {}
+    )
+    monkeypatch.setattr(
+        production_history, "_excluded_minutes_by_person_wc", lambda *_a, **_k: {}
+    )
+
+    inputs = production_history._strict_inputs_for_day(
+        DAY,
+        object(),
+        now_utc=END,
+        location_spans=(
+            span(1, "Ana", START, at(12, 3), wc="Repair 1"),
+            span(1, "Ana", at(12, 3), END),
+        ),
+        mirror_health=health,
+        shift_bounds=(START, END),
+        break_windows=(),
+        attribution_rows=(),
+        productive_minutes_in_window=lambda _day, start, end: (
+            end - start
+        ).total_seconds()
+        / 60,
+        effective_now_utc=END,
+    )
+
+    assert _segment_shape(inputs.segments) == expected
 
 
 def test_strict_branch_is_chosen_once_and_splits_duplicate_names_by_odoo_id(monkeypatch):

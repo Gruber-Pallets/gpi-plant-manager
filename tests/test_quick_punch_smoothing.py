@@ -4,9 +4,24 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from zira_dashboard.assignment_windows import WorkSegment
-from zira_dashboard.quick_punch_smoothing import QUICK_PUNCH_LIMIT, smooth_quick_punches
+from zira_dashboard.quick_punch_smoothing import (
+    QUICK_PUNCH_LIMIT,
+    production_times_from_samples,
+    smooth_quick_punches,
+)
 
 CT = ZoneInfo("America/Chicago")
+
+# Meter data saying no station made a pallet, so the wrong-first-pick rule is
+# live for the existing cases.
+NO_PALLETS = {f"Dismantler {n}": () for n in range(1, 5)} | {
+    f"Repair {n}": () for n in range(1, 6)
+}
+
+
+def smooth(segments, **kwargs):
+    kwargs.setdefault("production_times_by_wc", NO_PALLETS)
+    return smooth_quick_punches(segments, **kwargs)
 
 
 def ct(hour, minute=0, second=0):
@@ -29,7 +44,7 @@ def test_limit_is_five_minutes():
 
 
 def test_empty_input_stays_empty():
-    assert smooth_quick_punches(()) == ()
+    assert smooth(()) == ()
 
 
 def test_christians_detour_on_2026_09_18_becomes_one_dismantler_3_stint():
@@ -41,7 +56,7 @@ def test_christians_detour_on_2026_09_18_becomes_one_dismantler_3_stint():
         seg("Dismantler 3", ct(11, 30), now),
     )
 
-    assert shape(smooth_quick_punches(segments)) == [
+    assert shape(smooth(segments)) == [
         ("Christian C.", "Dismantler 3", ct(7), ct(11)),
         ("Christian C.", "Dismantler 3", ct(11, 30), now),
     ]
@@ -53,18 +68,18 @@ def test_lunch_split_is_not_bridged():
         seg("Dismantler 2", ct(11, 30), ct(14, 25), person="Jose C.", odoo_id=24),
     )
 
-    assert smooth_quick_punches(segments) == segments
+    assert smooth(segments) == segments
 
 
 def test_same_station_gap_is_bridged_up_to_exactly_the_limit():
     for gap_seconds, expected_count in ((299, 1), (300, 1), (301, 2)):
         back_at = ct(9) + timedelta(seconds=gap_seconds)
-        result = smooth_quick_punches(
+        result = smooth(
             (seg("Repair 1", ct(8), ct(9)), seg("Repair 1", back_at, ct(10)))
         )
         assert len(result) == expected_count, gap_seconds
 
-    (bridged,) = smooth_quick_punches(
+    (bridged,) = smooth(
         (seg("Repair 1", ct(8), ct(9)), seg("Repair 1", ct(9, 5), ct(10)))
     )
     assert (bridged.start_utc, bridged.end_utc) == (ct(8), ct(10))
@@ -78,7 +93,7 @@ def test_detour_through_several_stations_inside_the_limit_is_absorbed():
         seg("Repair 1", ct(9, 4), ct(10)),
     )
 
-    assert shape(smooth_quick_punches(segments)) == [
+    assert shape(smooth(segments)) == [
         ("Christian C.", "Repair 1", ct(8), ct(10)),
     ]
 
@@ -90,7 +105,7 @@ def test_detour_longer_than_the_limit_is_kept():
         seg("Repair 1", ct(9, 6), ct(10)),
     )
 
-    assert smooth_quick_punches(segments) == segments
+    assert smooth(segments) == segments
 
 
 def test_wrong_first_pick_at_start_of_day_joins_the_next_station():
@@ -99,7 +114,7 @@ def test_wrong_first_pick_at_start_of_day_joins_the_next_station():
         seg("Dismantler 4", ct(7, 3), ct(11)),
     )
 
-    assert shape(smooth_quick_punches(segments)) == [
+    assert shape(smooth(segments)) == [
         ("Christian C.", "Dismantler 4", ct(7), ct(11)),
     ]
 
@@ -111,7 +126,7 @@ def test_wrong_first_pick_after_lunch_joins_the_next_station_and_fills_the_gap()
         seg("Dismantler 4", ct(11, 34), ct(15, 30)),
     )
 
-    assert shape(smooth_quick_punches(segments)) == [
+    assert shape(smooth(segments)) == [
         ("Christian C.", "Dismantler 4", ct(7), ct(11)),
         ("Christian C.", "Dismantler 4", ct(11, 30), ct(15, 30)),
     ]
@@ -124,7 +139,7 @@ def test_chain_of_first_picks_settles_on_the_final_station_within_the_limit():
         seg("Repair 3", ct(7, 3), ct(11)),
     )
 
-    assert shape(smooth_quick_punches(segments)) == [
+    assert shape(smooth(segments)) == [
         ("Christian C.", "Repair 3", ct(7), ct(11)),
     ]
 
@@ -136,7 +151,7 @@ def test_chain_of_first_picks_stops_once_the_combined_stint_passes_the_limit():
         seg("Repair 3", ct(7, 6), ct(11)),
     )
 
-    assert shape(smooth_quick_punches(segments)) == [
+    assert shape(smooth(segments)) == [
         ("Christian C.", "Repair 2", ct(7), ct(7, 6)),
         ("Christian C.", "Repair 3", ct(7, 6), ct(11)),
     ]
@@ -149,7 +164,7 @@ def test_mid_day_short_stop_between_two_different_stations_is_kept():
         seg("Repair 3", ct(9, 2), ct(10)),
     )
 
-    assert smooth_quick_punches(segments) == segments
+    assert smooth(segments) == segments
 
 
 def test_came_back_rule_runs_before_wrong_first_pick():
@@ -160,7 +175,7 @@ def test_came_back_rule_runs_before_wrong_first_pick():
         seg("Dismantler 3", ct(7, 6), ct(9)),
     )
 
-    assert shape(smooth_quick_punches(segments)) == [
+    assert shape(smooth(segments)) == [
         ("Christian C.", "Dismantler 3", ct(7), ct(9)),
     ]
 
@@ -170,7 +185,7 @@ def test_live_detour_waits_until_the_person_comes_back():
         seg("Dismantler 3", ct(7), ct(7, 2, 10)),
         seg("Dismantler 2", ct(7, 2, 10), ct(7, 3)),
     )
-    assert shape(smooth_quick_punches(at_0703)) == [
+    assert shape(smooth(at_0703)) == [
         ("Christian C.", "Dismantler 2", ct(7), ct(7, 3)),
     ]
 
@@ -178,7 +193,7 @@ def test_live_detour_waits_until_the_person_comes_back():
         seg("Dismantler 3", ct(7), ct(9)),
         seg("Dismantler 2", ct(9), ct(9, 2)),
     )
-    assert smooth_quick_punches(mid_detour_after_real_work) == mid_detour_after_real_work
+    assert smooth(mid_detour_after_real_work) == mid_detour_after_real_work
 
 
 def test_other_people_are_never_changed_and_order_is_preserved():
@@ -187,7 +202,7 @@ def test_other_people_are_never_changed_and_order_is_preserved():
     ana = seg("Repair 2", ct(9), ct(9, 2), person="Ana M.", odoo_id=5)
     christian_after = seg("Repair 1", ct(9, 2), ct(10))
 
-    result = smooth_quick_punches((bob, christian_before, ana, christian_after))
+    result = smooth((bob, christian_before, ana, christian_after))
 
     assert len(result) == 3
     assert result[0] is bob
@@ -201,7 +216,7 @@ def test_same_name_with_different_odoo_ids_stays_separate():
         seg("Repair 1", ct(9, 1), ct(10), person="Jose O.", odoo_id=32),
     )
 
-    assert smooth_quick_punches(segments) == segments
+    assert smooth(segments) == segments
 
 
 def test_blocked_windows_stop_both_rules():
@@ -210,7 +225,7 @@ def test_blocked_windows_stop_both_rules():
         seg("Repair 1", ct(9, 3), ct(10)),
     )
     assert (
-        smooth_quick_punches(came_back, blocked_windows={8: ((ct(9, 1), ct(9, 2)),)})
+        smooth(came_back, blocked_windows={8: ((ct(9, 1), ct(9, 2)),)})
         == came_back
     )
 
@@ -219,7 +234,7 @@ def test_blocked_windows_stop_both_rules():
         seg("Repair 2", ct(7, 3), ct(11)),
     )
     assert (
-        smooth_quick_punches(first_pick, blocked_windows={8: ((ct(7, 2), ct(7, 3)),)})
+        smooth(first_pick, blocked_windows={8: ((ct(7, 2), ct(7, 3)),)})
         == first_pick
     )
 
@@ -230,7 +245,7 @@ def test_blocked_window_that_only_touches_the_gap_does_not_block():
         seg("Repair 1", ct(9, 3), ct(10)),
     )
 
-    (bridged,) = smooth_quick_punches(
+    (bridged,) = smooth(
         segments, blocked_windows={8: ((ct(8, 50), ct(9)),)}
     )
     assert (bridged.start_utc, bridged.end_utc) == (ct(8), ct(10))
@@ -243,7 +258,7 @@ def test_detour_that_runs_past_the_return_is_left_alone():
         seg("Repair 1", ct(9, 2), ct(10)),
     )
 
-    assert smooth_quick_punches(segments) == segments
+    assert smooth(segments) == segments
 
 
 @pytest.mark.parametrize(("stint_seconds", "merged"), ((300, True), (301, False)))
@@ -256,7 +271,7 @@ def test_wrong_first_pick_counts_a_stint_of_exactly_the_limit_as_quick(
         seg("Repair 2", picked_until, ct(11)),
     )
 
-    result = smooth_quick_punches(segments)
+    result = smooth(segments)
 
     if merged:
         assert shape(result) == [("Christian C.", "Repair 2", ct(7), ct(11))]
@@ -272,7 +287,7 @@ def test_wrong_first_pick_bridges_a_gap_of_exactly_the_limit(gap_seconds, merged
         seg("Repair 2", next_start, ct(11)),
     )
 
-    result = smooth_quick_punches(segments)
+    result = smooth(segments)
 
     if merged:
         assert shape(result) == [("Christian C.", "Repair 2", ct(7), ct(11))]
@@ -290,7 +305,7 @@ def test_wrong_first_pick_needs_away_time_longer_than_the_limit(away_seconds, me
         seg("Repair 2", picked_until, ct(15)),
     )
 
-    result = smooth_quick_punches(segments)
+    result = smooth(segments)
 
     if merged:
         assert shape(result) == [
@@ -310,7 +325,7 @@ def test_came_back_rechecks_from_the_merged_stint():
         seg("Repair 1", ct(9, 6), ct(10)),
     )
 
-    assert shape(smooth_quick_punches(segments)) == [
+    assert shape(smooth(segments)) == [
         ("Christian C.", "Repair 1", ct(8), ct(10)),
     ]
 
@@ -321,7 +336,7 @@ def test_blocked_windows_only_apply_to_their_own_person():
         seg("Repair 1", ct(9, 3), ct(10)),
     )
 
-    (bridged,) = smooth_quick_punches(
+    (bridged,) = smooth(
         segments, blocked_windows={6: ((ct(9, 1), ct(9, 2)),)}
     )
     assert (bridged.start_utc, bridged.end_utc) == (ct(8), ct(10))
@@ -333,11 +348,11 @@ def test_person_without_odoo_id_is_grouped_and_blocked_by_name():
         seg("Repair 1", ct(9, 2), ct(10), person="Temp W.", odoo_id=None),
     )
 
-    assert shape(smooth_quick_punches(segments)) == [
+    assert shape(smooth(segments)) == [
         ("Temp W.", "Repair 1", ct(8), ct(10)),
     ]
     assert (
-        smooth_quick_punches(
+        smooth(
             segments, blocked_windows={"Temp W.": ((ct(9, 0, 30), ct(9, 1)),)}
         )
         == segments
@@ -351,4 +366,82 @@ def test_in_between_stint_that_overlaps_the_current_stint_stops_came_back():
         seg("Repair 1", ct(9, 3), ct(10)),
     )
 
-    assert smooth_quick_punches(segments) == segments
+    assert smooth(segments) == segments
+
+
+FIRST_PICK = (
+    seg("Dismantler 1", ct(7), ct(7, 3)),
+    seg("Dismantler 4", ct(7, 3), ct(11)),
+)
+
+
+def test_short_first_stint_that_made_pallets_is_real_work_and_is_kept():
+    result = smooth_quick_punches(
+        FIRST_PICK,
+        production_times_by_wc={"Dismantler 1": (ct(7, 2),), "Dismantler 4": ()},
+    )
+
+    assert result == FIRST_PICK
+
+
+@pytest.mark.parametrize(
+    ("pallet_at", "kept"),
+    (
+        (ct(7), True),  # the stint's first instant is inside it
+        (ct(7, 3), False),  # the stint's last instant belongs to the next stint
+    ),
+)
+def test_pallet_timing_matches_how_credit_picks_a_stint(pallet_at, kept):
+    result = smooth_quick_punches(
+        FIRST_PICK,
+        production_times_by_wc={"Dismantler 1": (pallet_at,), "Dismantler 4": ()},
+    )
+
+    if kept:
+        assert result == FIRST_PICK
+    else:
+        assert shape(result) == [("Christian C.", "Dismantler 4", ct(7), ct(11))]
+
+
+def test_pallets_at_a_different_station_do_not_keep_the_first_pick():
+    result = smooth_quick_punches(
+        FIRST_PICK,
+        production_times_by_wc={
+            "Dismantler 1": (ct(6, 59), ct(7, 3)),
+            "Dismantler 4": (ct(7), ct(7, 1), ct(7, 2)),
+        },
+    )
+
+    assert shape(result) == [("Christian C.", "Dismantler 4", ct(7), ct(11))]
+
+
+def test_unknown_meter_data_keeps_the_first_pick_but_still_bridges_came_back():
+    assert smooth_quick_punches(FIRST_PICK) == FIRST_PICK
+    assert smooth_quick_punches(FIRST_PICK, production_times_by_wc=None) == FIRST_PICK
+    assert (
+        smooth_quick_punches(FIRST_PICK, production_times_by_wc={"Dismantler 4": ()})
+        == FIRST_PICK
+    )
+
+    christians_detour = (
+        seg("Dismantler 3", ct(7), ct(7, 2, 10)),
+        seg("Dismantler 2", ct(7, 2, 10), ct(7, 4, 27)),
+        seg("Dismantler 3", ct(7, 4, 27), ct(11)),
+    )
+    assert shape(smooth_quick_punches(christians_detour, production_times_by_wc=None)) == [
+        ("Christian C.", "Dismantler 3", ct(7), ct(11)),
+    ]
+
+
+def test_production_times_from_samples_keeps_only_pallet_timestamps():
+    assert production_times_from_samples(
+        {
+            "Repair 1": [(ct(7), 3), (ct(7, 1), 0), (ct(7, 2), -1.0), (ct(7, 3), 0.5)],
+            "Repair 2": [],
+            "Repair 3": iter([(ct(8), 0)]),
+        }
+    ) == {
+        "Repair 1": (ct(7), ct(7, 3)),
+        "Repair 2": (),
+        "Repair 3": (),
+    }

@@ -304,6 +304,7 @@ def production_scores_for_timeline(
         assignment_windows,
         machine_breakdown,
         production_segments,
+        quick_punch_smoothing,
         settings_store,
         shift_config,
         wc_attributions,
@@ -327,6 +328,8 @@ def production_scores_for_timeline(
     if shift_end <= shift_start:
         raise ValueError("window_end_utc must be after window_start_utc")
     cap_utc = min(now, shift_end)
+    # Unguarded pass only to skip the meter fetch when nobody worked. The meter
+    # guard below can merge stints but never empties a non-empty result.
     segments = assignment_windows.work_segments_from_timeline(
         spans,
         window_start_utc=shift_start,
@@ -350,7 +353,6 @@ def production_scores_for_timeline(
         for wc_name, windows in testing.items()
     }
     breakdowns = wc_attributions.breakdown_windows_for_day(day, rows=list(rows))
-    safe_breakdowns = _identity_safe_breakdown_windows(segments, breakdowns)
 
     wc_totals: dict[str, float] = {}
     samples_by_wc: dict[str, list[tuple[datetime, float]]] = {}
@@ -410,6 +412,16 @@ def production_scores_for_timeline(
         wc_totals[wc_name] = adjusted_total
         samples_by_wc[wc_name] = filtered_samples
         stations_by_wc[wc_name] = total.station
+
+    segments = assignment_windows.work_segments_from_timeline(
+        spans,
+        window_start_utc=shift_start,
+        window_end_utc=cap_utc,
+        production_times_by_wc=quick_punch_smoothing.production_times_from_samples(
+            samples_by_wc
+        ),
+    )
+    safe_breakdowns = _identity_safe_breakdown_windows(segments, breakdowns)
 
     def productive_for_segment(segment) -> float:
         raw = shift_config.productive_minutes_in_window(
@@ -821,6 +833,7 @@ def _strict_inputs_for_day(
         assignment_windows,
         attendance_mirror,
         attendance_timeline,
+        quick_punch_smoothing,
         wc_attributions,
     )
 
@@ -839,11 +852,6 @@ def _strict_inputs_for_day(
         attendance_timeline.timeline_for_range(shift_start, shift_end, as_of_utc=now_utc)
         if location_spans is None
         else tuple(location_spans)
-    )
-    segments = assignment_windows.work_segments_from_timeline(
-        spans,
-        window_start_utc=shift_start,
-        window_end_utc=shift_end,
     )
     leaderboard_rows = _metered_leaderboard(
         client,
@@ -865,6 +873,14 @@ def _strict_inputs_for_day(
         wc_totals = _apply_testing_offsets(wc_totals, samples_by_wc, testing)
         samples_by_wc = _without_testing_samples(samples_by_wc, testing)
     _validate_strict_sample_totals(wc_totals, samples_by_wc)
+    segments = assignment_windows.work_segments_from_timeline(
+        spans,
+        window_start_utc=shift_start,
+        window_end_utc=shift_end,
+        production_times_by_wc=quick_punch_smoothing.production_times_from_samples(
+            samples_by_wc
+        ),
+    )
 
     effective_now = (
         _effective_now(day, now_utc) if effective_now_utc is None else effective_now_utc

@@ -17,6 +17,7 @@ from .. import (
     current_operators,
     layout_store,
     production_segments,
+    quick_punch_smoothing,
     recycling_range,
     settings_store,
     shift_config,
@@ -96,6 +97,7 @@ def _canonical_department_segments(
     window_end_utc,
     *,
     now_utc,
+    production_times_by_wc=None,
 ):
     """Return ID-backed Odoo segments and their cap, or ``None`` for rollback.
 
@@ -103,6 +105,7 @@ def _canonical_department_segments(
     permanently strict historical day remains canonical after rollback.
     Unavailable or stale canonical data fails closed instead of collapsing
     duplicate employees into the legacy name-only map.
+    ``production_times_by_wc`` is the meter guard for quick-punch smoothing.
     """
     from .. import (
         assignment_windows,
@@ -153,6 +156,7 @@ def _canonical_department_segments(
             spans,
             window_start_utc=window_start_utc,
             window_end_utc=canonical_cap,
+            production_times_by_wc=production_times_by_wc,
         ),
         canonical_cap,
         projection_snapshot,
@@ -487,6 +491,11 @@ def _department_day_data(
         window_start_utc,
         window_end_utc,
         now_utc=now,
+        # Every station's meter, including ones not yet active, so a short
+        # first stint is only smoothed away where no pallets were made.
+        production_times_by_wc=quick_punch_smoothing.production_times_from_samples(
+            {r.station.name: getattr(r, "samples", ()) or () for r in results}
+        ),
     )
     if canonical_projection is not None:
         segments = canonical_projection.segments

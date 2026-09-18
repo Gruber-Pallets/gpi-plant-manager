@@ -285,6 +285,105 @@ def test_timeline_scoring_uses_explicit_is_today_for_live_cap(monkeypatch):
     assert captured["live_cap_utc"] is None
 
 
+@pytest.mark.parametrize("repair_1_made_pallets", (True, False))
+def test_timeline_scoring_smooths_a_wrong_first_pick_only_when_its_meter_was_idle(
+    monkeypatch, repair_1_made_pallets
+):
+    from zira_dashboard import production_segments, settings_store, shift_config
+    from zira_dashboard.leaderboard import StationTotal
+    from zira_dashboard.stations import Station
+    from tests.people_performance_fixtures import DAY, END, START, span
+
+    def total(wc_name, samples):
+        return StationTotal(
+            station=Station(wc_name.lower(), wc_name, "Repair", "Bay 1"),
+            units=sum(units for _at, units in samples),
+            reading_count=len(samples),
+            truncated=False,
+            downtime_minutes=0,
+            active_minutes=60,
+            last_reading_at=samples[-1][0] if samples else None,
+            last_status="Working",
+            samples=samples,
+            active_intervals=((START, START + timedelta(minutes=60)),),
+        )
+
+    def minute(n):
+        return START + timedelta(minutes=n)
+
+    repair_1_samples = ((minute(2), 5),) if repair_1_made_pallets else ()
+    # A legacy name-only breakdown at Repair 1. It is identity-safe only when
+    # exactly one "Same Name" still has a Repair 1 stint after smoothing.
+    breakdown = {
+        "id": 2,
+        "wc_name": "Repair 1",
+        "person_name": "Same Name",
+        "employee_odoo_id": None,
+        "start_utc": minute(30),
+        "end_utc": minute(40),
+        "source": "breakdown",
+        "breakdown_id": 9,
+    }
+    captured = {}
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda day, start, end: (end - start).total_seconds() / 60,
+    )
+    monkeypatch.setattr(settings_store, "station_target", lambda station: 10.0)
+
+    def capture(segments, **kwargs):
+        captured["segments"] = [
+            (item.person_odoo_id, item.wc_name, item.start_utc, item.end_utc)
+            for item in segments
+        ]
+        captured["minutes"] = {
+            (item.person_odoo_id, item.wc_name): kwargs[
+                "productive_minutes_for_segment"
+            ](item)
+            for item in segments
+        }
+        return {}
+
+    monkeypatch.setattr(production_segments, "credit_work_segments", capture)
+    monkeypatch.setattr(production_segments, "score_work_segments", lambda *a, **k: {})
+
+    production_history.production_scores_for_timeline(
+        object(),
+        DAY,
+        (
+            span(81, "Same Name", 0, 3, "Repair 1", is_open=False),
+            span(81, "Same Name", 3, 60, "Repair 2", is_open=False),
+            span(82, "Same Name", 0, 60, "Repair 1", is_open=False),
+        ),
+        now_utc=END,
+        is_today=False,
+        window_start_utc=START,
+        window_end_utc=END,
+        station_totals=(
+            total("Repair 1", repair_1_samples),
+            total("Repair 2", ((minute(30), 12),)),
+        ),
+        attribution_rows=(breakdown,),
+    )
+
+    if repair_1_made_pallets:
+        assert captured["segments"] == [
+            (81, "Repair 1", minute(0), minute(3)),
+            (81, "Repair 2", minute(3), minute(60)),
+            (82, "Repair 1", minute(0), minute(60)),
+        ]
+        # Two people with that name at Repair 1: the breakdown is not applied.
+        assert captured["minutes"][(82, "Repair 1")] == 60.0
+    else:
+        assert captured["segments"] == [
+            (81, "Repair 2", minute(0), minute(60)),
+            (82, "Repair 1", minute(0), minute(60)),
+        ]
+        # Breakdown identity is resolved against the smoothed segments.
+        assert captured["minutes"] == {(81, "Repair 2"): 60.0, (82, "Repair 1"): 50.0}
+
+
 def test_timeline_scoring_rejects_naive_cap_before_reading_sources():
     from tests.people_performance_fixtures import DAY, END
 

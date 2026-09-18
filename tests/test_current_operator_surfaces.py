@@ -305,6 +305,127 @@ def test_canonical_department_projection_skips_empty_window(monkeypatch):
     assert projection.location_snapshot is snapshot
 
 
+def _dismantler_span(wc_name, start_utc, end_utc):
+    return attendance_timeline.LocationSpan(
+        employee_odoo_id=8,
+        employee_name="Christian C.",
+        start_utc=start_utc,
+        end_utc=end_utc,
+        status="valid",
+        app_work_center_name=wc_name,
+        odoo_work_center_id=77,
+        odoo_work_center_name=wc_name,
+        attendance_ids=(91,),
+        department_repair=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("dismantler_1_pallets", "expected"),
+    (
+        (
+            (NOW.replace(hour=12, minute=2),),
+            [
+                ("Dismantler 1", NOW.replace(hour=12), NOW.replace(hour=12, minute=3)),
+                ("Dismantler 3", NOW.replace(hour=12, minute=3), NOW),
+            ],
+        ),
+        ((), [("Dismantler 3", NOW.replace(hour=12), NOW)]),
+    ),
+)
+def test_canonical_department_projection_smooths_with_the_meter_guard(
+    monkeypatch, dismantler_1_pallets, expected
+):
+    snapshot = SimpleNamespace(
+        policy=live_cache.AttendanceReadPolicy(
+            mirror_owned=True,
+            available=True,
+            refreshed_at=NOW,
+            mode="shadow",
+        ),
+        spans=(
+            _dismantler_span(
+                "Dismantler 1", NOW.replace(hour=12), NOW.replace(hour=12, minute=3)
+            ),
+            _dismantler_span("Dismantler 3", NOW.replace(hour=12, minute=3), NOW),
+        ),
+        verified_cap_utc=NOW,
+        current_attendance_ids=frozenset({91}),
+    )
+    monkeypatch.setattr(
+        "zira_dashboard.attendance_location_snapshot.read_location_snapshot",
+        lambda *_args, **_kwargs: snapshot,
+    )
+
+    projection = departments._canonical_department_segments(
+        DAY,
+        datetime.combine(DAY, time(7), tzinfo=UTC),
+        NOW,
+        now_utc=NOW,
+        production_times_by_wc={
+            "Dismantler 1": dismantler_1_pallets,
+            "Dismantler 3": (),
+        },
+    )
+
+    assert [
+        (segment.wc_name, segment.start_utc, segment.end_utc)
+        for segment in projection.segments
+    ] == expected
+
+
+def test_department_day_data_hands_every_station_meter_times_to_smoothing(monkeypatch):
+    class _Captured(Exception):
+        pass
+
+    producing = Station("repair-2", "Repair 2", "Repair", "Recycling")
+    quiet = Station("dismantler-2", "Dismantler 2", "Dismantler", "Recycling")
+    pallet_at = NOW.replace(hour=12, minute=2)
+    captured = {}
+
+    def capture(*_args, **kwargs):
+        captured.update(kwargs)
+        raise _Captured
+
+    monkeypatch.setattr(
+        departments,
+        "leaderboard",
+        lambda *_args, **_kwargs: [
+            SimpleNamespace(
+                station=producing,
+                units=34,
+                samples=((pallet_at, 34), (NOW.replace(hour=13), 0)),
+            ),
+            # Below the activity threshold, but its meter still says "idle".
+            SimpleNamespace(station=quiet, units=0, samples=None),
+        ],
+    )
+    monkeypatch.setattr(
+        staffing,
+        "load_schedule",
+        lambda day: staffing.Schedule(day=day, published=True, assignments={}),
+    )
+    monkeypatch.setattr(departments, "_absent_names", lambda _day: set())
+    monkeypatch.setattr(shift_config, "shift_start_for", lambda _day: time(7))
+    monkeypatch.setattr(shift_config, "shift_end_for", lambda _day: time(15))
+    monkeypatch.setattr(departments, "_canonical_department_segments", capture)
+
+    with pytest.raises(_Captured):
+        departments._department_day_data(
+            DAY,
+            NOW,
+            True,
+            stations=[producing, quiet],
+            labor_department="Recycled",
+            group_categories=("Repair", "Dismantler"),
+        )
+
+    assert captured["production_times_by_wc"] == {
+        "Repair 2": (pallet_at,),
+        "Dismantler 2": (),
+    }
+
+
 def test_real_transfer_bar_is_unchanged_when_current_rows_are_attached():
     bars = recycling_data.build_bars(
         "Repair",

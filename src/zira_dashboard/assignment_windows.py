@@ -20,13 +20,22 @@ Pure -- no DB, no network. The route supplies already-loaded inputs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
+
+from . import quick_punch_smoothing
 
 if TYPE_CHECKING:
     from .attendance_timeline import LocationSpan
+
+
+# Location states where Odoo's data conflicts or is unknown. Smoothing never
+# bridges across these, so pallet credit is never invented there.
+_SMOOTHING_BLOCKING_STATUSES = frozenset(
+    {"conflicting_location", "unmapped_location", "stale_open_location"}
+)
 
 
 @dataclass(frozen=True)
@@ -44,30 +53,51 @@ def work_segments_from_timeline(
     *,
     window_start_utc: datetime,
     window_end_utc: datetime,
+    production_times_by_wc: Mapping[str, Sequence[datetime]] | None = None,
 ) -> tuple[WorkSegment, ...]:
-    """Convert only valid Odoo location spans into clipped work segments."""
+    """Convert valid Odoo location spans into smoothed, clipped work segments.
+
+    Quick punch mistakes are merged per person (see ``quick_punch_smoothing``)
+    before clipping, never across a conflicting, unmapped or stale location.
+    ``production_times_by_wc`` is the meter guard: a short first stint is only
+    treated as a wrong pick when it shows its station made no pallets then.
+    Without it, short first stints are kept.
+    """
     if window_start_utc.utcoffset() is None or window_end_utc.utcoffset() is None:
         raise TypeError("timeline window boundaries must be timezone-aware")
     if window_end_utc <= window_start_utc:
         raise ValueError("timeline window must have positive duration")
-    segments: list[WorkSegment] = []
+    raw: list[WorkSegment] = []
+    blocked: dict[int, list[tuple[datetime, datetime]]] = {}
     for span in spans:
+        if span.status in _SMOOTHING_BLOCKING_STATUSES:
+            blocked.setdefault(span.employee_odoo_id, []).append(
+                (span.start_utc, span.end_utc)
+            )
         if span.status != "valid" or not span.app_work_center_name:
             continue
-        start = max(span.start_utc, window_start_utc)
-        end = min(span.end_utc, window_end_utc)
-        if end <= start:
-            continue
-        segments.append(
+        raw.append(
             WorkSegment(
                 wc_name=span.app_work_center_name,
                 person_name=span.employee_name,
-                start_utc=start,
-                end_utc=end,
+                start_utc=span.start_utc,
+                end_utc=span.end_utc,
                 source="odoo",
                 person_odoo_id=span.employee_odoo_id,
             )
         )
+    segments: list[WorkSegment] = []
+    smoothed = quick_punch_smoothing.smooth_quick_punches(
+        raw,
+        blocked_windows=blocked,
+        production_times_by_wc=production_times_by_wc,
+    )
+    for segment in smoothed:
+        start = max(segment.start_utc, window_start_utc)
+        end = min(segment.end_utc, window_end_utc)
+        if end <= start:
+            continue
+        segments.append(replace(segment, start_utc=start, end_utc=end))
     return tuple(segments)
 
 
