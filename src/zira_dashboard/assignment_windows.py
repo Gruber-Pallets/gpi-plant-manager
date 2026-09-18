@@ -23,12 +23,15 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime
 from collections.abc import Callable, Mapping, Sequence
+import logging
 from typing import TYPE_CHECKING
 
 from . import quick_punch_smoothing
 
 if TYPE_CHECKING:
     from .attendance_timeline import LocationSpan
+
+_log = logging.getLogger(__name__)
 
 
 # Location states where Odoo's data conflicts or is unknown. Smoothing never
@@ -46,6 +49,19 @@ class WorkSegment:
     end_utc: datetime
     source: str  # 'schedule' | 'punch' | 'attribution'
     person_odoo_id: int | None = None
+
+
+def _blocking_windows(
+    spans: Sequence[LocationSpan],
+) -> dict[int, list[tuple[datetime, datetime]]]:
+    """Each person's conflicting, unmapped or stale location windows."""
+    blocked: dict[int, list[tuple[datetime, datetime]]] = {}
+    for span in spans:
+        if span.status in _SMOOTHING_BLOCKING_STATUSES:
+            blocked.setdefault(span.employee_odoo_id, []).append(
+                (span.start_utc, span.end_utc)
+            )
+    return blocked
 
 
 def validate_window(window_start_utc: datetime, window_end_utc: datetime) -> None:
@@ -76,16 +92,14 @@ def work_segments_from_timeline(
     first stints are kept and detours merge.
 
     ``smooth=False`` returns exactly the valid spans, clipped, for views that
-    must match real punches one to one (People Performance).
+    must match real punches one to one (People Performance). If smoothing
+    fails for any reason, a warning is logged and that same real-punch result
+    is returned, so smoothing can never take a page down.
     """
     validate_window(window_start_utc, window_end_utc)
+    spans = tuple(spans)
     raw: list[WorkSegment] = []
-    blocked: dict[int, list[tuple[datetime, datetime]]] = {}
     for span in spans:
-        if smooth and span.status in _SMOOTHING_BLOCKING_STATUSES:
-            blocked.setdefault(span.employee_odoo_id, []).append(
-                (span.start_utc, span.end_utc)
-            )
         if span.status != "valid" or not span.app_work_center_name:
             continue
         raw.append(
@@ -98,15 +112,19 @@ def work_segments_from_timeline(
                 person_odoo_id=span.employee_odoo_id,
             )
         )
-    stints = (
-        quick_punch_smoothing.smooth_quick_punches(
-            raw,
-            blocked_windows=blocked,
-            production_times_by_wc=production_times_by_wc,
-        )
-        if smooth
-        else raw
-    )
+    stints: Sequence[WorkSegment] = raw
+    if smooth:
+        try:
+            stints = quick_punch_smoothing.smooth_quick_punches(
+                raw,
+                blocked_windows=_blocking_windows(spans),
+                production_times_by_wc=production_times_by_wc,
+            )
+        except Exception as exc:  # noqa: BLE001 - smoothing must never take a page down
+            _log.warning(
+                "quick-punch smoothing failed (%s); using real punches",
+                type(exc).__name__,
+            )
     segments: list[WorkSegment] = []
     for segment in stints:
         start = max(segment.start_utc, window_start_utc)

@@ -447,6 +447,36 @@ def test_production_times_from_samples_keeps_only_pallet_timestamps():
     }
 
 
+def test_production_times_from_samples_never_raises_on_a_malformed_meter():
+    # A bad reading might have been a real pallet, so its station becomes
+    # unknown rather than idle: the wrong-first-pick rule can't erase work.
+    assert production_times_from_samples(
+        {
+            "Good": [(ct(7), 1), (ct(7, 1), 0)],
+            "NaN units": [(ct(7), 1), (ct(7, 1), float("nan"))],
+            "Infinite units": [(ct(7), float("inf"))],
+            "Text units": [(ct(7), "3")],
+            "No units": [(ct(7), None)],
+            "Yes/no units": [(ct(7), True)],
+            "Naive time": [(ct(7).replace(tzinfo=None), 1)],
+            "Text time": [("07:00", 1)],
+            "Not a pair": [(ct(7),)],
+            "Not a list": None,
+        }
+    ) == {"Good": (ct(7),)}
+
+
+def test_a_malformed_meter_keeps_a_short_first_stint():
+    result = smooth(
+        FIRST_PICK,
+        production_times_by_wc=production_times_from_samples(
+            {"Dismantler 1": [(ct(7, 1), float("nan"))], "Dismantler 4": []}
+        ),
+    )
+
+    assert result == FIRST_PICK
+
+
 DETOUR = (
     seg("Repair 1", ct(8), ct(9)),
     seg("Repair 2", ct(9), ct(9, 2)),
@@ -559,3 +589,60 @@ def test_christians_detour_still_merges_because_jose_covers_dismantler_2():
         ("Jose C.", "Dismantler 2", ct(7), ct(11)),
     ]
     assert result[1] is jose
+
+
+SIGN_OUT_GAP = (
+    seg("Repair 1", ct(8), ct(9)),
+    seg("Repair 1", ct(9, 4), ct(10)),
+)
+SIGN_OUT_GAP_MERGED = [("Christian C.", "Repair 1", ct(8), ct(10))]
+
+
+def yuri(wc, start, end):
+    return seg(wc, start, end, person="Yuri R.", odoo_id=9)
+
+
+@pytest.mark.parametrize(
+    "relief",
+    (
+        pytest.param(yuri("Repair 1", ct(9, 0, 30), ct(9, 3, 30)), id="inside-the-gap"),
+        pytest.param(yuri("Repair 1", ct(9, 2), ct(11)), id="stays-after-return"),
+        pytest.param(yuri("Repair 1", ct(8, 30), ct(9, 2)), id="leaves-during-gap"),
+        pytest.param(yuri("Repair 1", ct(9), ct(9, 4)), id="exactly-fills-the-gap"),
+        pytest.param(yuri("Repair 1", ct(9), ct(11)), id="arrives-as-they-leave"),
+        pytest.param(yuri("Repair 1", ct(8, 30), ct(9, 4)), id="leaves-as-they-return"),
+    ),
+)
+def test_someone_relieving_the_station_during_the_gap_stops_came_back(relief):
+    segments = (*SIGN_OUT_GAP, relief)
+
+    result = smooth(segments)
+
+    assert result == segments
+    assert result[2] is relief
+
+
+@pytest.mark.parametrize(
+    "other",
+    (
+        # A paired station: the partner was there before they left and after
+        # they came back, so they worked the gap together.
+        pytest.param(yuri("Repair 1", ct(7), ct(15, 30)), id="partner-spans-the-gap"),
+        pytest.param(yuri("Repair 2", ct(9, 0, 30), ct(9, 3, 30)), id="other-station"),
+        pytest.param(yuri("Repair 1", ct(8), ct(9)), id="left-as-they-left"),
+        pytest.param(yuri("Repair 1", ct(9, 4), ct(10)), id="arrived-as-they-returned"),
+    ),
+)
+def test_no_relief_in_the_gap_still_merges(other):
+    result = smooth((*SIGN_OUT_GAP, other))
+
+    assert shape(result) == [*SIGN_OUT_GAP_MERGED, shape((other,))[0]]
+    assert result[1] is other
+
+
+def test_relief_at_the_home_station_during_a_detour_stops_came_back():
+    relief = yuri("Repair 1", ct(9), ct(9, 3))
+
+    result = smooth((*DETOUR, relief))
+
+    assert result == (*DETOUR, relief)

@@ -4,9 +4,13 @@ Two per-person rules, both bounded by ``QUICK_PUNCH_LIMIT``:
 
 1. Came back: a person who leaves station A and is back at A within the limit
    worked one continuous stint at A. A sign-out gap or blips at other
-   stations in between become A time -- unless the meter proves a blip's
-   station made pallets during the blip that no one else there covers.
-   Merging would leave those pallets unassigned, so the blip stays.
+   stations in between become A time. Two things keep the stints apart,
+   because merging would take pallets away from real work:
+   - someone else relieved station A while the person was away (arrived or
+     left during the gap, or exactly filled it). A partner at A from before
+     the gap until after it does not count;
+   - the meter proves a blip's station made pallets during the blip that no
+     one else there covers. Those pallets would be left unassigned.
 2. Wrong first pick: the first stint after signing in (start of day, or back
    from being away longer than the limit) that lasts no longer than the
    limit, followed within the limit by a different station, joins that next
@@ -27,6 +31,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
+import math
+from numbers import Real
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
@@ -42,11 +48,39 @@ _Stint: TypeAlias = tuple[int, "WorkSegment"]
 def production_times_from_samples(
     samples_by_wc: Mapping[str, Iterable[tuple[datetime, float]]],
 ) -> dict[str, tuple[datetime, ...]]:
-    """Timestamps where each station's meter recorded pallets (units > 0)."""
-    return {
-        wc_name: tuple(timestamp for timestamp, units in samples if units > 0)
-        for wc_name, samples in samples_by_wc.items()
-    }
+    """Timestamps where each station's meter recorded pallets (units > 0).
+
+    Never raises. A station with any malformed sample -- units that are not a
+    finite number, or a time that is not a timezone-aware datetime -- is left
+    out (unknown). A bad reading might have been a real pallet, so it must not
+    make the station look idle.
+    """
+    times: dict[str, tuple[datetime, ...]] = {}
+    for wc_name, samples in samples_by_wc.items():
+        pallets = _pallet_times(samples)
+        if pallets is not None:
+            times[wc_name] = pallets
+    return times
+
+
+def _pallet_times(samples) -> tuple[datetime, ...] | None:
+    """One station's pallet times, or None when any sample is malformed."""
+    pallets: list[datetime] = []
+    try:
+        for timestamp, units in samples:
+            if not isinstance(timestamp, datetime) or timestamp.utcoffset() is None:
+                return None
+            if (
+                isinstance(units, bool)
+                or not isinstance(units, Real)
+                or not math.isfinite(units)
+            ):
+                return None
+            if units > 0:
+                pallets.append(timestamp)
+    except (TypeError, ValueError):  # not iterable, or not (time, units) pairs
+        return None
+    return tuple(pallets)
 
 
 def person_key(segment: WorkSegment) -> PersonKey:
@@ -79,6 +113,10 @@ def smooth_quick_punches(
     pallet during the blip that no other person's input segment at that
     station covers. None, or no entry for a station, means unknown: the
     wrong-first-pick rule does not fire there, and came-back merges as usual.
+
+    Came-back also never merges across a relief: another person's input
+    segment at the same station that overlaps the gap without strictly
+    spanning it. This check needs no meter data.
 
     Untouched segments keep their input order; a merged stint takes the
     position of its earliest input segment.
@@ -137,6 +175,8 @@ def _came_back_match(
             return None
         if _crosses_blocked(current.end_utc, candidate.start_utc, blocked):
             return None
+        if _was_relieved(current, candidate, segments_by_wc):
+            return None
         if any(
             _has_orphaned_pallets(segment, production_times_by_wc, segments_by_wc)
             for _idx, segment in between
@@ -144,6 +184,31 @@ def _came_back_match(
             return None
         return j
     return None
+
+
+def _was_relieved(
+    current: WorkSegment,
+    candidate: WorkSegment,
+    segments_by_wc: Mapping[str, Sequence[WorkSegment]],
+) -> bool:
+    """Whether someone else took over the station while this person was away.
+
+    The gap runs from ``current.end_utc`` to ``candidate.start_utc``. Another
+    person's input segment at the same station that overlaps it without
+    strictly spanning it -- arriving or leaving during the gap, or exactly
+    filling it -- is a relief: merging would split their pallets with the
+    person who left. A partner there from before the gap until after it
+    worked alongside them and does not block. An empty gap has no relief.
+    """
+    gap_start, gap_end = current.end_utc, candidate.start_utc
+    key = person_key(current)
+    return any(
+        other.start_utc < gap_end
+        and other.end_utc > gap_start
+        and not (other.start_utc < gap_start and other.end_utc > gap_end)
+        for other in segments_by_wc.get(current.wc_name, ())
+        if person_key(other) != key
+    )
 
 
 def _apply_came_back(

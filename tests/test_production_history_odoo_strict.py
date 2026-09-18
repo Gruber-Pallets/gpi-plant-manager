@@ -237,6 +237,50 @@ def test_work_segments_from_timeline_can_skip_smoothing_for_real_punch_views():
     ]
 
 
+@pytest.mark.parametrize(
+    "failing",
+    ("quick_punch_smoothing.smooth_quick_punches", "_blocking_windows"),
+)
+def test_work_segments_from_timeline_falls_back_to_real_punches_if_smoothing_fails(
+    monkeypatch, caplog, failing
+):
+    import logging
+
+    from zira_dashboard import quick_punch_smoothing
+
+    spans = (
+        span(1, "Ana", at(13), at(14)),
+        span(1, "Ana", at(14), at(14, 1), status="conflicting_location", wc=None),
+        span(1, "Ana", at(14, 3), at(15)),
+        span(2, "Bob", at(13), at(14)),
+        span(2, "Bob", at(14, 3), at(15)),
+    )
+    unsmoothed = work_segments_from_timeline(
+        spans, window_start_utc=START, window_end_utc=END, smooth=False
+    )
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("smoothing broke for Ana")
+
+    owner, _, name = failing.rpartition(".")
+    monkeypatch.setattr(
+        quick_punch_smoothing if owner else assignment_windows, name, explode
+    )
+
+    with caplog.at_level(logging.WARNING, logger="zira_dashboard.assignment_windows"):
+        segments = work_segments_from_timeline(
+            spans,
+            window_start_utc=START,
+            window_end_utc=END,
+            production_times_by_wc={"Repair 4": ()},
+        )
+
+    assert segments == unsmoothed
+    (record,) = caplog.records
+    assert "RuntimeError" in record.getMessage()
+    assert "Ana" not in record.getMessage()
+
+
 @pytest.mark.parametrize("smooth", (True, False))
 @pytest.mark.parametrize(
     ("bounds", "error", "message"),
@@ -311,6 +355,37 @@ def test_samples_in_a_smoothed_gap_are_credited_to_the_person():
     named = sum(row.actual_units for row in credits if row.person_name == "Ana")
     unassigned = sum(row.actual_units for row in credits if row.person_name is None)
     assert (named, unassigned) == (30.0, 0.0)
+
+
+def test_relief_worker_keeps_the_pallets_made_while_covering_the_station():
+    from zira_dashboard.production_segments import credit_work_segments
+
+    # Ana steps away for 4 minutes; Bob covers Repair 4 and makes 3 pallets.
+    spans = (
+        span(1, "Ana", at(14), at(15)),
+        span(2, "Bob", at(15), at(15, 4)),
+        span(1, "Ana", at(15, 4), at(16)),
+    )
+    pallets = ((at(15, 1), 1), (at(15, 2), 1), (at(15, 3), 1))
+    segments = work_segments_from_timeline(
+        spans,
+        window_start_utc=START,
+        window_end_utc=END,
+        production_times_by_wc={"Repair 4": tuple(when for when, _units in pallets)},
+    )
+
+    credits = credit_work_segments(
+        segments,
+        wc_totals={"Repair 4": 3},
+        samples_by_wc={"Repair 4": list(pallets)},
+        productive_minutes=lambda *_args: 60,
+        allow_total_fallback=False,
+    )["Repair 4"]
+
+    by_person = {}
+    for row in credits:
+        by_person[row.person_name] = by_person.get(row.person_name, 0.0) + row.actual_units
+    assert by_person == {"Ana": 0.0, "Bob": 3.0}
 
 
 def test_strict_inputs_accept_detached_projection_and_explicit_meter_locations(monkeypatch):
