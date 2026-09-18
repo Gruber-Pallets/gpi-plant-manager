@@ -48,29 +48,41 @@ class WorkSegment:
     person_odoo_id: int | None = None
 
 
+def validate_window(window_start_utc: datetime, window_end_utc: datetime) -> None:
+    """Raise unless the window is timezone-aware and has positive duration."""
+    if window_start_utc.utcoffset() is None or window_end_utc.utcoffset() is None:
+        raise TypeError("timeline window boundaries must be timezone-aware")
+    if window_end_utc <= window_start_utc:
+        raise ValueError("timeline window must have positive duration")
+
+
 def work_segments_from_timeline(
     spans: Sequence[LocationSpan],
     *,
     window_start_utc: datetime,
     window_end_utc: datetime,
     production_times_by_wc: Mapping[str, Sequence[datetime]] | None = None,
+    smooth: bool = True,
 ) -> tuple[WorkSegment, ...]:
-    """Convert valid Odoo location spans into smoothed, clipped work segments.
+    """Convert valid Odoo location spans into clipped work segments.
 
-    Quick punch mistakes are merged per person (see ``quick_punch_smoothing``)
-    before clipping, never across a conflicting, unmapped or stale location.
-    ``production_times_by_wc`` is the meter guard: a short first stint is only
-    treated as a wrong pick when it shows its station made no pallets then.
-    Without it, short first stints are kept.
+    With ``smooth`` (the default), quick punch mistakes are merged per person
+    (see ``quick_punch_smoothing``) before clipping, never across a
+    conflicting, unmapped or stale location. ``production_times_by_wc`` is the
+    meter data that keeps smoothing from erasing real work: a short first
+    stint is only treated as a wrong pick when the meter proves its station
+    made no pallets then, and a detour is only merged away when the meter
+    shows no pallets there that nobody else covers. Without meter data, short
+    first stints are kept and detours merge.
+
+    ``smooth=False`` returns exactly the valid spans, clipped, for views that
+    must match real punches one to one (People Performance).
     """
-    if window_start_utc.utcoffset() is None or window_end_utc.utcoffset() is None:
-        raise TypeError("timeline window boundaries must be timezone-aware")
-    if window_end_utc <= window_start_utc:
-        raise ValueError("timeline window must have positive duration")
+    validate_window(window_start_utc, window_end_utc)
     raw: list[WorkSegment] = []
     blocked: dict[int, list[tuple[datetime, datetime]]] = {}
     for span in spans:
-        if span.status in _SMOOTHING_BLOCKING_STATUSES:
+        if smooth and span.status in _SMOOTHING_BLOCKING_STATUSES:
             blocked.setdefault(span.employee_odoo_id, []).append(
                 (span.start_utc, span.end_utc)
             )
@@ -86,13 +98,17 @@ def work_segments_from_timeline(
                 person_odoo_id=span.employee_odoo_id,
             )
         )
-    segments: list[WorkSegment] = []
-    smoothed = quick_punch_smoothing.smooth_quick_punches(
-        raw,
-        blocked_windows=blocked,
-        production_times_by_wc=production_times_by_wc,
+    stints = (
+        quick_punch_smoothing.smooth_quick_punches(
+            raw,
+            blocked_windows=blocked,
+            production_times_by_wc=production_times_by_wc,
+        )
+        if smooth
+        else raw
     )
-    for segment in smoothed:
+    segments: list[WorkSegment] = []
+    for segment in stints:
         start = max(segment.start_utc, window_start_utc)
         end = min(segment.end_utc, window_end_utc)
         if end <= start:

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from zira_dashboard import forklift_score
 from zira_dashboard import people_performance_data as data
 from zira_dashboard.forklift_event_store import ForkliftCompletionCoverage
@@ -792,46 +794,24 @@ def test_production_calculation_failure_does_not_expose_exception_copy(monkeypat
     assert "sensitive" not in warning.summary
 
 
-def test_each_available_meter_is_scored_over_the_full_day_with_one_meter_map(
-    monkeypatch,
-):
+def test_each_available_meter_is_scored_only_against_its_own_spans(monkeypatch):
     first_span = span(91, "First", 0, 300, "Repair 1")
     second_span = span(92, "Second", 0, 300, "Repair 2")
-    pallet_at = START + timedelta(minutes=30)
-    first_total = _total("Repair 1", samples=((pallet_at, 20),))
-    second_total = _total("Repair 2", samples=((pallet_at, 20),))
-    # No goal, so never scored -- but its meter is still real day-wide data.
-    no_goal_total = _total("Repair 3", samples=((pallet_at, 20),))
-    # Truncated, so its pallet times are unknown and left out of the map.
-    truncated_total = _total("Repair 4", truncated=True, samples=((pallet_at, 20),))
-    failing_total = _total("Repair 5", samples=((pallet_at, 20),))
+    first_total = _total("Repair 1")
+    second_total = _total("Repair 2")
     install_sources(
         monkeypatch,
         spans=(first_span, second_span),
-        totals=(first_total, second_total, no_goal_total, truncated_total, failing_total),
-        catalog=(
-            first_total.station,
-            second_total.station,
-            no_goal_total.station,
-            truncated_total.station,
-            failing_total.station,
-        ),
+        totals=(first_total, second_total),
+        catalog=(first_total.station, second_total.station),
     )
-    monkeypatch.setattr(
-        data.settings_store,
-        "station_target",
-        lambda station: 0.0 if station.name == "Repair 3" else 10.0,
-    )
+    monkeypatch.setattr(data.settings_store, "station_target", lambda station: 10.0)
     seen = []
 
     def score_one(_client, _day, spans, **kwargs):
-        (station_total,) = kwargs["station_totals"]
-        seen.append((station_total.station.name, spans, kwargs["production_times_by_wc"]))
-        if station_total.station.name == "Repair 5":
-            raise ValueError("one bad station")
-        item = next(
-            item for item in spans if item.app_work_center_name == station_total.station.name
-        )
+        names = tuple(item.app_work_center_name for item in spans)
+        seen.append(names)
+        item = spans[0]
         return (
             SegmentScore(
                 segment_id=item.employee_odoo_id,
@@ -854,110 +834,8 @@ def test_each_available_meter_is_scored_over_the_full_day_with_one_meter_map(
 
     model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
 
-    assert [name for name, _spans, _meter in seen] == ["Repair 1", "Repair 2", "Repair 5"]
-    assert all(spans == (first_span, second_span) for _name, spans, _meter in seen)
-    day_meter = seen[0][2]
-    assert all(meter is day_meter for _name, _spans, meter in seen)
-    assert day_meter == {
-        "Repair 1": (pallet_at,),
-        "Repair 2": (pallet_at,),
-        "Repair 3": (pallet_at,),
-        "Repair 5": (pallet_at,),
-    }
-    # Scores and failures stay per station.
+    assert seen == [("Repair 1",), ("Repair 2",)]
     assert all(row.intervals[0].metric_available for row in model.rows)
-    assert _warning(
-        model, "production_metric_unavailable", subject="Repair 5"
-    ).reason_code == "calculation_failure"
-
-
-def _production_scores(monkeypatch, *, spans, totals):
-    """Run People Performance's production step with the real scorer."""
-    monkeypatch.setattr(data.settings_store, "station_target", lambda station: 10.0)
-    monkeypatch.setattr(
-        data.shift_config,
-        "productive_minutes_in_window",
-        lambda day, start, end: (end - start).total_seconds() / 60,
-    )
-    scores, *_rest, available = data._production_values(
-        source=data._ProductionSource(
-            catalog=tuple(total.station for total in totals),
-            totals=tuple(totals),
-            attribution_rows=(),
-        ),
-        client=object(),
-        day=DAY,
-        spans=tuple(spans),
-        start=START,
-        end=END,
-        cap=END,
-        is_today=False,
-    )
-    assert available is True
-    return [
-        (
-            item.person_odoo_id,
-            item.wc_name,
-            item.start_utc,
-            item.end_utc,
-            item.actual_units,
-        )
-        for item in scores
-    ]
-
-
-def _at_minute(minute):
-    return START + timedelta(minutes=minute)
-
-
-def test_people_performance_never_bridges_a_location_conflict(monkeypatch):
-    rows = _production_scores(
-        monkeypatch,
-        spans=(
-            span(81, "Ana", 0, 60, "Repair 1"),
-            span(81, "Ana", 60, 62, None, "conflicting_location"),
-            span(81, "Ana", 62, 120, "Repair 1"),
-        ),
-        totals=(
-            _total(
-                "Repair 1",
-                units=15,
-                samples=((_at_minute(30), 5), (_at_minute(61), 10)),
-            ),
-        ),
-    )
-
-    # The pallets made during the conflict stay unassigned, as in the strict path.
-    assert rows == [
-        (81, "Repair 1", _at_minute(0), _at_minute(60), 5.0),
-        (None, "Repair 1", _at_minute(61), _at_minute(61), 10.0),
-        (81, "Repair 1", _at_minute(62), _at_minute(120), 0.0),
-    ]
-
-
-def test_people_performance_counts_christians_detour_once(monkeypatch):
-    rows = _production_scores(
-        monkeypatch,
-        spans=(
-            span(8, "Christian C.", 0, 2, "Dismantler 3"),
-            span(8, "Christian C.", 2, 4, "Dismantler 2"),
-            span(8, "Christian C.", 4, 240, "Dismantler 3"),
-            span(24, "Jose C.", 0, 240, "Dismantler 2"),
-        ),
-        totals=(
-            _total(
-                "Dismantler 2",
-                units=10,
-                samples=((_at_minute(3), 4), (_at_minute(100), 6)),
-            ),
-            _total("Dismantler 3", units=20, samples=((_at_minute(50), 20),)),
-        ),
-    )
-
-    assert sorted(rows, key=lambda row: (row[0], row[1])) == [
-        (8, "Dismantler 3", _at_minute(0), _at_minute(240), 20.0),
-        (24, "Dismantler 2", _at_minute(0), _at_minute(240), 10.0),
-    ]
 
 
 def test_production_reader_error_does_not_hide_attendance(monkeypatch):
@@ -1037,3 +915,69 @@ def test_load_dashboard_passes_explicit_is_today_to_production_scorer(monkeypatc
 
     assert seen["now_utc"] == END
     assert seen["is_today"] is False
+
+
+_REAL_PRODUCTION_SCORER = data.production_history.production_scores_for_timeline
+
+
+@pytest.mark.parametrize(
+    "spans",
+    (
+        pytest.param(
+            (
+                span(8, "Christian C.", 0, 2, "Dismantler 3", is_open=False),
+                span(8, "Christian C.", 2, 4, "Dismantler 2", is_open=False),
+                span(8, "Christian C.", 4, 240, "Dismantler 3", is_open=False),
+                span(24, "Jose C.", 0, 240, "Dismantler 2", is_open=False),
+            ),
+            id="quick-detour",
+        ),
+        pytest.param(
+            (
+                span(8, "Christian C.", 0, 60, "Dismantler 3", is_open=False),
+                span(8, "Christian C.", 63, 240, "Dismantler 3", is_open=False),
+                span(24, "Jose C.", 0, 240, "Dismantler 2", is_open=False),
+            ),
+            id="same-station-sign-out-gap",
+        ),
+    ),
+)
+def test_quick_punches_keep_production_metrics_on_every_real_punch(monkeypatch, spans):
+    """People Performance stays on real punches; smoothing must not break its join."""
+
+    def minute(n):
+        return START + timedelta(minutes=n)
+
+    dismantler_2 = _total(
+        "Dismantler 2", units=10, samples=((minute(3), 4), (minute(100), 6))
+    )
+    dismantler_3 = _total("Dismantler 3", units=20, samples=((minute(50), 20),))
+    install_sources(
+        monkeypatch,
+        spans=spans,
+        totals=(dismantler_2, dismantler_3),
+        catalog=(dismantler_2.station, dismantler_3.station),
+    )
+    monkeypatch.setattr(
+        data.production_history,
+        "production_scores_for_timeline",
+        _REAL_PRODUCTION_SCORER,
+    )
+    monkeypatch.setattr(data.settings_store, "station_target", lambda station: 10.0)
+    monkeypatch.setattr(
+        data.shift_config,
+        "productive_minutes_in_window",
+        lambda day, start, end: (end - start).total_seconds() / 60,
+    )
+
+    model = data.load_dashboard(DAY, client=object(), now_utc=NOW)
+
+    intervals = [
+        (row.person_name, item.location_name, item.start_utc, item.end_utc, item.metric_available)
+        for row in model.rows
+        for item in row.intervals
+    ]
+    assert sorted(intervals) == sorted(
+        (item.employee_name, item.app_work_center_name, item.start_utc, item.end_utc, True)
+        for item in spans
+    )

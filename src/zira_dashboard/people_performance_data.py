@@ -269,14 +269,6 @@ def _production_values(
             duplicate_total_names.add(name)
         else:
             totals_by_name[name] = total
-    # One day-wide meter view, so every station's call smooths a person's
-    # quick punches the same way (same scorer cap as production_scores_for_timeline).
-    day_production_times = production_history.production_times_for_totals(
-        day,
-        source.totals,
-        attribution_rows=source.attribution_rows,
-        cap_utc=min(cap, end),
-    )
     scores = []
     downtime_by_wc: dict[str, tuple[tuple[datetime, datetime], ...]] = {}
     warnings: list[DashboardWarning] = []
@@ -304,21 +296,18 @@ def _production_values(
                 )
             )
             continue
+        station_spans = tuple(span for span in spans if span.app_work_center_name == station.name)
         try:
-            # The whole day's spans: smoothing must see a person's stints at
-            # every station and any location conflicts. Only this station's
-            # stints are credited.
             station_scores = production_history.production_scores_for_timeline(
                 client,
                 day,
-                spans,
+                station_spans,
                 now_utc=cap,
                 is_today=is_today,
                 window_start_utc=start,
                 window_end_utc=end,
                 station_totals=(total,),
                 attribution_rows=source.attribution_rows,
-                production_times_by_wc=day_production_times,
             )
         except Exception:  # noqa: BLE001 - malformed meter facts stay per-WC
             _log.warning("people production metric unavailable", extra={"wc": station.name})

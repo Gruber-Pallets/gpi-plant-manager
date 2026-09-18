@@ -287,117 +287,6 @@ def _identity_safe_breakdown_windows(
     return {key: tuple(windows) for key, windows in safe.items()}
 
 
-def _capped_testing_windows(
-    day: date,
-    attribution_rows,
-    cap_utc: datetime,
-) -> dict[str, tuple[tuple[datetime, datetime], ...]]:
-    """No-credit testing windows per station, open ends closed at ``cap_utc``."""
-    from . import wc_attributions
-
-    testing = wc_attributions.testing_windows_for_day(day, rows=list(attribution_rows))
-    return {
-        wc_name: tuple((start, min(cap_utc, end or cap_utc)) for start, end in windows)
-        for wc_name, windows in testing.items()
-    }
-
-
-def _verified_station_samples(
-    total,
-    testing_windows: Sequence[tuple[datetime, datetime]],
-) -> tuple[float, list[tuple[datetime, float]]]:
-    """Return one station's total and pallet samples, both less testing.
-
-    Raises ``ProductionSourceUnavailable`` (or ``TypeError``/``ValueError`` for
-    a bad timestamp) when the meter cannot be trusted: truncated, invalid
-    units, or samples that do not add up to the total.
-    """
-    wc_name = total.station.name
-    if total.truncated:
-        raise ProductionSourceUnavailable(
-            f"Timestamped samples for {wc_name} are truncated"
-        )
-    raw_samples = []
-    for timestamp, units in total.samples:
-        sample_time = _aware_utc(timestamp, "sample timestamp")
-        try:
-            sample_units = float(units)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ProductionSourceUnavailable(
-                f"Timestamped samples for {wc_name} contain invalid units"
-            ) from exc
-        if not math.isfinite(sample_units):
-            raise ProductionSourceUnavailable(
-                f"Timestamped samples for {wc_name} contain invalid units"
-            )
-        if sample_units > 0:
-            raw_samples.append((sample_time, sample_units))
-    filtered_samples = [
-        (timestamp, units)
-        for timestamp, units in raw_samples
-        if not any(start <= timestamp < end for start, end in testing_windows)
-    ]
-    testing_units = sum(
-        units
-        for timestamp, units in raw_samples
-        if any(start <= timestamp < end for start, end in testing_windows)
-    )
-    try:
-        source_total = float(total.units)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ProductionSourceUnavailable(
-            f"Production total for {wc_name} is invalid"
-        ) from exc
-    if not math.isfinite(source_total) or source_total < 0:
-        raise ProductionSourceUnavailable(
-            f"Production total for {wc_name} is invalid"
-        )
-    adjusted_total = source_total - testing_units
-    sampled_total = sum(units for _timestamp, units in filtered_samples)
-    if abs(adjusted_total - sampled_total) > 1e-6:
-        raise ProductionSourceUnavailable(
-            f"Timestamped samples for {wc_name} do not match its source total"
-        )
-    return adjusted_total, filtered_samples
-
-
-def production_times_for_totals(
-    day: date,
-    totals,
-    *,
-    attribution_rows,
-    cap_utc: datetime,
-) -> dict[str, tuple[datetime, ...]]:
-    """Day-wide pallet times per station, as ``production_times_by_wc``.
-
-    Uses the same samples ``production_scores_for_timeline`` credits, testing
-    windows removed. Never raises: a duplicate, truncated or malformed meter
-    is left out (unknown), so one bad meter only affects its own station.
-    """
-    from . import quick_punch_smoothing
-
-    try:
-        testing = _capped_testing_windows(day, attribution_rows, cap_utc)
-    except Exception:  # noqa: BLE001 - scoring reports it per station
-        return {}
-    samples_by_wc: dict[str, list[tuple[datetime, float]]] = {}
-    seen: set[str] = set()
-    for total in totals:
-        wc_name = getattr(getattr(total, "station", None), "name", None)
-        if not isinstance(wc_name, str):
-            continue
-        if wc_name in seen:
-            samples_by_wc.pop(wc_name, None)
-            continue
-        seen.add(wc_name)
-        try:
-            _total, samples = _verified_station_samples(total, testing.get(wc_name, ()))
-        except Exception:  # noqa: BLE001 - one bad meter is unknown, not fatal
-            continue
-        samples_by_wc[wc_name] = samples
-    return quick_punch_smoothing.production_times_from_samples(samples_by_wc)
-
-
 def production_scores_for_timeline(
     client,
     day: date,
@@ -409,22 +298,12 @@ def production_scores_for_timeline(
     window_end_utc: datetime | None = None,
     station_totals=None,
     attribution_rows=None,
-    production_times_by_wc: Mapping[str, Sequence[datetime]] | None = None,
 ):
-    """Score verified timestamped production against Odoo identity spans.
-
-    Stints are smoothed (see ``quick_punch_smoothing``) over the full day's
-    spans, so callers must pass the whole day's spans -- every station, every
-    location conflict -- even when scoring one station. Only stints at the
-    scored totals' stations are credited. ``production_times_by_wc`` supplies
-    day-wide meter data for smoothing (see ``production_times_for_totals``);
-    without it, only the scored totals' own samples are known.
-    """
+    """Score verified timestamped production against Odoo identity spans."""
     from . import (
         assignment_windows,
         machine_breakdown,
         production_segments,
-        quick_punch_smoothing,
         settings_store,
         shift_config,
         wc_attributions,
@@ -448,12 +327,13 @@ def production_scores_for_timeline(
     if shift_end <= shift_start:
         raise ValueError("window_end_utc must be after window_start_utc")
     cap_utc = min(now, shift_end)
-    # Unguarded pass only to skip the meter fetch when nobody worked. The meter
-    # guard below can merge stints but never empties a non-empty result.
+    # People Performance joins each score back to its real punch by exact
+    # bounds, so this view is never smoothed.
     segments = assignment_windows.work_segments_from_timeline(
         spans,
         window_start_utc=shift_start,
         window_end_utc=cap_utc,
+        smooth=False,
     )
     if not segments:
         return ()
@@ -462,18 +342,18 @@ def production_scores_for_timeline(
         if station_totals is not None
         else metered_station_totals(client, day, cap_utc)
     )
-    # Smoothing only moves a person's time onto stations their own spans name,
-    # so no span naming a scored station means nothing to credit there.
-    scored_names = {total.station.name for total in totals}
-    if not any(span.app_work_center_name in scored_names for span in spans):
-        return ()
     rows = (
         tuple(attribution_rows)
         if attribution_rows is not None
         else tuple(wc_attributions.for_day(day))
     )
-    testing = _capped_testing_windows(day, rows, cap_utc)
+    testing = wc_attributions.testing_windows_for_day(day, rows=list(rows))
+    testing = {
+        wc_name: tuple((start, min(cap_utc, end or cap_utc)) for start, end in windows)
+        for wc_name, windows in testing.items()
+    }
     breakdowns = wc_attributions.breakdown_windows_for_day(day, rows=list(rows))
+    safe_breakdowns = _identity_safe_breakdown_windows(segments, breakdowns)
 
     wc_totals: dict[str, float] = {}
     samples_by_wc: dict[str, list[tuple[datetime, float]]] = {}
@@ -484,31 +364,55 @@ def production_scores_for_timeline(
             raise ProductionSourceUnavailable(
                 f"Duplicate production total for {wc_name}"
             )
-        adjusted_total, filtered_samples = _verified_station_samples(
-            total, testing.get(wc_name, ())
+        if total.truncated:
+            raise ProductionSourceUnavailable(
+                f"Timestamped samples for {wc_name} are truncated"
+            )
+        raw_samples = []
+        for timestamp, units in total.samples:
+            sample_time = _aware_utc(timestamp, "sample timestamp")
+            try:
+                sample_units = float(units)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ProductionSourceUnavailable(
+                    f"Timestamped samples for {wc_name} contain invalid units"
+                ) from exc
+            if not math.isfinite(sample_units):
+                raise ProductionSourceUnavailable(
+                    f"Timestamped samples for {wc_name} contain invalid units"
+                )
+            if sample_units > 0:
+                raw_samples.append((sample_time, sample_units))
+        windows = testing.get(wc_name, ())
+        filtered_samples = [
+            (timestamp, units)
+            for timestamp, units in raw_samples
+            if not any(start <= timestamp < end for start, end in windows)
+        ]
+        testing_units = sum(
+            units
+            for timestamp, units in raw_samples
+            if any(start <= timestamp < end for start, end in windows)
         )
+        try:
+            source_total = float(total.units)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ProductionSourceUnavailable(
+                f"Production total for {wc_name} is invalid"
+            ) from exc
+        if not math.isfinite(source_total) or source_total < 0:
+            raise ProductionSourceUnavailable(
+                f"Production total for {wc_name} is invalid"
+            )
+        adjusted_total = source_total - testing_units
+        sampled_total = sum(units for _timestamp, units in filtered_samples)
+        if abs(adjusted_total - sampled_total) > 1e-6:
+            raise ProductionSourceUnavailable(
+                f"Timestamped samples for {wc_name} do not match its source total"
+            )
         wc_totals[wc_name] = adjusted_total
         samples_by_wc[wc_name] = filtered_samples
         stations_by_wc[wc_name] = total.station
-
-    meter_times = (
-        production_times_by_wc
-        if production_times_by_wc is not None
-        else quick_punch_smoothing.production_times_from_samples(samples_by_wc)
-    )
-    segments = tuple(
-        segment
-        for segment in assignment_windows.work_segments_from_timeline(
-            spans,
-            window_start_utc=shift_start,
-            window_end_utc=cap_utc,
-            production_times_by_wc=meter_times,
-        )
-        if segment.wc_name in wc_totals
-    )
-    if not segments:
-        return ()
-    safe_breakdowns = _identity_safe_breakdown_windows(segments, breakdowns)
 
     def productive_for_segment(segment) -> float:
         raw = shift_config.productive_minutes_in_window(
@@ -935,10 +839,7 @@ def _strict_inputs_for_day(
         )
 
     shift_start, shift_end = shift_bounds or _strict_shift_bounds(day)
-    if shift_start.utcoffset() is None or shift_end.utcoffset() is None:
-        raise TypeError("timeline window boundaries must be timezone-aware")
-    if shift_end <= shift_start:
-        raise ValueError("timeline window must have positive duration")
+    assignment_windows.validate_window(shift_start, shift_end)
     spans = (
         attendance_timeline.timeline_for_range(shift_start, shift_end, as_of_utc=now_utc)
         if location_spans is None

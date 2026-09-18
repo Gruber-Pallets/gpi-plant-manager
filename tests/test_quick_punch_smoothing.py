@@ -510,6 +510,18 @@ def test_another_persons_cover_is_start_inclusive_and_end_exclusive(
         assert shape(result) == [*DETOUR_MERGED, shape((bob,))[0]]
 
 
+def test_one_uncovered_pallet_keeps_a_blip_even_when_another_is_covered():
+    # Bob covers the 9:00:30 pallet but has left before the 9:01:30 one.
+    bob = seg("Repair 2", ct(8, 30), ct(9, 1), person="Bob T.", odoo_id=6)
+
+    result = smooth(
+        (*DETOUR, bob),
+        production_times_by_wc=with_repair_2_pallets(ct(9, 0, 30), ct(9, 1, 30)),
+    )
+
+    assert result == (*DETOUR, bob)
+
+
 def test_orphaned_pallets_at_any_blip_of_a_multi_station_detour_keep_it():
     segments = (
         seg("Repair 1", ct(8), ct(9)),

@@ -207,6 +207,53 @@ def test_work_segments_from_timeline_smooths_quick_punches_before_clipping():
     ]
 
 
+def test_work_segments_from_timeline_can_skip_smoothing_for_real_punch_views():
+    spans = (
+        span(1, "Ana", at(11), at(12, 2), wc="Repair 1"),
+        span(1, "Ana", at(12, 2), at(14)),
+        span(2, "Bob", at(13), at(14)),
+        span(2, "Bob", at(14), at(14, 1), status="conflicting_location", wc=None),
+        span(2, "Bob", at(14, 3), at(15)),
+        span(3, "Cara", at(15), at(15, 2), wc="Repair 1"),
+        span(3, "Cara", at(15, 2), at(16)),
+    )
+
+    segments = work_segments_from_timeline(
+        spans,
+        window_start_utc=START,
+        window_end_utc=END,
+        production_times_by_wc={"Repair 1": (), "Repair 4": ()},
+        smooth=False,
+    )
+
+    # Exactly the valid spans, clipped: what People Performance joins against.
+    assert _segment_shape(segments) == [
+        (1, "Repair 1", START, at(12, 2)),
+        (1, "Repair 4", at(12, 2), at(14)),
+        (2, "Repair 4", at(13), at(14)),
+        (2, "Repair 4", at(14, 3), at(15)),
+        (3, "Repair 1", at(15), at(15, 2)),
+        (3, "Repair 4", at(15, 2), at(16)),
+    ]
+
+
+@pytest.mark.parametrize("smooth", (True, False))
+@pytest.mark.parametrize(
+    ("bounds", "error", "message"),
+    (
+        ((START.replace(tzinfo=None), END), TypeError, "timezone-aware"),
+        ((START, END.replace(tzinfo=None)), TypeError, "timezone-aware"),
+        ((END, START), ValueError, "positive duration"),
+        ((START, START), ValueError, "positive duration"),
+    ),
+)
+def test_work_segments_from_timeline_rejects_bad_windows(bounds, error, message, smooth):
+    with pytest.raises(error, match=message):
+        work_segments_from_timeline(
+            (), window_start_utc=bounds[0], window_end_utc=bounds[1], smooth=smooth
+        )
+
+
 @pytest.mark.parametrize(
     # A work center on the middle span proves the status alone decides: it is
     # never a valid stint either way, so only the blocking set can stop a bridge.
