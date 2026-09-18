@@ -45,6 +45,11 @@ first picks followed by a move. Roughly half of all short stints were under
   during the short stint. A short first stint with real production is real
   work. Found when an existing test's 5-minute Repair 2 stint with 34 pallets
   would otherwise have been folded away, leaving those pallets unassigned.
+- **Orphaned detour pallets are kept (added during the build):** the
+  came-back rule keeps a detour stint at station B when B's meter recorded a
+  pallet during it and no other person was at B then. Otherwise those pallets
+  would have no owner. Christian's real detour still smooths, because Jose was
+  working Dismantler 2.
 
 ## Rules
 
@@ -57,7 +62,13 @@ A boundary at exactly 5:00 counts as quick (`<=`).
    station A starts no more than 5 minutes after that end. Then everything
    between them becomes part of one stint at A: a sign-out gap, stints at other
    stations, or both. Apply it left to right until nothing changes, measuring
-   from the end of the current merged stint.
+   from the end of the current merged stint. Exception: an in-between stint at
+   station B blocks the merge when B's meter data is known and shows a pallet
+   during that stint (`start <= t < end`) that no other person's stint at B
+   covers. With no meter data for B, the merge goes ahead. "Covers" is judged
+   against everyone's stints before smoothing, so two people who blip to the
+   same empty station at the same moment count as covering each other. That
+   case is rare and accepted.
 2. **Wrong-first-pick rule.** A stint qualifies when:
    - it starts a presence block, meaning no stint for this person ends within
      5 minutes before its start (start of day, or back from being away longer
@@ -127,6 +138,15 @@ real gap, and the existing display join covers it.
   meters before building stints. `_strict_inputs_for_day` builds stints after
   its samples are validated. `production_scores_for_timeline` rebuilds them
   once its samples are parsed.
+- **People Performance scores one station at a time.** It must still hand
+  smoothing the whole day's spans and one day-wide meter map, and then keep
+  only that station's stints. Smoothing one station's spans in isolation would
+  bridge location conflicts it cannot see and double-count detours.
+- **Known edge:** a department dashboard only has meter data for its own
+  stations. A short first pick at another department's station is therefore
+  kept on that dashboard, while leaderboards and People Performance, which
+  have every meter, may fold it away. The difference is at most 5 minutes at
+  the start of one stint.
 - **Order preserved:** people and stints that smoothing does not touch keep
   their original order in the output. A merged stint takes the position of its
   earliest input stint.
