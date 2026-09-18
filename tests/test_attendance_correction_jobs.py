@@ -902,3 +902,390 @@ def test_active_operation_reservation_is_not_reported_as_completed_progress():
     result = attendance_corrections._result(claim, "recoverable")
 
     assert result.completed_operation_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Merge request mode through preview, job persistence, and reload
+
+
+LEGACY_JOB_FIXTURE = (
+    __import__("pathlib").Path(__file__).parent
+    / "fixtures"
+    / "legacy_attendance_correction_job.json"
+)
+MERGE_START = datetime(2026, 8, 31, 12, tzinfo=UTC)
+
+
+def _merge_rows():
+    # Quick-punch shape: short row, detour at another station, back and still clocked in.
+    return [
+        _row(21, start=MERGE_START, end=MERGE_START + timedelta(minutes=2), work_center=81),
+        _row(
+            22,
+            start=MERGE_START + timedelta(minutes=2),
+            end=MERGE_START + timedelta(minutes=4),
+            work_center=80,
+        ),
+        _row(23, start=MERGE_START + timedelta(minutes=4), end=None, work_center=81),
+    ]
+
+
+def _merge_preview(*, item_key="quick-punch:7:21,22,23", merge=True):
+    plan = attendance_corrections.plan_correction(
+        rows=_merge_rows(),
+        employee_odoo_id=7,
+        start_utc=MERGE_START,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+        merge=merge,
+    )
+    return attendance_corrections.CorrectionPreview(
+        item_key=item_key,
+        employee_odoo_ids=(7,),
+        target_work_center_name="Repair 1",
+        target_odoo_work_center_id=81,
+        target_odoo_department_id=9,
+        start_utc=MERGE_START,
+        end_utc=None,
+        plans=(plan,),
+    )
+
+
+def _persisted_row(preview, *, job_id, status="planned"):
+    return {
+        "id": job_id,
+        "status": status,
+        "item_key": preview.item_key,
+        "target_work_center_name": preview.target_work_center_name,
+        "target_odoo_work_center_id": preview.target_odoo_work_center_id,
+        "start_utc": preview.start_utc,
+        "end_utc": preview.end_utc,
+        "employee_odoo_ids": list(preview.employee_odoo_ids),
+        "source_snapshot": attendance_corrections._snapshot_payload(preview),
+        "operations": attendance_corrections._plans_payload(preview),
+    }
+
+
+def _legacy_fixture_row():
+    fixture = json.loads(LEGACY_JOB_FIXTURE.read_text())
+    row = {
+        "id": 61,
+        "status": "planned",
+        "item_key": fixture["item_key"],
+        "target_work_center_name": fixture["target_work_center_name"],
+        "target_odoo_work_center_id": fixture["target_odoo_work_center_id"],
+        "start_utc": datetime.fromisoformat(fixture["start_utc"]),
+        "end_utc": datetime.fromisoformat(fixture["end_utc"]),
+        # JSONB columns come back from psycopg2 as already-decoded values or text.
+        "employee_odoo_ids": json.dumps(fixture["employee_odoo_ids"]),
+        "source_snapshot": json.dumps(fixture["source_snapshot"]),
+        "operations": fixture["operations"],
+    }
+    return fixture, row
+
+
+def _worker_validates(row):
+    employees = tuple(json.loads(row["employee_odoo_ids"])) if isinstance(
+        row["employee_odoo_ids"], str
+    ) else tuple(row["employee_odoo_ids"])
+    source_rows = attendance_corrections._source_rows_from_json(row["source_snapshot"], employees)
+    plans = attendance_corrections._plans_from_json(row["operations"], employees)
+    attendance_corrections._validate_saved_job_plans(row, employees, source_rows, plans)
+    return plans
+
+
+def _capturing_cursor(statements, *, job_id):
+    class Cursor:
+        response = None
+
+        def execute(self, sql, params=None):
+            statements.append((" ".join(sql.split()), params))
+            self.response = {"id": job_id} if "RETURNING id" in sql else None
+
+        def fetchone(self):
+            return self.response
+
+    @contextmanager
+    def cursor():
+        yield Cursor()
+
+    return cursor
+
+
+def test_merge_preview_threads_the_flag_into_every_plan(monkeypatch):
+    from zira_dashboard import odoo_client
+
+    reads = []
+    monkeypatch.setattr(
+        db,
+        "query",
+        lambda *_args, **_kwargs: [
+            {"odoo_work_center_id": 81, "odoo_work_center_name": "Odoo Repair 1"}
+        ],
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "fetch_manufacturing_work_centers",
+        lambda **_kwargs: [{"id": 81, "name": "Odoo Repair 1"}],
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "fetch_employee_statuses",
+        lambda: [{"id": 7, "active": True}, {"id": 8, "active": True}],
+    )
+    monkeypatch.setattr(
+        odoo_client,
+        "fetch_employee_attendance_rows",
+        lambda employee_id, *_args: reads.append(employee_id)
+        or ([dict(item) for item in _merge_rows()] if employee_id == 7 else []),
+    )
+    monkeypatch.setattr(odoo_client, "_app_wc_name_for_odoo_id", lambda _wc_id: "Repair 1")
+    monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda _name, **_kwargs: 9)
+    monkeypatch.setattr(attendance_corrections, "_default_facade", lambda: odoo_client)
+
+    request = {
+        "item_key": "quick-punch:7:21,22,23",
+        "employee_odoo_ids": [8, 7],
+        "target_work_center_name": "Repair 1",
+        "start_utc": MERGE_START,
+        "end_utc": None,
+    }
+    merge_preview = attendance_corrections.correction_preview(**request, merge=True)
+    legacy_preview = attendance_corrections.correction_preview(**request)
+
+    assert reads == [7, 8, 7, 8]
+    assert merge_preview.merge is True
+    assert [plan.request["merge"] for plan in merge_preview.plans] == [True, True]
+    assert merge_preview.plans[0].expected_intervals[0]["odoo_attendance_id"] == 23
+    assert legacy_preview.merge is False
+    assert all("merge" not in plan.request for plan in legacy_preview.plans)
+
+
+@pytest.mark.parametrize("flag", [1, "true", None])
+def test_correction_preview_rejects_a_non_boolean_merge_before_odoo(monkeypatch, flag):
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_build_preview",
+        lambda **_kwargs: pytest.fail("invalid merge flag reached Odoo"),
+    )
+
+    with pytest.raises(TypeError, match="merge"):
+        attendance_corrections.correction_preview(
+            item_key="quick-punch:7:21,22,23",
+            employee_odoo_ids=[7],
+            target_work_center_name="Repair 1",
+            start_utc=MERGE_START,
+            end_utc=None,
+            merge=flag,
+        )
+
+
+def test_preview_rejects_plans_that_disagree_on_merge_mode():
+    merge_plan = _merge_preview().plans[0]
+    legacy_plan = attendance_corrections.plan_correction(
+        rows=[],
+        employee_odoo_id=8,
+        start_utc=MERGE_START,
+        end_utc=None,
+        odoo_work_center_id=81,
+        odoo_department_id=9,
+    )
+
+    with pytest.raises(ValueError, match="merge"):
+        attendance_corrections.CorrectionPreview(
+            item_key="quick-punch:7:21,22,23",
+            employee_odoo_ids=(7, 8),
+            target_work_center_name="Repair 1",
+            target_odoo_work_center_id=81,
+            target_odoo_department_id=9,
+            start_utc=MERGE_START,
+            end_utc=None,
+            plans=(merge_plan, legacy_plan),
+        )
+    with pytest.raises(ValueError, match="merge"):
+        attendance_corrections._validate_saved_job_plans(
+            {
+                "start_utc": MERGE_START,
+                "end_utc": None,
+                "target_odoo_work_center_id": 81,
+            },
+            (7, 8),
+            {
+                7: tuple(
+                    attendance_corrections._canonical_source_row(item, 7)
+                    for item in sorted(_merge_rows(), key=lambda r: r["odoo_attendance_id"])
+                ),
+                8: (),
+            },
+            {7: merge_plan, 8: legacy_plan},
+        )
+
+
+def test_merge_preview_creates_a_job_whose_persisted_plan_validates_on_reload(monkeypatch):
+    preview = _merge_preview()
+    statements = []
+    monkeypatch.setattr(db, "cursor", _capturing_cursor(statements, job_id=71))
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_build_preview",
+        lambda **_kwargs: pytest.fail("verified preview was rebuilt"),
+    )
+
+    job_id = attendance_corrections.create_job_from_preview(
+        preview=preview,
+        actor_email="system:quick-punch",
+        actor_name="Quick-punch auto-fix",
+    )
+
+    assert job_id == 71
+    insert = next(
+        params
+        for sql, params in statements
+        if sql.startswith("INSERT INTO attendance_correction_jobs")
+    )
+    row = {
+        "id": 71,
+        "status": "planned",
+        "item_key": insert[0],
+        "target_work_center_name": insert[1],
+        "target_odoo_work_center_id": insert[2],
+        "start_utc": insert[3],
+        "end_utc": insert[4],
+        "employee_odoo_ids": insert[5],
+        "source_snapshot": insert[6],
+        "operations": insert[7],
+    }
+    stored_request = json.loads(insert[7])["plans"][0]["plan"]["request"]["items"]
+    assert ["merge", True] in stored_request
+
+    reloaded = attendance_corrections._preview_from_persisted_job(row)
+    assert reloaded == preview
+    assert reloaded.merge is True
+    binding = attendance_corrections.preview_job_binding(preview)
+    assert binding["request"]["merge"] is True
+    assert attendance_corrections.preview_job_binding(reloaded) == binding
+
+    plans = _worker_validates(row)
+    assert plans[7] == preview.plans[0]
+    kept = [item["odoo_attendance_id"] for item in plans[7].expected_intervals]
+    assert kept == [23]
+
+    def query(sql, params=()):
+        return [{"id": 71}] if "status IN" in sql else [row]
+
+    monkeypatch.setattr(db, "query", query)
+    assert (
+        attendance_corrections.find_reusable_job_for_binding(
+            item_key=preview.item_key, binding=binding
+        )
+        == 71
+    )
+
+
+def test_legacy_persisted_job_without_merge_still_validates(monkeypatch):
+    fixture, row = _legacy_fixture_row()
+
+    for wrapper in fixture["operations"]["plans"]:
+        keys = [item[0] for item in wrapper["plan"]["request"]["items"]]
+        assert "merge" not in keys
+
+    preview = attendance_corrections._preview_from_persisted_job(row)
+    assert preview.merge is False
+    assert all("merge" not in plan.request for plan in preview.plans)
+    # The signed binding of a legacy job is byte-for-byte what it was before merge mode.
+    assert attendance_corrections.preview_job_binding(preview) == fixture["binding"]
+    assert [
+        [(op.kind, op.attendance_id) for op in plan.operations] for plan in preview.plans
+    ] == [[("update", 11), ("update", 12), ("delete", 13)], [("create", None)]]
+    _worker_validates(row)
+
+    def query(sql, params=()):
+        return [{"id": 61}] if "status IN" in sql else [row]
+
+    monkeypatch.setattr(db, "query", query)
+    assert (
+        attendance_corrections.find_reusable_job_for_binding(
+            item_key=fixture["item_key"], binding=fixture["binding"]
+        )
+        == 61
+    )
+
+
+def test_legacy_fixture_plans_are_still_what_the_legacy_planner_builds():
+    fixture, row = _legacy_fixture_row()
+    preview = attendance_corrections._preview_from_persisted_job(row)
+    rebuilt = []
+    for plan in preview.plans:
+        request = plan.request
+        rebuilt.append(
+            attendance_corrections.plan_correction(
+                rows=[dict(item) for item in plan.source_intervals],
+                employee_odoo_id=request["employee_odoo_id"],
+                start_utc=request["start_utc"],
+                end_utc=request["end_utc"],
+                odoo_work_center_id=request["odoo_work_center_id"],
+                odoo_department_id=request["odoo_department_id"],
+            )
+        )
+
+    assert [attendance_corrections.plan_to_json(plan) for plan in rebuilt] == [
+        wrapper["plan"] for wrapper in fixture["operations"]["plans"]
+    ]
+
+
+def test_merge_binding_conflicts_with_a_legacy_job_without_claiming_source_changed(
+    monkeypatch,
+):
+    legacy = _merge_preview(merge=False)
+    merge = _merge_preview(merge=True)
+    assert legacy.item_key == merge.item_key
+
+    def query(sql, params=()):
+        return [{"id": 72}] if "status IN" in sql else [_persisted_row(legacy, job_id=72)]
+
+    monkeypatch.setattr(db, "query", query)
+
+    with pytest.raises(attendance_corrections.CorrectionRequestConflict) as conflict:
+        attendance_corrections.find_reusable_job_for_binding(
+            item_key=merge.item_key,
+            binding=attendance_corrections.preview_job_binding(merge),
+        )
+    assert conflict.value.job_id == 72
+    assert conflict.value.source_changed is False
+
+
+@pytest.mark.parametrize(("winner_merge", "preview_merge"), [(False, True), (True, False)])
+def test_dedupe_winner_with_the_other_merge_mode_is_not_reported_as_source_change(
+    monkeypatch, winner_merge, preview_merge
+):
+    winner = _merge_preview(merge=winner_merge)
+    preview = _merge_preview(merge=preview_merge)
+
+    class Cursor:
+        response = None
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+            if normalized.startswith("SELECT id, status"):
+                self.response = _persisted_row(winner, job_id=73)
+            else:
+                self.response = None
+
+        def fetchone(self):
+            return self.response
+
+    @contextmanager
+    def cursor():
+        yield Cursor()
+
+    monkeypatch.setattr(db, "cursor", cursor)
+
+    with pytest.raises(attendance_corrections.CorrectionRequestConflict) as conflict:
+        attendance_corrections.create_job_from_preview(
+            preview=preview,
+            actor_email="system:quick-punch",
+            actor_name="Quick-punch auto-fix",
+        )
+    assert conflict.value.job_id == 73
+    assert conflict.value.source_changed is False

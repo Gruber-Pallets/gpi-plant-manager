@@ -57,6 +57,10 @@ _REQUEST_FIELDS = frozenset(
         "odoo_department_id",
     )
 )
+# A merge request is the legacy request plus ``"merge": True``. Legacy requests
+# never carry the key at all, so every pre-merge plan and job keeps its exact
+# encoding, operation keys, and integrity hash.
+_MERGE_REQUEST_FIELDS = _REQUEST_FIELDS | frozenset(("merge",))
 
 _JOB_STATUSES = frozenset(
     ("planned", "applying", "verifying", "recalculating", "complete", "failed")
@@ -632,6 +636,149 @@ def _open_pieces(
     return pieces
 
 
+def _closed_merge_pieces(
+    sources: tuple[_SourceRow, ...],
+    start: datetime,
+    end: datetime,
+    work_center_id: int,
+    department_id: int | None,
+) -> list[_Piece]:
+    """Merge every row overlapping ``[start, end)`` into one continuous target.
+
+    Unlike ``_closed_pieces``, the overlapping rows form ONE group regardless
+    of gaps, and the single target piece covers exactly ``[start, end)``, so any
+    gap between them is filled. Left and right remainders and ID reuse follow
+    the legacy rules: the first overlapping row keeps any time before
+    ``start``, the last keeps any time after ``end``, and the target reuses the
+    first unused row fully inside the range (otherwise it is a create). Every
+    other overlapping row is deleted.
+    """
+    overlaps = [
+        item for item in sources if item.start < end and (item.end is None or item.end > start)
+    ]
+    if not overlaps:
+        return [
+            *map(_untouched_piece, sources),
+            _target_piece(None, start, end, work_center_id, department_id),
+        ]
+    affected_ids = {item.attendance_id for item in overlaps}
+    pieces = [_untouched_piece(item) for item in sources if item.attendance_id not in affected_ids]
+    first = overlaps[0]
+    last = overlaps[-1]
+    used_ids: set[int] = set()
+    if first.start < start:
+        pieces.append(
+            _piece_from_source(
+                first,
+                start=first.start,
+                end=start,
+                work_center_id=first.work_center_id,
+                department_id=first.department_id,
+                attendance_id=first.attendance_id,
+                target=False,
+            )
+        )
+        used_ids.add(first.attendance_id)
+    if last.end is None or last.end > end:
+        right_id = last.attendance_id if last.attendance_id not in used_ids else None
+        pieces.append(
+            _piece_from_source(
+                last,
+                start=end,
+                end=last.end,
+                work_center_id=last.work_center_id,
+                department_id=last.department_id,
+                attendance_id=right_id,
+                target=False,
+            )
+        )
+        if right_id is not None:
+            used_ids.add(right_id)
+    reusable = next(
+        (
+            source
+            for source in overlaps
+            if source.attendance_id not in used_ids
+            and source.start >= start
+            and source.end is not None
+            and source.end <= end
+        ),
+        None,
+    )
+    pieces.append(
+        _target_piece(
+            reusable,
+            start,
+            end,
+            work_center_id,
+            department_id,
+            key_sources=tuple(overlaps),
+        )
+    )
+    return pieces
+
+
+def _open_merge_pieces(
+    sources: tuple[_SourceRow, ...],
+    start: datetime,
+    work_center_id: int,
+    department_id: int | None,
+) -> list[_Piece]:
+    """Merge every row from ``start`` onward into one open target row.
+
+    The same as ``_open_pieces`` except for the survivor: the currently open
+    affected row (``check_out`` is null) keeps its Odoo ID, because the kiosk
+    and the plant-floor app close a person's shift by that attendance ID. Its
+    ``check_in`` moves to ``start`` and its location is set; the other affected
+    rows are deleted. Without an unused open row the legacy survivor rule (the
+    earliest affected row starting at or after ``start``) applies, and the
+    first affected row's left remainder is handled exactly as in the legacy
+    planner.
+    """
+    affected = [item for item in sources if item.end is None or item.end > start]
+    unaffected = [item for item in sources if item.end is not None and item.end <= start]
+    if not affected:
+        return [
+            *map(_untouched_piece, sources),
+            _target_piece(None, start, None, work_center_id, department_id),
+        ]
+    used_ids: set[int] = set()
+    pieces = [*map(_untouched_piece, unaffected)]
+    first = affected[0]
+    if first.start < start:
+        pieces.append(
+            _piece_from_source(
+                first,
+                start=first.start,
+                end=start,
+                work_center_id=first.work_center_id,
+                department_id=first.department_id,
+                attendance_id=first.attendance_id,
+                target=False,
+            )
+        )
+        used_ids.add(first.attendance_id)
+    candidates = [
+        source
+        for source in affected
+        if source.attendance_id not in used_ids and source.start >= start
+    ]
+    reusable = next((source for source in candidates if source.end is None), None)
+    if reusable is None and candidates:
+        reusable = candidates[0]
+    pieces.append(
+        _target_piece(
+            reusable,
+            start,
+            None,
+            work_center_id,
+            department_id,
+            key_sources=tuple(affected),
+        )
+    )
+    return pieces
+
+
 def _mutable_values(
     *,
     employee_id: int,
@@ -844,7 +991,44 @@ def _correction_is_no_op(
     )
 
 
-def _pieces_for_request(
+def _merge_is_no_op(
+    sources: tuple[_SourceRow, ...],
+    *,
+    start: datetime,
+    end: datetime | None,
+    work_center_id: int,
+    department_id: int | None,
+) -> bool:
+    """A merge changes nothing only when one row already is the merged result.
+
+    Exactly one source row may touch the range, and it must cover all of
+    ``[start, end)`` with the target location. For an open range that row must
+    be the single open row, starting at or before ``start``.
+    """
+    if end is None:
+        affected = [item for item in sources if item.end is None or item.end > start]
+    else:
+        affected = [
+            item
+            for item in sources
+            if item.start < end and (item.end is None or item.end > start)
+        ]
+    if len(affected) != 1:
+        return False
+    only = affected[0]
+    if end is None:
+        covers = only.end is None
+    else:
+        covers = only.end is None or only.end >= end
+    return (
+        covers
+        and only.start <= start
+        and only.work_center_id == work_center_id
+        and only.department_id == department_id
+    )
+
+
+def _merge_pieces_for_request(
     sources: tuple[_SourceRow, ...],
     *,
     start: datetime,
@@ -852,6 +1036,36 @@ def _pieces_for_request(
     work_center_id: int,
     department_id: int | None,
 ) -> list[_Piece]:
+    if _merge_is_no_op(
+        sources,
+        start=start,
+        end=end,
+        work_center_id=work_center_id,
+        department_id=department_id,
+    ):
+        return list(map(_untouched_piece, sources))
+    if end is None:
+        return _open_merge_pieces(sources, start, work_center_id, department_id)
+    return _closed_merge_pieces(sources, start, end, work_center_id, department_id)
+
+
+def _pieces_for_request(
+    sources: tuple[_SourceRow, ...],
+    *,
+    start: datetime,
+    end: datetime | None,
+    work_center_id: int,
+    department_id: int | None,
+    merge: bool = False,
+) -> list[_Piece]:
+    if merge:
+        return _merge_pieces_for_request(
+            sources,
+            start=start,
+            end=end,
+            work_center_id=work_center_id,
+            department_id=department_id,
+        )
     if _correction_is_no_op(
         sources,
         start=start,
@@ -873,14 +1087,23 @@ def plan_correction(
     end_utc: datetime | None,
     odoo_work_center_id: int,
     odoo_department_id: int | None,
+    merge: bool = False,
 ) -> CorrectionPlan:
     """Plan exact interval surgery for one selected Odoo employee.
 
     Positive explicit Odoo IDs are the pure planner's caller boundary.  Active
     roster membership and app-to-Odoo mapping-name resolution belong to the
     I/O-owning caller, which must supply a fresh complete row snapshot here.
+
+    ``merge=True`` asks for one continuous row over the range: a closed range
+    fills gaps between the rows it covers, and an open range keeps the
+    currently open row's ID. The request then carries ``"merge": True``, which
+    the operation keys, integrity hash, and re-derivation all authenticate.
+    Without it the request is exactly the legacy five keys.
     """
 
+    if not isinstance(merge, bool):
+        raise TypeError("merge must be a boolean")
     employee_id = _positive_int(employee_odoo_id, "employee_odoo_id")
     work_center_id = _positive_int(odoo_work_center_id, "odoo_work_center_id")
     department_id = _optional_positive_int(odoo_department_id, "odoo_department_id")
@@ -889,15 +1112,16 @@ def plan_correction(
     if end is not None and end <= start:
         raise ValueError("end_utc must be later than start_utc")
     sources = _normalize_source_rows(rows, employee_id)
-    request = _FrozenMapping(
-        {
-            "employee_odoo_id": employee_id,
-            "start_utc": start,
-            "end_utc": end,
-            "odoo_work_center_id": work_center_id,
-            "odoo_department_id": department_id,
-        }
-    )
+    request_values: dict[str, object] = {
+        "employee_odoo_id": employee_id,
+        "start_utc": start,
+        "end_utc": end,
+        "odoo_work_center_id": work_center_id,
+        "odoo_department_id": department_id,
+    }
+    if merge:
+        request_values["merge"] = True
+    request = _FrozenMapping(request_values)
     source_intervals = tuple(item.values for item in sources)
 
     pieces = _pieces_for_request(
@@ -906,6 +1130,7 @@ def plan_correction(
         end=end,
         work_center_id=work_center_id,
         department_id=department_id,
+        merge=merge,
     )
     pending = _operations_for_pieces(
         sources=sources,
@@ -1018,8 +1243,15 @@ def _validate_operation_mapping(operation: CorrectionOperation) -> None:
 
 def _validate_request(
     value: Mapping[str, object],
-) -> tuple[int, datetime, datetime | None, int, int | None]:
-    _exact_keys(value, _REQUEST_FIELDS, "correction request")
+) -> tuple[int, datetime, datetime | None, int, int | None, bool]:
+    merge = "merge" in value
+    _exact_keys(
+        value,
+        _MERGE_REQUEST_FIELDS if merge else _REQUEST_FIELDS,
+        "correction request",
+    )
+    if merge and value["merge"] is not True:
+        raise ValueError("correction request merge flag must be true when present")
     employee_id = _positive_int(value["employee_odoo_id"], "employee_odoo_id")
     start = _aware_utc(value["start_utc"], "start_utc")
     end = _optional_aware_utc(value["end_utc"], "end_utc")
@@ -1027,7 +1259,7 @@ def _validate_request(
         raise ValueError("request interval must have positive duration")
     work_center_id = _positive_int(value["odoo_work_center_id"], "odoo_work_center_id")
     department_id = _optional_positive_int(value["odoo_department_id"], "odoo_department_id")
-    return employee_id, start, end, work_center_id, department_id
+    return employee_id, start, end, work_center_id, department_id, merge
 
 
 def _validate_expected_interval(
@@ -1113,6 +1345,7 @@ def _validate_plan(plan: CorrectionPlan) -> None:
         request_end,
         request_work_center_id,
         request_department_id,
+        request_merge,
     ) = _validate_request(plan.request)
     source_ids_in_payload = tuple(
         _positive_int(item.get("odoo_attendance_id"), "odoo_attendance_id")
@@ -1233,6 +1466,7 @@ def _validate_plan(plan: CorrectionPlan) -> None:
         end=request_end,
         work_center_id=request_work_center_id,
         department_id=request_department_id,
+        merge=request_merge,
     )
     planned_expected = tuple(
         _FrozenMapping(_expected_mapping(piece, request_employee_id))
@@ -1571,6 +1805,8 @@ class CorrectionPreview:
             raise ValueError("preview must contain one plan per employee")
         if not all(isinstance(plan, CorrectionPlan) for plan in plans):
             raise TypeError("plans must contain CorrectionPlan values")
+        if len({_plan_merge(plan) for plan in plans}) > 1:
+            raise ValueError("preview plans disagree on merge mode")
         object.__setattr__(self, "item_key", item_key)
         object.__setattr__(self, "employee_odoo_ids", employees)
         object.__setattr__(self, "target_work_center_name", work_center_name)
@@ -1579,6 +1815,20 @@ class CorrectionPreview:
         object.__setattr__(self, "start_utc", start)
         object.__setattr__(self, "end_utc", end)
         object.__setattr__(self, "plans", plans)
+
+    @property
+    def merge(self) -> bool:
+        """Whether this preview is a merge request.
+
+        The plans' authenticated requests are the single source of truth; the
+        constructor guarantees they agree. A plan-less preview is never a merge.
+        """
+        return bool(self.plans) and _plan_merge(self.plans[0])
+
+
+def _plan_merge(plan: CorrectionPlan) -> bool:
+    """Return the validated merge flag carried by a plan's request."""
+    return plan.request.get("merge", False) is True
 
 
 @dataclass(frozen=True)
@@ -1690,7 +1940,8 @@ def _validated_request(
     target_work_center_name: str,
     start_utc: datetime,
     end_utc: datetime | None,
-) -> tuple[str, tuple[int, ...], str, datetime, datetime | None]:
+    merge: bool = False,
+) -> tuple[str, tuple[int, ...], str, datetime, datetime | None, bool]:
     key = _bounded_text(item_key, "item_key", _ITEM_KEY_LIMIT)
     employees = _employee_ids(employee_odoo_ids)
     name = _bounded_text(target_work_center_name, "target_work_center_name", _TEXT_LIMIT)
@@ -1698,7 +1949,9 @@ def _validated_request(
     end = _optional_aware_utc(end_utc, "end_utc")
     if end is not None and end <= start:
         raise ValueError("end_utc must be later than start_utc")
-    return key, employees, name, start, end
+    if not isinstance(merge, bool):
+        raise TypeError("merge must be a boolean")
+    return key, employees, name, start, end, merge
 
 
 def _default_facade():
@@ -1797,6 +2050,7 @@ def _build_preview(
     target_work_center_name: str,
     start_utc: datetime,
     end_utc: datetime | None,
+    merge: bool = False,
 ) -> CorrectionPreview:
     facade = _default_facade()
     roster = facade.fetch_employee_statuses()
@@ -1823,6 +2077,7 @@ def _build_preview(
                 end_utc=end_utc,
                 odoo_work_center_id=work_center_id,
                 odoo_department_id=department_id,
+                merge=merge,
             )
         )
     return CorrectionPreview(
@@ -1844,14 +2099,20 @@ def correction_preview(
     target_work_center_name: str,
     start_utc: datetime,
     end_utc: datetime | None,
+    merge: bool = False,
 ) -> CorrectionPreview:
-    """Re-read Odoo and return an immutable, read-only correction preview."""
-    key, employees, target, start, end = _validated_request(
+    """Re-read Odoo and return an immutable, read-only correction preview.
+
+    ``merge=True`` plans every employee with the merge request mode (see
+    ``plan_correction``); the flag then travels inside the authenticated plans.
+    """
+    key, employees, target, start, end, merge_mode = _validated_request(
         item_key=item_key,
         employee_odoo_ids=employee_odoo_ids,
         target_work_center_name=target_work_center_name,
         start_utc=start_utc,
         end_utc=end_utc,
+        merge=merge,
     )
     return _build_preview(
         item_key=key,
@@ -1859,6 +2120,7 @@ def correction_preview(
         target_work_center_name=target,
         start_utc=start,
         end_utc=end,
+        merge=merge_mode,
     )
 
 
@@ -2041,9 +2303,11 @@ def _validate_saved_job_plans(
         row["target_odoo_work_center_id"], "target_odoo_work_center_id"
     )
     department_ids: set[int | None] = set()
+    merge_modes: set[bool] = set()
     for employee_id in employee_ids:
         plan = plans[employee_id]
         request = plan.request
+        merge_modes.add(_plan_merge(plan))
         if (
             request["employee_odoo_id"] != employee_id
             or request["start_utc"] != job_start
@@ -2063,6 +2327,8 @@ def _validate_saved_job_plans(
             raise ValueError("source snapshot does not match authenticated plan source")
     if len(department_ids) > 1:
         raise ValueError("saved plans disagree on target department")
+    if len(merge_modes) > 1:
+        raise ValueError("saved plans disagree on merge mode")
 
 
 def _json_list(value: object, field_name: str) -> list[dict[str, object]]:
@@ -2251,7 +2517,9 @@ def _preview_job_payloads(
     """Validate the same bounds used by the worker before exposing or saving a preview."""
     if not isinstance(preview, CorrectionPreview):
         raise TypeError("preview must be a CorrectionPreview")
-    key, employees, target, start, end = _validated_request(
+    # The merge mode lives inside the authenticated plans (``preview.merge``),
+    # which the plan decode and ``_validate_saved_job_plans`` below re-check.
+    key, employees, target, start, end, _merge = _validated_request(
         item_key=preview.item_key,
         employee_odoo_ids=preview.employee_odoo_ids,
         target_work_center_name=preview.target_work_center_name,
@@ -2317,15 +2585,20 @@ def preview_job_binding(preview: CorrectionPreview) -> dict[str, object]:
                 ],
             }
         )
+    request: dict[str, object] = {
+        "item_key": preview.item_key,
+        "employee_odoo_ids": list(preview.employee_odoo_ids),
+        "work_center_name": preview.target_work_center_name,
+        "start_utc": preview.start_utc.isoformat(),
+        "end_utc": preview.end_utc.isoformat() if preview.end_utc is not None else None,
+    }
+    if preview.merge:
+        # Only merge bindings name the mode, so every legacy binding (including
+        # tokens signed before merge mode existed) keeps its exact shape.
+        request["merge"] = True
     return {
         "version": 1,
-        "request": {
-            "item_key": preview.item_key,
-            "employee_odoo_ids": list(preview.employee_odoo_ids),
-            "work_center_name": preview.target_work_center_name,
-            "start_utc": preview.start_utc.isoformat(),
-            "end_utc": preview.end_utc.isoformat() if preview.end_utc is not None else None,
-        },
+        "request": request,
         "plans": plans,
     }
 
@@ -2465,7 +2738,21 @@ def _job_row_request_matches_preview(row: Mapping[str, object], preview: Correct
         and row_start == preview.start_utc
         and row_end == preview.end_utc
         and row_employees == preview.employee_odoo_ids
+        and _persisted_merge_mode(row, row_employees) == preview.merge
     )
+
+
+def _persisted_merge_mode(row: Mapping[str, object], employees: tuple[int, ...]) -> bool:
+    """Read a persisted job's merge mode from its authenticated plans.
+
+    Plans that cannot be authenticated count as non-merge, so the legacy
+    conflict classification for such rows is unchanged.
+    """
+    try:
+        plans = _plans_from_json(row.get("operations"), employees)
+    except (TypeError, ValueError):
+        return False
+    return any(_plan_merge(plan) for plan in plans.values())
 
 
 def create_job_from_preview(
@@ -2553,7 +2840,7 @@ def create_job(
     actor_name: str | None,
 ) -> int:
     """Persist a fresh schema-v2 plan, deduplicated by active inbox item."""
-    key, employees, target, start, end = _validated_request(
+    key, employees, target, start, end, _merge = _validated_request(
         item_key=item_key,
         employee_odoo_ids=employee_odoo_ids,
         target_work_center_name=target_work_center_name,

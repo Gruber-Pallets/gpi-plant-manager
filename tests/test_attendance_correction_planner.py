@@ -1051,3 +1051,465 @@ def test_public_frozen_values_reject_invalid_manual_construction():
             before=None,
             after={},
         )
+
+
+# ---------------------------------------------------------------------------
+# Merge request mode (quick-punch fixer)
+
+
+LEGACY_REQUEST_KEYS = {
+    "employee_odoo_id",
+    "start_utc",
+    "end_utc",
+    "odoo_work_center_id",
+    "odoo_department_id",
+}
+
+
+def merged(
+    rows: list[dict[str, object]],
+    start: datetime,
+    end: datetime | None,
+    *,
+    work_center: int = WORK_CENTER,
+    department: int | None = DEPARTMENT,
+) -> CorrectionPlan:
+    return plan_correction(
+        rows=rows,
+        employee_odoo_id=EMPLOYEE,
+        start_utc=start,
+        end_utc=end,
+        odoo_work_center_id=work_center,
+        odoo_department_id=department,
+        merge=True,
+    )
+
+
+def _ops(plan):
+    return [
+        (op.kind, op.attendance_id, dict(op.after) if op.after else None)
+        for op in plan.operations
+    ]
+
+
+def _drop_request_key(payload: dict[str, object], field: str) -> None:
+    """Remove one key from the encoded request mapping of ``plan_to_json``.
+
+    The request is serialized as ``{"type": "mapping", "items": [[key, value], ...]}``.
+    """
+    request = payload["request"]
+    assert isinstance(request, dict) and request["type"] == "mapping"
+    items = request["items"]
+    assert isinstance(items, list)
+    kept = [item for item in items if item[0] != field]
+    assert len(kept) == len(items) - 1, f"encoded request omitted {field}"
+    request["items"] = kept
+
+
+def _rekeyed_plan(plan: CorrectionPlan, request: dict[str, object]) -> CorrectionPlan:
+    """Rebuild ``plan`` under another request with freshly authenticated keys.
+
+    Only re-derivation of the request's pieces can then tell the plans apart.
+    """
+    from zira_dashboard import attendance_corrections as engine
+
+    sources = {
+        item.attendance_id: item
+        for item in engine._normalize_source_rows(plan.source_intervals, EMPLOYEE)
+    }
+    operations = []
+    for op in plan.operations:
+        token = op.key.split(":")[1]
+        key_sources = () if token == "0" else tuple(sources[int(i)] for i in token.split(","))
+        operations.append(
+            CorrectionOperation(
+                key=engine._operation_key(
+                    kind=op.kind,
+                    attendance_id=op.attendance_id,
+                    employee_id=op.employee_odoo_id,
+                    before=op.before,
+                    after=op.after,
+                    request=request,
+                    sources=key_sources,
+                ),
+                kind=op.kind,
+                attendance_id=op.attendance_id,
+                employee_odoo_id=op.employee_odoo_id,
+                before=op.before,
+                after=op.after,
+            )
+        )
+    return CorrectionPlan(
+        plan.source_versions,
+        tuple(operations),
+        plan.expected_intervals,
+        request,
+        plan.source_intervals,
+    )
+
+
+def test_merge_open_keeps_the_live_row_and_deletes_the_short_rows():
+    # Christian 2026-09-18 shape: D3 short, D2 detour, back on D3 and still clocked in.
+    rows = [
+        row(1, at(7), at(7, 2), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(7, 2), at(7, 4), work_center=99, department=DEPARTMENT),
+        row(3, at(7, 4), None, work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+    plan = plan_correction(
+        rows=rows, employee_odoo_id=EMPLOYEE, start_utc=at(7), end_utc=None,
+        odoo_work_center_id=WORK_CENTER, odoo_department_id=DEPARTMENT, merge=True,
+    )
+    assert plan.request["merge"] is True
+    kinds = sorted((op.kind, op.attendance_id) for op in plan.operations)
+    assert kinds == [("delete", 1), ("delete", 2), ("update", 3)]
+    update = next(op for op in plan.operations if op.kind == "update")
+    assert dict(update.after) == {"check_in_utc": at(7)}
+    assert [
+        (e["odoo_attendance_id"], e["check_in_utc"], e["check_out_utc"])
+        for e in plan.expected_intervals
+    ] == [(3, at(7), None)]
+
+
+def test_merge_closed_fills_a_same_station_gap():
+    rows = [
+        row(1, at(8), at(9), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(9, 3), at(10), work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+    plan = plan_correction(
+        rows=rows, employee_odoo_id=EMPLOYEE, start_utc=at(8), end_utc=at(10),
+        odoo_work_center_id=WORK_CENTER, odoo_department_id=DEPARTMENT, merge=True,
+    )
+    assert [
+        (e["odoo_attendance_id"], e["check_in_utc"], e["check_out_utc"])
+        for e in plan.expected_intervals
+    ] == [(1, at(8), at(10))]
+    assert sorted((op.kind, op.attendance_id) for op in plan.operations) == [
+        ("delete", 2),
+        ("update", 1),
+    ]
+    assert _ops(plan) == [
+        ("update", 1, {"check_out_utc": at(10)}),
+        ("delete", 2, None),
+    ]
+
+
+def test_legacy_closed_request_still_never_bridges_a_gap():
+    rows = [
+        row(1, at(8), at(9), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(9, 3), at(10), work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+    plan = plan_correction(
+        rows=rows, employee_odoo_id=EMPLOYEE, start_utc=at(8), end_utc=at(10),
+        odoo_work_center_id=WORK_CENTER, odoo_department_id=DEPARTMENT,
+    )
+    assert "merge" not in plan.request
+    assert plan.operations == ()
+
+
+@pytest.mark.parametrize("end", [at(10), None])
+@pytest.mark.parametrize("merge_kwargs", [{}, {"merge": False}])
+def test_legacy_request_mapping_is_exactly_the_five_legacy_keys(end, merge_kwargs):
+    plan = plan_correction(
+        rows=[row(1, at(8), at(9)), row(2, at(9, 3), None)],
+        employee_odoo_id=EMPLOYEE,
+        start_utc=at(8, 30),
+        end_utc=end,
+        odoo_work_center_id=WORK_CENTER,
+        odoo_department_id=DEPARTMENT,
+        **merge_kwargs,
+    )
+
+    assert set(plan.request) == LEGACY_REQUEST_KEYS
+    encoded = plan_to_json(plan)
+    assert isinstance(encoded, dict)
+    assert [item[0] for item in encoded["request"]["items"]] == sorted(LEGACY_REQUEST_KEYS)
+
+
+@pytest.mark.parametrize("flag", [1, "true", None, 0])
+def test_merge_flag_must_be_a_real_boolean(flag):
+    with pytest.raises(TypeError, match="merge"):
+        plan_correction(
+            rows=[],
+            employee_odoo_id=EMPLOYEE,
+            start_utc=at(8),
+            end_utc=at(10),
+            odoo_work_center_id=WORK_CENTER,
+            odoo_department_id=DEPARTMENT,
+            merge=flag,  # type: ignore[arg-type]
+        )
+
+
+def test_merge_is_a_no_op_only_for_one_covering_row():
+    rows = [row(1, at(8), at(10), work_center=WORK_CENTER, department=DEPARTMENT)]
+    plan = plan_correction(
+        rows=rows, employee_odoo_id=EMPLOYEE, start_utc=at(8), end_utc=at(10),
+        odoo_work_center_id=WORK_CENTER, odoo_department_id=DEPARTMENT, merge=True,
+    )
+    assert plan.operations == ()
+    assert plan.request["merge"] is True
+
+
+def test_merge_of_two_touching_target_rows_is_not_a_no_op():
+    # Legacy calls this a no-op (every overlap already has the target location);
+    # a merge must still leave exactly one continuous row.
+    rows = [
+        row(1, at(8), at(9), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(9), at(10), work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+
+    assert planned(rows, at(8), at(10)).operations == ()
+    plan = merged(rows, at(8), at(10))
+
+    assert interval_tuples(plan) == [(1, at(8), at(10), WORK_CENTER, DEPARTMENT)]
+    assert _ops(plan) == [
+        ("update", 1, {"check_out_utc": at(10)}),
+        ("delete", 2, None),
+    ]
+
+
+def test_merge_no_op_requires_the_target_department_too():
+    rows = [row(1, at(8), at(10), work_center=WORK_CENTER, department=DEPARTMENT + 1)]
+
+    plan = merged(rows, at(8), at(10))
+
+    assert _ops(plan) == [("update", 1, {"odoo_department_id": DEPARTMENT})]
+
+
+def test_open_merge_is_a_no_op_for_the_single_open_target_row():
+    rows = [
+        row(1, at(6), at(7), work_center=99, department=DEPARTMENT),
+        row(2, at(7), None, work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+
+    plan = merged(rows, at(7, 30), None)
+
+    assert plan.operations == ()
+    assert interval_tuples(plan) == [
+        (1, at(6), at(7), 99, DEPARTMENT),
+        (2, at(7), None, WORK_CENTER, DEPARTMENT),
+    ]
+
+
+def test_merge_plan_round_trips_through_json_and_rejects_tampering():
+    rows = [
+        row(1, at(8), at(9), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(9, 3), at(10), work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+    plan = plan_correction(
+        rows=rows, employee_odoo_id=EMPLOYEE, start_utc=at(8), end_utc=at(10),
+        odoo_work_center_id=WORK_CENTER, odoo_department_id=DEPARTMENT, merge=True,
+    )
+    assert plan_from_json(plan_to_json(plan)) == plan
+    payload = json.loads(json.dumps(plan_to_json(plan)))
+    # Dropping the flag must not validate: the operations no longer implement the request.
+    _drop_request_key(payload, "merge")
+    with pytest.raises((ValueError, TypeError)):
+        plan_from_json(payload)
+    # Even with a refreshed whole-plan integrity, the request-bound keys reject it.
+    refresh_integrity(payload)
+    with pytest.raises(ValueError, match="operation key"):
+        plan_from_json(payload)
+
+
+@pytest.mark.parametrize("flag", [False, 1, "true", None])
+def test_merge_request_flag_must_be_exactly_true_when_present(flag):
+    payload = json.loads(json.dumps(plan_to_json(merged([row(1, at(8), at(9))], at(8), at(10)))))
+    encoded_mapping_replace(payload["request"], "merge", flag)
+    refresh_integrity(payload)
+
+    with pytest.raises(ValueError, match="merge"):
+        plan_from_json(payload)
+
+
+def test_legacy_plan_cannot_gain_a_merge_flag_or_unknown_request_key():
+    legacy = plan_to_json(planned([row(1, at(8), at(9))], at(8), at(10)))
+    for field, encoded in (("merge", True), ("merge", False), ("surprise", True)):
+        payload = json.loads(json.dumps(legacy))
+        encoded_mapping_set(payload["request"], field, encoded)
+        refresh_integrity(payload)
+
+        with pytest.raises(ValueError):
+            plan_from_json(payload)
+
+
+def test_validation_re_derives_pieces_with_the_request_merge_flag():
+    rows = [
+        row(1, at(8), at(9), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(9, 3), at(10), work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+    merge_plan = merged(rows, at(8), at(10))
+    legacy_request = {
+        key: value for key, value in merge_plan.request.items() if key != "merge"
+    }
+    # The merge operations re-keyed under a legacy request: every key and the
+    # projection authenticate, so only the legacy re-derivation can object.
+    with pytest.raises(ValueError, match="implement the correction request"):
+        _rekeyed_plan(merge_plan, legacy_request)
+
+    legacy_plan = planned(
+        [row(1, at(8), at(9)), row(2, at(9, 3), at(10))], at(8), at(10)
+    )
+    with pytest.raises(ValueError, match="implement the correction request"):
+        _rekeyed_plan(legacy_plan, {**legacy_plan.request, "merge": True})
+
+
+def test_open_merge_prefers_the_open_row_over_an_earlier_row_starting_at_start():
+    rows = [
+        row(1, at(7), at(7, 2), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(7, 3), None, work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+
+    plan = merged(rows, at(7), None)
+
+    assert interval_tuples(plan) == [(2, at(7), None, WORK_CENTER, DEPARTMENT)]
+    assert _ops(plan) == [
+        ("delete", 1, None),
+        ("update", 2, {"check_in_utc": at(7)}),
+    ]
+    # The legacy rule is unchanged: it keeps the earliest row and drops the live one.
+    legacy = planned(rows, at(7), None)
+    assert interval_tuples(legacy) == [(1, at(7), None, WORK_CENTER, DEPARTMENT)]
+    assert sorted((op.kind, op.attendance_id) for op in legacy.operations) == [
+        ("delete", 2),
+        ("update", 1),
+    ]
+
+
+def test_open_merge_keeps_the_first_rows_left_remainder_and_the_live_id():
+    rows = [
+        row(1, at(6), at(7, 1), work_center=11, department=3),
+        row(2, at(7, 1), at(7, 3), work_center=99, department=DEPARTMENT),
+        row(3, at(7, 3), None, work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+
+    plan = merged(rows, at(7), None)
+
+    assert interval_tuples(plan) == [
+        (1, at(6), at(7), 11, 3),
+        (3, at(7), None, WORK_CENTER, DEPARTMENT),
+    ]
+    # Canonical plan order sorts by effective start (the survivor now starts at 07:00).
+    assert _ops(plan) == [
+        ("update", 1, {"check_out_utc": at(7)}),
+        ("update", 3, {"check_in_utc": at(7)}),
+        ("delete", 2, None),
+    ]
+
+
+def test_open_merge_without_an_open_row_keeps_the_legacy_survivor():
+    rows = [
+        row(1, at(7), at(7, 2), work_center=99, department=DEPARTMENT),
+        row(2, at(7, 2), at(8), work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+
+    assert interval_tuples(merged(rows, at(7), None)) == interval_tuples(
+        planned(rows, at(7), None)
+    )
+
+
+def test_closed_merge_keeps_left_and_right_remainders_and_reuses_an_inside_row():
+    rows = [
+        row(1, at(7), at(8, 30), work_center=11, department=3),
+        row(2, at(8, 32), at(9, 30), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(3, at(9, 31), at(11), work_center=11, department=3),
+    ]
+
+    plan = merged(rows, at(8), at(10))
+
+    assert interval_tuples(plan) == [
+        (1, at(7), at(8), 11, 3),
+        (2, at(8), at(10), WORK_CENTER, DEPARTMENT),
+        (3, at(10), at(11), 11, 3),
+    ]
+    assert _ops(plan) == [
+        ("update", 1, {"check_out_utc": at(8)}),
+        ("update", 2, {"check_in_utc": at(8), "check_out_utc": at(10)}),
+        ("update", 3, {"check_in_utc": at(10)}),
+    ]
+
+
+def test_closed_merge_with_remainders_and_no_inside_row_creates_the_target():
+    rows = [
+        row(1, at(7), at(9), work_center=11, department=3),
+        row(2, at(9, 3), at(11), work_center=11, department=3),
+    ]
+
+    plan = merged(rows, at(8), at(10))
+
+    assert interval_tuples(plan) == [
+        (1, at(7), at(8), 11, 3),
+        (None, at(8), at(10), WORK_CENTER, DEPARTMENT),
+        (2, at(10), at(11), 11, 3),
+    ]
+    assert sorted(
+        (op.kind, op.attendance_id or 0) for op in plan.operations
+    ) == [("create", 0), ("update", 1), ("update", 2)]
+
+
+def test_closed_merge_of_one_row_split_on_both_sides_matches_legacy():
+    rows = [row(1, at(7), at(11))]
+
+    assert interval_tuples(merged(rows, at(8), at(10))) == interval_tuples(
+        planned(rows, at(8), at(10))
+    )
+
+
+def test_closed_merge_across_a_detour_at_another_station_becomes_one_row():
+    rows = [
+        row(1, at(8), at(9), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(9), at(9, 4), work_center=99, department=DEPARTMENT),
+        row(3, at(9, 4), at(10), work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+
+    plan = merged(rows, at(8), at(10))
+
+    assert interval_tuples(plan) == [(1, at(8), at(10), WORK_CENTER, DEPARTMENT)]
+    assert _ops(plan) == [
+        ("update", 1, {"check_out_utc": at(10)}),
+        ("delete", 2, None),
+        ("delete", 3, None),
+    ]
+
+
+def test_closed_merge_fills_gaps_up_to_the_requested_edges():
+    rows = [
+        row(1, at(8, 1), at(9), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(9, 3), at(9, 58), work_center=99, department=DEPARTMENT),
+        row(9, at(10, 30), at(11), work_center=11, department=3),
+    ]
+
+    plan = merged(rows, at(8), at(10))
+
+    assert interval_tuples(plan) == [
+        (1, at(8), at(10), WORK_CENTER, DEPARTMENT),
+        (9, at(10, 30), at(11), 11, 3),
+    ]
+
+
+def test_closed_merge_of_an_open_source_keeps_the_open_suffix():
+    rows = [
+        row(1, at(8), at(9), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(9, 2), None, work_center=99, department=DEPARTMENT),
+    ]
+
+    plan = merged(rows, at(8), at(10))
+
+    assert interval_tuples(plan) == [
+        (1, at(8), at(10), WORK_CENTER, DEPARTMENT),
+        (2, at(10), None, 99, DEPARTMENT),
+    ]
+
+
+def test_merge_without_source_rows_creates_the_requested_interval():
+    for end in (at(10), None):
+        assert interval_tuples(merged([], at(8), end)) == [
+            (None, at(8), end, WORK_CENTER, DEPARTMENT)
+        ]
+
+
+def test_merge_operation_keys_differ_from_the_legacy_request():
+    rows = [row(1, at(8), at(10))]
+
+    assert merged(rows, at(8), at(10)).operations[0].key != planned(
+        rows, at(8), at(10)
+    ).operations[0].key

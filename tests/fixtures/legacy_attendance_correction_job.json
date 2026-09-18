@@ -1,0 +1,687 @@
+{
+ "_comment": "Correction job persisted by the pre-merge engine (commit 4df8ccce). Its plans carry the legacy five-key request with no merge flag. Do not regenerate: it proves old stored jobs still validate.",
+ "binding": {
+  "plans": [
+   {
+    "employee_odoo_id": 7,
+    "plan_integrity": "attendance-correction-plan-v2:ee433d515699a3664ac844de57a3823fd828ba746548ddc3b9b162f48d10dc93",
+    "source_versions": [
+     {
+      "attendance_id": 11,
+      "write_date": "2026-08-31T18:01:00+00:00"
+     },
+     {
+      "attendance_id": 12,
+      "write_date": "2026-08-31T18:02:00+00:00"
+     },
+     {
+      "attendance_id": 13,
+      "write_date": "2026-08-31T18:03:00+00:00"
+     }
+    ]
+   },
+   {
+    "employee_odoo_id": 8,
+    "plan_integrity": "attendance-correction-plan-v2:7c441c4471b71c8c9d4888d7229492254a78f517345a2cda04fea25b739d190d",
+    "source_versions": []
+   }
+  ],
+  "request": {
+   "employee_odoo_ids": [
+    7,
+    8
+   ],
+   "end_utc": "2026-08-31T17:00:00+00:00",
+   "item_key": "production_unassigned_run:repair-1:legacy-fixture",
+   "start_utc": "2026-08-31T15:30:00+00:00",
+   "work_center_name": "Repair 1"
+  },
+  "version": 1
+ },
+ "employee_odoo_ids": [
+  7,
+  8
+ ],
+ "end_utc": "2026-08-31T17:00:00+00:00",
+ "item_key": "production_unassigned_run:repair-1:legacy-fixture",
+ "operations": {
+  "plans": [
+   {
+    "employee_odoo_id": 7,
+    "plan": {
+     "expected_intervals": [
+      {
+       "items": [
+        [
+         "check_in_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T15:00:00Z"
+         }
+        ],
+        [
+         "check_out_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T15:30:00Z"
+         }
+        ],
+        [
+         "employee_odoo_id",
+         7
+        ],
+        [
+         "odoo_attendance_id",
+         11
+        ],
+        [
+         "odoo_department_id",
+         9
+        ],
+        [
+         "odoo_work_center_id",
+         80
+        ]
+       ],
+       "type": "mapping"
+      },
+      {
+       "items": [
+        [
+         "check_in_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T15:30:00Z"
+         }
+        ],
+        [
+         "check_out_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T17:00:00Z"
+         }
+        ],
+        [
+         "employee_odoo_id",
+         7
+        ],
+        [
+         "odoo_attendance_id",
+         12
+        ],
+        [
+         "odoo_department_id",
+         9
+        ],
+        [
+         "odoo_work_center_id",
+         81
+        ]
+       ],
+       "type": "mapping"
+      }
+     ],
+     "integrity": "attendance-correction-plan-v2:ee433d515699a3664ac844de57a3823fd828ba746548ddc3b9b162f48d10dc93",
+     "operations": [
+      {
+       "after": {
+        "items": [
+         [
+          "check_out_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T15:30:00Z"
+          }
+         ]
+        ],
+        "type": "mapping"
+       },
+       "attendance_id": 11,
+       "before": {
+        "items": [
+         [
+          "check_out_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T16:00:00Z"
+          }
+         ]
+        ],
+        "type": "mapping"
+       },
+       "employee_odoo_id": 7,
+       "key": "attendance-correction-v2:11:11f9dd26c07546d45b1da4cd75f74f97a265fb1dce47d77c2d60589134ed980e",
+       "kind": "update"
+      },
+      {
+       "after": {
+        "items": [
+         [
+          "check_in_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T15:30:00Z"
+          }
+         ],
+         [
+          "check_out_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T17:00:00Z"
+          }
+         ],
+         [
+          "odoo_work_center_id",
+          81
+         ]
+        ],
+        "type": "mapping"
+       },
+       "attendance_id": 12,
+       "before": {
+        "items": [
+         [
+          "check_in_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T16:00:00Z"
+          }
+         ],
+         [
+          "check_out_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T16:30:00Z"
+          }
+         ],
+         [
+          "odoo_work_center_id",
+          80
+         ]
+        ],
+        "type": "mapping"
+       },
+       "employee_odoo_id": 7,
+       "key": "attendance-correction-v2:12:4805303e6e2aa6b44404d7a48a3b0bef1c6d2f9b7d52ee288eb8b9012ff8117d",
+       "kind": "update"
+      },
+      {
+       "after": null,
+       "attendance_id": 13,
+       "before": {
+        "items": [
+         [
+          "check_in_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T16:30:00Z"
+          }
+         ],
+         [
+          "check_out_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T17:00:00Z"
+          }
+         ],
+         [
+          "employee_odoo_id",
+          7
+         ],
+         [
+          "odoo_department_id",
+          9
+         ],
+         [
+          "odoo_work_center_id",
+          80
+         ]
+        ],
+        "type": "mapping"
+       },
+       "employee_odoo_id": 7,
+       "key": "attendance-correction-v2:13:e6ac4483a09a64bad4ce2a4a891ea00d9268c64b310981a8c2b43b8e0d385060",
+       "kind": "delete"
+      }
+     ],
+     "request": {
+      "items": [
+       [
+        "employee_odoo_id",
+        7
+       ],
+       [
+        "end_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T17:00:00Z"
+        }
+       ],
+       [
+        "odoo_department_id",
+        9
+       ],
+       [
+        "odoo_work_center_id",
+        81
+       ],
+       [
+        "start_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T15:30:00Z"
+        }
+       ]
+      ],
+      "type": "mapping"
+     },
+     "schema_version": 2,
+     "source_intervals": [
+      {
+       "items": [
+        [
+         "check_in_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T15:00:00Z"
+         }
+        ],
+        [
+         "check_out_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T16:00:00Z"
+         }
+        ],
+        [
+         "employee_odoo_id",
+         7
+        ],
+        [
+         "odoo_attendance_id",
+         11
+        ],
+        [
+         "odoo_department_id",
+         9
+        ],
+        [
+         "odoo_work_center_id",
+         80
+        ],
+        [
+         "odoo_write_date",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T18:01:00Z"
+         }
+        ]
+       ],
+       "type": "mapping"
+      },
+      {
+       "items": [
+        [
+         "check_in_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T16:00:00Z"
+         }
+        ],
+        [
+         "check_out_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T16:30:00Z"
+         }
+        ],
+        [
+         "employee_odoo_id",
+         7
+        ],
+        [
+         "odoo_attendance_id",
+         12
+        ],
+        [
+         "odoo_department_id",
+         9
+        ],
+        [
+         "odoo_work_center_id",
+         80
+        ],
+        [
+         "odoo_write_date",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T18:02:00Z"
+         }
+        ]
+       ],
+       "type": "mapping"
+      },
+      {
+       "items": [
+        [
+         "check_in_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T16:30:00Z"
+         }
+        ],
+        [
+         "check_out_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T17:00:00Z"
+         }
+        ],
+        [
+         "employee_odoo_id",
+         7
+        ],
+        [
+         "odoo_attendance_id",
+         13
+        ],
+        [
+         "odoo_department_id",
+         9
+        ],
+        [
+         "odoo_work_center_id",
+         80
+        ],
+        [
+         "odoo_write_date",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T18:03:00Z"
+         }
+        ]
+       ],
+       "type": "mapping"
+      }
+     ],
+     "source_versions": [
+      {
+       "attendance_id": 11,
+       "write_date": "2026-08-31T18:01:00Z"
+      },
+      {
+       "attendance_id": 12,
+       "write_date": "2026-08-31T18:02:00Z"
+      },
+      {
+       "attendance_id": 13,
+       "write_date": "2026-08-31T18:03:00Z"
+      }
+     ]
+    }
+   },
+   {
+    "employee_odoo_id": 8,
+    "plan": {
+     "expected_intervals": [
+      {
+       "items": [
+        [
+         "check_in_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T15:30:00Z"
+         }
+        ],
+        [
+         "check_out_utc",
+         {
+          "type": "datetime",
+          "value": "2026-08-31T17:00:00Z"
+         }
+        ],
+        [
+         "employee_odoo_id",
+         8
+        ],
+        [
+         "odoo_attendance_id",
+         null
+        ],
+        [
+         "odoo_department_id",
+         9
+        ],
+        [
+         "odoo_work_center_id",
+         81
+        ]
+       ],
+       "type": "mapping"
+      }
+     ],
+     "integrity": "attendance-correction-plan-v2:7c441c4471b71c8c9d4888d7229492254a78f517345a2cda04fea25b739d190d",
+     "operations": [
+      {
+       "after": {
+        "items": [
+         [
+          "check_in_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T15:30:00Z"
+          }
+         ],
+         [
+          "check_out_utc",
+          {
+           "type": "datetime",
+           "value": "2026-08-31T17:00:00Z"
+          }
+         ],
+         [
+          "employee_odoo_id",
+          8
+         ],
+         [
+          "odoo_department_id",
+          9
+         ],
+         [
+          "odoo_work_center_id",
+          81
+         ]
+        ],
+        "type": "mapping"
+       },
+       "attendance_id": null,
+       "before": null,
+       "employee_odoo_id": 8,
+       "key": "attendance-correction-v2:0:ba29d0c306781b5026a9eeb3eba0a560b42c37438dd3bb5a18af2d24434bfc75",
+       "kind": "create"
+      }
+     ],
+     "request": {
+      "items": [
+       [
+        "employee_odoo_id",
+        8
+       ],
+       [
+        "end_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T17:00:00Z"
+        }
+       ],
+       [
+        "odoo_department_id",
+        9
+       ],
+       [
+        "odoo_work_center_id",
+        81
+       ],
+       [
+        "start_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T15:30:00Z"
+        }
+       ]
+      ],
+      "type": "mapping"
+     },
+     "schema_version": 2,
+     "source_intervals": [],
+     "source_versions": []
+    }
+   }
+  ],
+  "schema_version": 2
+ },
+ "source_snapshot": {
+  "employees": [
+   {
+    "employee_odoo_id": 7,
+    "rows": [
+     {
+      "items": [
+       [
+        "check_in_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T15:00:00Z"
+        }
+       ],
+       [
+        "check_out_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T16:00:00Z"
+        }
+       ],
+       [
+        "employee_odoo_id",
+        7
+       ],
+       [
+        "odoo_attendance_id",
+        11
+       ],
+       [
+        "odoo_department_id",
+        9
+       ],
+       [
+        "odoo_work_center_id",
+        80
+       ],
+       [
+        "odoo_write_date",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T18:01:00Z"
+        }
+       ]
+      ],
+      "type": "mapping"
+     },
+     {
+      "items": [
+       [
+        "check_in_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T16:00:00Z"
+        }
+       ],
+       [
+        "check_out_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T16:30:00Z"
+        }
+       ],
+       [
+        "employee_odoo_id",
+        7
+       ],
+       [
+        "odoo_attendance_id",
+        12
+       ],
+       [
+        "odoo_department_id",
+        9
+       ],
+       [
+        "odoo_work_center_id",
+        80
+       ],
+       [
+        "odoo_write_date",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T18:02:00Z"
+        }
+       ]
+      ],
+      "type": "mapping"
+     },
+     {
+      "items": [
+       [
+        "check_in_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T16:30:00Z"
+        }
+       ],
+       [
+        "check_out_utc",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T17:00:00Z"
+        }
+       ],
+       [
+        "employee_odoo_id",
+        7
+       ],
+       [
+        "odoo_attendance_id",
+        13
+       ],
+       [
+        "odoo_department_id",
+        9
+       ],
+       [
+        "odoo_work_center_id",
+        80
+       ],
+       [
+        "odoo_write_date",
+        {
+         "type": "datetime",
+         "value": "2026-08-31T18:03:00Z"
+        }
+       ]
+      ],
+      "type": "mapping"
+     }
+    ]
+   },
+   {
+    "employee_odoo_id": 8,
+    "rows": []
+   }
+  ],
+  "integrity": "attendance-correction-source-v1:f5663a8411f9576d344ff267e6ab544574750c90220b751a10bd19074ae7ca39",
+  "schema_version": 1
+ },
+ "start_utc": "2026-08-31T15:30:00+00:00",
+ "target_odoo_work_center_id": 81,
+ "target_work_center_name": "Repair 1"
+}
