@@ -68,7 +68,12 @@ A boundary at exactly 5:00 counts as quick (`<=`).
    covers. With no meter data for B, the merge goes ahead. "Covers" is judged
    against everyone's stints before smoothing, so two people who blip to the
    same empty station at the same moment count as covering each other. That
-   case is rare and accepted.
+   case is rare and accepted. Second exception, a relief: the merge is also
+   blocked when another person's stint at A overlaps the gap without being there
+   strictly before and strictly after it. That person covered the station while
+   this person was away, and stretching this person over the gap would split
+   their pallets. A partner who was at A the whole time, such as a paired
+   station, does not block.
 2. **Wrong-first-pick rule.** A stint qualifies when:
    - it starts a presence block, meaning no stint for this person ends within
      5 minutes before its start (start of day, or back from being away longer
@@ -153,6 +158,27 @@ real gap, and the existing display join covers it.
   and a detour to one is merged even if it made pallets, because that meter is
   unknown. The leaderboards, which have every meter, can decide differently.
   The difference is at most 5 minutes.
+- **Other known edges.** These are each at most 5 minutes and accepted:
+  - The dashboard smooths the full plant-day snapshot, while the strict path's
+    spans are cut to the shift. A stint that starts before shift start can
+    therefore count as a short first pick on the leaderboards but not on the
+    dashboard.
+  - The strict path removes testing-window samples before smoothing, and the
+    dashboard does not.
+  - The meters record no pallets during breaks or outside the shift, so a
+    "no pallets" check across a break proves nothing.
+- **Visible side effects.**
+  - A station whose only stint was a smoothed-away blip, with 5 or fewer
+    pallets, is no longer active, so its card drops off the dashboard.
+  - Open "Production Without a Worker" inbox notes can clear themselves once
+    gap pallets are credited.
+  - The readiness shadow check also receives smoothed stints.
+- **Safety net:** if collecting blocking windows or smoothing raises, the
+  funnel logs a warning naming only the exception type and returns the
+  `smooth=False` result, so a smoothing bug can never take a page down.
+  `production_times_from_samples` never raises. A station with any malformed
+  sample is left out of the map (unknown), because the bad reading might have
+  been a real pallet.
 - **Order preserved:** people and stints that smoothing does not touch keep
   their original order in the output. A merged stint takes the position of its
   earliest input stint.
