@@ -492,7 +492,8 @@ def _department_day_data(
         window_end_utc,
         now_utc=now,
         # Every station's meter, including ones not yet active, so a short
-        # first stint is only smoothed away where no pallets were made.
+        # first stint is only smoothed away where no pallets were made, and a
+        # detour whose pallets nobody else covers is kept.
         production_times_by_wc=quick_punch_smoothing.production_times_from_samples(
             {r.station.name: getattr(r, "samples", ()) or () for r in results}
         ),

@@ -118,7 +118,7 @@ real gap, and the existing display join covers it.
 ## Architecture
 
 - **New pure module** `src/zira_dashboard/quick_punch_smoothing.py`:
-  `smooth_quick_punches(segments, *, blocked_windows=None, limit=QUICK_PUNCH_LIMIT)`
+  `smooth_quick_punches(segments, *, blocked_windows=None, production_times_by_wc=None, limit=QUICK_PUNCH_LIMIT)`
   plus `person_key(segment)`, which defines the grouping key: the Odoo ID, or
   the name when there is no ID. `blocked_windows` must use that same key. It
   takes and returns `WorkSegment`s, with no DB, network, or clock access.
@@ -130,14 +130,17 @@ real gap, and the existing display join covers it.
   the requested window and drop non-positive results. Smoothing sees as much
   punch history as the caller's spans carry. Timeline spans arrive already
   clipped to the range the caller read, so a stint cut at that boundary is
-  judged by its visible length.
+  judged by its visible length. `smooth=False` skips smoothing and returns the
+  clipped valid spans exactly as before this feature. The shared
+  `validate_window` helper checks the window for both this function and
+  `_strict_inputs_for_day`.
 - **Meter data:** `work_segments_from_timeline` takes an optional
   `production_times_by_wc` (from `quick_punch_smoothing.production_times_from_samples`).
-  All three callers pass the same samples they credit, so dashboards, People
-  Performance, and leaderboards agree. The department route already loads
-  meters before building stints. `_strict_inputs_for_day` builds stints after
-  its samples are validated. `production_scores_for_timeline` rebuilds them
-  once its samples are parsed.
+  The two smoothing callers pass the same samples they credit, so the
+  dashboards and leaderboards agree. The department route already loads meters
+  before building stints. `_strict_inputs_for_day` builds stints after its
+  samples are validated. `production_scores_for_timeline`, used by People
+  Performance, calls the funnel with `smooth=False` (see below).
 - **People Performance stays on real punches (decided during the build).**
   That page draws each person's day from real spans and joins each score to
   its span by exact person, station, start, and end, so smoothed stints would
@@ -225,6 +228,11 @@ Integration tests:
   person instead of going unassigned.
 - `coalesce_display_scores` regression: Jose's two lunch-split stints join even
   with another person's stint between them.
+- Detour pallets: a detour to an empty station that made a pallet is kept; one
+  whose pallet another person covers is merged; a mixed blip with one covered
+  and one uncovered pallet is kept.
+- People Performance: real-scorer page-level test proving Christian's detour
+  and a sign-out gap still show a metric on every real punch.
 - Each caller passes its meter data to smoothing. The department transfer test,
   where a 5-minute Repair 2 stint made 34 pallets, keeps that stint.
 
