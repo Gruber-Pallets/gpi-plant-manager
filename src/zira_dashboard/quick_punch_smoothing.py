@@ -50,6 +50,12 @@ def smooth_quick_punches(
 ) -> tuple[WorkSegment, ...]:
     """Return ``segments`` with each person's quick punch mistakes merged away.
 
+    ``blocked_windows`` maps a person to windows that smoothing must never
+    bridge. Its keys must equal ``person_key(segment)``: the Odoo employee ID,
+    or the display name when ``person_odoo_id`` is None. A window blocks only
+    when it overlaps the open gap between two stints; one that merely touches
+    the gap does not.
+
     Untouched segments keep their input order; a merged stint takes the
     position of its earliest input segment.
     """
@@ -91,7 +97,10 @@ def _came_back_match(
             return None
         if candidate.wc_name != current.wc_name:
             continue
-        if any(segment.end_utc > candidate.start_utc for _idx, segment in stints[i + 1 : j]):
+        if any(
+            segment.start_utc < current.end_utc or segment.end_utc > candidate.start_utc
+            for _idx, segment in stints[i + 1 : j]
+        ):
             return None
         if _crosses_blocked(current.end_utc, candidate.start_utc, blocked):
             return None

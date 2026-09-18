@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from zira_dashboard.assignment_windows import WorkSegment
 from zira_dashboard.quick_punch_smoothing import QUICK_PUNCH_LIMIT, smooth_quick_punches
 
@@ -151,11 +153,11 @@ def test_mid_day_short_stop_between_two_different_stations_is_kept():
 
 
 def test_came_back_rule_runs_before_wrong_first_pick():
-    # Run alone, wrong-first-pick would move 07:00-07:02 onto Dismantler 2.
+    # Wrong-first-pick first would give D2 07:00-07:06, D3 07:06-09:00.
     segments = (
         seg("Dismantler 3", ct(7), ct(7, 2)),
-        seg("Dismantler 2", ct(7, 2), ct(7, 4)),
-        seg("Dismantler 3", ct(7, 4), ct(9)),
+        seg("Dismantler 2", ct(7, 2), ct(7, 6)),
+        seg("Dismantler 3", ct(7, 6), ct(9)),
     )
 
     assert shape(smooth_quick_punches(segments)) == [
@@ -239,6 +241,114 @@ def test_detour_that_runs_past_the_return_is_left_alone():
         seg("Repair 1", ct(8), ct(9)),
         seg("Repair 2", ct(9), ct(11)),
         seg("Repair 1", ct(9, 2), ct(10)),
+    )
+
+    assert smooth_quick_punches(segments) == segments
+
+
+@pytest.mark.parametrize(("stint_seconds", "merged"), ((300, True), (301, False)))
+def test_wrong_first_pick_counts_a_stint_of_exactly_the_limit_as_quick(
+    stint_seconds, merged
+):
+    picked_until = ct(7) + timedelta(seconds=stint_seconds)
+    segments = (
+        seg("Repair 1", ct(7), picked_until),
+        seg("Repair 2", picked_until, ct(11)),
+    )
+
+    result = smooth_quick_punches(segments)
+
+    if merged:
+        assert shape(result) == [("Christian C.", "Repair 2", ct(7), ct(11))]
+    else:
+        assert result == segments
+
+
+@pytest.mark.parametrize(("gap_seconds", "merged"), ((300, True), (301, False)))
+def test_wrong_first_pick_bridges_a_gap_of_exactly_the_limit(gap_seconds, merged):
+    next_start = ct(7, 2) + timedelta(seconds=gap_seconds)
+    segments = (
+        seg("Repair 1", ct(7), ct(7, 2)),
+        seg("Repair 2", next_start, ct(11)),
+    )
+
+    result = smooth_quick_punches(segments)
+
+    if merged:
+        assert shape(result) == [("Christian C.", "Repair 2", ct(7), ct(11))]
+    else:
+        assert result == segments
+
+
+@pytest.mark.parametrize(("away_seconds", "merged"), ((300, False), (301, True)))
+def test_wrong_first_pick_needs_away_time_longer_than_the_limit(away_seconds, merged):
+    back_at = ct(11) + timedelta(seconds=away_seconds)
+    picked_until = back_at + timedelta(minutes=2)
+    segments = (
+        seg("Repair 5", ct(7), ct(11)),
+        seg("Repair 1", back_at, picked_until),
+        seg("Repair 2", picked_until, ct(15)),
+    )
+
+    result = smooth_quick_punches(segments)
+
+    if merged:
+        assert shape(result) == [
+            ("Christian C.", "Repair 5", ct(7), ct(11)),
+            ("Christian C.", "Repair 2", back_at, ct(15)),
+        ]
+    else:
+        assert result == segments
+
+
+def test_came_back_rechecks_from_the_merged_stint():
+    segments = (
+        seg("Repair 1", ct(8), ct(9)),
+        seg("Repair 2", ct(9), ct(9, 2)),
+        seg("Repair 1", ct(9, 3), ct(9, 4)),
+        seg("Repair 3", ct(9, 4), ct(9, 5)),
+        seg("Repair 1", ct(9, 6), ct(10)),
+    )
+
+    assert shape(smooth_quick_punches(segments)) == [
+        ("Christian C.", "Repair 1", ct(8), ct(10)),
+    ]
+
+
+def test_blocked_windows_only_apply_to_their_own_person():
+    segments = (
+        seg("Repair 1", ct(8), ct(9)),
+        seg("Repair 1", ct(9, 3), ct(10)),
+    )
+
+    (bridged,) = smooth_quick_punches(
+        segments, blocked_windows={6: ((ct(9, 1), ct(9, 2)),)}
+    )
+    assert (bridged.start_utc, bridged.end_utc) == (ct(8), ct(10))
+
+
+def test_person_without_odoo_id_is_grouped_and_blocked_by_name():
+    segments = (
+        seg("Repair 1", ct(8), ct(9), person="Temp W.", odoo_id=None),
+        seg("Repair 1", ct(9, 2), ct(10), person="Temp W.", odoo_id=None),
+    )
+
+    assert shape(smooth_quick_punches(segments)) == [
+        ("Temp W.", "Repair 1", ct(8), ct(10)),
+    ]
+    assert (
+        smooth_quick_punches(
+            segments, blocked_windows={"Temp W.": ((ct(9, 0, 30), ct(9, 1)),)}
+        )
+        == segments
+    )
+
+
+def test_in_between_stint_that_overlaps_the_current_stint_stops_came_back():
+    segments = (
+        seg("Repair 1", ct(8), ct(9)),
+        seg("Repair 2", ct(8, 10), ct(9, 2)),
+        seg("Repair 1", ct(9, 3), ct(10)),
     )
 
     assert smooth_quick_punches(segments) == segments
