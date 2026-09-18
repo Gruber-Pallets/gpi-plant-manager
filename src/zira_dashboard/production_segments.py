@@ -265,10 +265,14 @@ def coalesce_display_scores(
     )
     unassigned = [score for score in scores if score.person_name is None]
     merged: list[SegmentScore] = []
+    latest_by_person: dict[tuple[str | None, int | None], int] = {}
     for score in named:
-        if merged and _can_join_display_scores(merged[-1], score, ignored_gaps):
-            merged[-1] = _join_display_scores(merged[-1], score)
+        key = (score.person_name, score.person_odoo_id)
+        latest = latest_by_person.get(key)
+        if latest is not None and _can_join_display_scores(merged[latest], score, ignored_gaps):
+            merged[latest] = _join_display_scores(merged[latest], score)
         else:
+            latest_by_person[key] = len(merged)
             merged.append(score)
     return tuple(sorted([*merged, *unassigned], key=_score_order))
 

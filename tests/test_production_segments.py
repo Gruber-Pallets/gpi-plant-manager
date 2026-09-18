@@ -126,6 +126,38 @@ def test_display_scores_keep_productive_gap_and_lunch_transfer_split():
     assert [row.person_name for row in lunch_transfer] == ["Jesus G.", "Ana M."]
 
 
+def test_display_scores_join_worker_across_lunch_when_another_worker_visited_between():
+    # 2026-09-18 Dismantler 2: Christian's 2-minute visit sat between Jose's
+    # morning and afternoon stints and blocked the lunch join.
+    jose_morning = _score(
+        "Jose C.", t(12), t(16), actual=100, goal=90, wc="Dismantler 2", segment_id=0
+    )
+    christian = _score(
+        "Christian C.", t(12, 2), t(12, 4), actual=0, goal=1, wc="Dismantler 2", segment_id=1
+    )
+    jose_afternoon = _score(
+        "Jose C.",
+        t(16, 30),
+        t(19),
+        actual=50,
+        goal=70,
+        active=True,
+        wc="Dismantler 2",
+        segment_id=2,
+    )
+
+    rows = coalesce_display_scores(
+        (jose_morning, christian, jose_afternoon),
+        ignored_gaps=((t(16), t(16, 30)),),
+    )
+
+    assert [(row.person_name, row.start_utc, row.end_utc) for row in rows] == [
+        ("Jose C.", t(12), t(19)),
+        ("Christian C.", t(12, 2), t(12, 4)),
+    ]
+    assert (rows[0].actual_units, rows[0].goal_units, rows[0].is_active) == (150, 160, True)
+
+
 def test_worker_coverage_split_policy_ignores_scheduled_break_boundaries():
     full = _score("Jesus G.", t(12), t(19), actual=500, goal=480, active=True)
     lunch_now = _score("Jesus G.", t(12), t(16), actual=300, goal=260)
