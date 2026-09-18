@@ -10,6 +10,19 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-09-18
+
+### Quick sign-in mix-ups smoothed out
+
+#### Features
+
+- **Tapping the wrong station, or signing out and back in by mistake, no longer chops up the dashboard bars.** If someone fixes it within 5 minutes, the bars and leaderboards show one steady stretch of work, and the pallets made in those minutes still count for them.
+- **Real work is never erased.** If pallets were really made during those few minutes, that time still counts as its own work.
+
+#### Fixes
+
+- **A worker's bar no longer splits at lunch just because someone else stopped by their station that day.**
+
 ## 2026-09-15
 
 ### Dashboards stay open overnight
