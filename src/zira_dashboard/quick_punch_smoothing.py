@@ -4,7 +4,9 @@ Two per-person rules, both bounded by ``QUICK_PUNCH_LIMIT``:
 
 1. Came back: a person who leaves station A and is back at A within the limit
    worked one continuous stint at A. A sign-out gap or blips at other
-   stations in between become A time.
+   stations in between become A time -- unless the meter proves a blip's
+   station made pallets during the blip that no one else there covers.
+   Merging would leave those pallets unassigned, so the blip stays.
 2. Wrong first pick: the first stint after signing in (start of day, or back
    from being away longer than the limit) that lasts no longer than the
    limit, followed within the limit by a different station, joins that next
@@ -70,18 +72,23 @@ def smooth_quick_punches(
     the gap does not.
 
     ``production_times_by_wc`` maps a station to the times its meter recorded
-    pallets (see ``production_times_from_samples``). The wrong-first-pick rule
-    fires only when the short stint's station has an entry with no time in
-    ``[start, end)``. None, or no entry for that station, means unknown, so the
-    rule does not fire. The came-back rule does not use it.
+    pallets (see ``production_times_from_samples``). A pallet at time ``t`` is
+    during a stint when ``start <= t < end``. The wrong-first-pick rule fires
+    only when the short stint's station has an entry with no pallet during
+    it. The came-back rule keeps a blip whose station has an entry with a
+    pallet during the blip that no other person's input segment at that
+    station covers. None, or no entry for a station, means unknown: the
+    wrong-first-pick rule does not fire there, and came-back merges as usual.
 
     Untouched segments keep their input order; a merged stint takes the
     position of its earliest input segment.
     """
     blocked_windows = blocked_windows or {}
     by_person: dict[PersonKey, list[_Stint]] = {}
+    segments_by_wc: dict[str, list[WorkSegment]] = {}
     for index, segment in enumerate(segments):
         by_person.setdefault(person_key(segment), []).append((index, segment))
+        segments_by_wc.setdefault(segment.wc_name, []).append(segment)
 
     placed: list[_Stint] = []
     for key, stints in by_person.items():
@@ -90,7 +97,9 @@ def smooth_quick_punches(
             key=lambda item: (item[1].start_utc, item[1].end_utc, item[0]),
         )
         blocked = tuple(blocked_windows.get(key, ()))
-        ordered = _apply_came_back(ordered, blocked, limit)
+        ordered = _apply_came_back(
+            ordered, blocked, production_times_by_wc, segments_by_wc, limit
+        )
         ordered = _apply_wrong_first_pick(
             ordered, blocked, production_times_by_wc, limit
         )
@@ -109,6 +118,8 @@ def _came_back_match(
     stints: Sequence[_Stint],
     i: int,
     blocked: Sequence[Window],
+    production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
+    segments_by_wc: Mapping[str, Sequence[WorkSegment]],
     limit: timedelta,
 ) -> int | None:
     _index, current = stints[i]
@@ -118,12 +129,18 @@ def _came_back_match(
             return None
         if candidate.wc_name != current.wc_name:
             continue
+        between = stints[i + 1 : j]
         if any(
             segment.start_utc < current.end_utc or segment.end_utc > candidate.start_utc
-            for _idx, segment in stints[i + 1 : j]
+            for _idx, segment in between
         ):
             return None
         if _crosses_blocked(current.end_utc, candidate.start_utc, blocked):
+            return None
+        if any(
+            _has_orphaned_pallets(segment, production_times_by_wc, segments_by_wc)
+            for _idx, segment in between
+        ):
             return None
         return j
     return None
@@ -132,12 +149,16 @@ def _came_back_match(
 def _apply_came_back(
     stints: Sequence[_Stint],
     blocked: Sequence[Window],
+    production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
+    segments_by_wc: Mapping[str, Sequence[WorkSegment]],
     limit: timedelta,
 ) -> list[_Stint]:
     stints = list(stints)
     i = 0
     while i < len(stints):
-        match = _came_back_match(stints, i, blocked, limit)
+        match = _came_back_match(
+            stints, i, blocked, production_times_by_wc, segments_by_wc, limit
+        )
         if match is None:
             i += 1
             continue
@@ -159,12 +180,50 @@ def _station_was_idle(
     Unknown -- no meter data passed, or none for that station -- counts as not
     idle, so a real short stint is never erased.
     """
-    if production_times_by_wc is None:
+    return _pallets_during(segment, production_times_by_wc) == ()
+
+
+def _has_orphaned_pallets(
+    segment: WorkSegment,
+    production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
+    segments_by_wc: Mapping[str, Sequence[WorkSegment]],
+) -> bool:
+    """Whether the meter proves pallets during ``segment`` that no one else covers.
+
+    Such pallets would become unassigned if the stint were merged away. A
+    pallet is covered by another person's segment at the same station that
+    holds it (``start <= t < end``). Unknown meter data proves nothing.
+    """
+    pallets = _pallets_during(segment, production_times_by_wc)
+    if not pallets:
         return False
+    key = person_key(segment)
+    others = tuple(
+        other
+        for other in segments_by_wc.get(segment.wc_name, ())
+        if person_key(other) != key
+    )
+    return any(
+        not any(other.start_utc <= at < other.end_utc for other in others)
+        for at in pallets
+    )
+
+
+def _pallets_during(
+    segment: WorkSegment,
+    production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
+) -> tuple[datetime, ...] | None:
+    """Pallet times at the stint's station during it, or None when unknown.
+
+    ``start <= t < end`` mirrors how ``production_segments.credit_work_segments``
+    decides which stint covers a sample.
+    """
+    if production_times_by_wc is None:
+        return None
     times = production_times_by_wc.get(segment.wc_name)
     if times is None:
-        return False
-    return not any(segment.start_utc <= at < segment.end_utc for at in times)
+        return None
+    return tuple(at for at in times if segment.start_utc <= at < segment.end_utc)
 
 
 def _is_wrong_first_pick(

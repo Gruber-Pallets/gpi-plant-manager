@@ -384,6 +384,161 @@ def test_timeline_scoring_smooths_a_wrong_first_pick_only_when_its_meter_was_idl
         assert captured["minutes"] == {(81, "Repair 2"): 60.0, (82, "Repair 1"): 50.0}
 
 
+def _meter_total(wc_name, samples, *, units=None, truncated=False):
+    from zira_dashboard.leaderboard import StationTotal
+    from zira_dashboard.stations import Station
+    from tests.people_performance_fixtures import START
+
+    return StationTotal(
+        station=Station(f"meter-{wc_name}", wc_name, "Repair", "Bay 1"),
+        units=sum(units for _at, units in samples) if units is None else units,
+        reading_count=len(samples),
+        truncated=truncated,
+        downtime_minutes=0,
+        active_minutes=60,
+        last_reading_at=samples[-1][0] if samples else None,
+        last_status="Working",
+        samples=samples,
+        active_intervals=((START, START + timedelta(minutes=60)),),
+    )
+
+
+def test_production_times_for_totals_matches_scoring_and_skips_bad_meters():
+    from tests.people_performance_fixtures import DAY, END, START
+
+    def minute(n):
+        return START + timedelta(minutes=n)
+
+    testing_rows = (
+        {
+            "id": 1,
+            "wc_name": "Repair 1",
+            "person_name": "Testing",
+            "employee_odoo_id": None,
+            "start_utc": minute(5),
+            "end_utc": minute(15),
+            "source": "testing",
+            "breakdown_id": None,
+        },
+        {
+            "id": 2,
+            "wc_name": "Repair 2",
+            "person_name": "Testing",
+            "employee_odoo_id": None,
+            "start_utc": minute(100),
+            "end_utc": None,  # still open: capped at the cap
+            "source": "testing",
+            "breakdown_id": None,
+        },
+    )
+    totals = (
+        # Testing pallets (start-inclusive, end-exclusive) and 0-unit readings
+        # are not pallets anyone made.
+        _meter_total(
+            "Repair 1",
+            ((minute(5), 2), (minute(10), 0), (minute(15), 3), (minute(20), 4)),
+        ),
+        _meter_total("Repair 2", ((minute(50), 1), (minute(150), 2))),
+        _meter_total("Repair 3", ()),
+        _meter_total("Truncated", ((minute(1), 1),), truncated=True),
+        _meter_total("Twice", ((minute(1), 1),)),
+        _meter_total("Twice", ((minute(2), 1),)),
+        _meter_total("Mismatch", ((minute(1), 1),), units=9),
+        _meter_total("Bad units", ((minute(1), float("nan")),), units=0),
+        _meter_total("Naive time", ((minute(1).replace(tzinfo=None), 1),)),
+    )
+
+    assert production_history.production_times_for_totals(
+        DAY, totals, attribution_rows=testing_rows, cap_utc=END
+    ) == {
+        "Repair 1": (minute(15), minute(20)),
+        "Repair 2": (minute(50),),
+        "Repair 3": (),
+    }
+
+
+@pytest.mark.parametrize(
+    ("day_meter", "repair_2_starts"),
+    (
+        # The day-wide meter proves Repair 1 idle: its short first pick joins
+        # Repair 2 even though only Repair 2 is being scored.
+        ({"Repair 1": (), "Repair 2": ()}, 0),
+        # Without it the scorer only knows its own station: Repair 1 unknown.
+        (None, 3),
+    ),
+)
+def test_timeline_scoring_smooths_the_full_day_but_scores_only_its_stations(
+    monkeypatch, day_meter, repair_2_starts
+):
+    from zira_dashboard import production_segments, settings_store, shift_config
+    from tests.people_performance_fixtures import DAY, END, START, span
+
+    def minute(n):
+        return START + timedelta(minutes=n)
+
+    captured = {}
+    monkeypatch.setattr(
+        shift_config,
+        "productive_minutes_in_window",
+        lambda day, start, end: (end - start).total_seconds() / 60,
+    )
+    monkeypatch.setattr(settings_store, "station_target", lambda station: 10.0)
+    monkeypatch.setattr(
+        production_segments,
+        "credit_work_segments",
+        lambda segments, **kwargs: captured.update(
+            segments=[
+                (item.person_odoo_id, item.wc_name, item.start_utc, item.end_utc)
+                for item in segments
+            ]
+        )
+        or {},
+    )
+    monkeypatch.setattr(production_segments, "score_work_segments", lambda *a, **k: {})
+
+    production_history.production_scores_for_timeline(
+        object(),
+        DAY,
+        (
+            span(81, "Worker", 0, 3, "Repair 1", is_open=False),
+            span(81, "Worker", 3, 60, "Repair 2", is_open=False),
+            span(82, "Other", 0, 60, "Repair 3", is_open=False),
+        ),
+        now_utc=END,
+        is_today=False,
+        window_start_utc=START,
+        window_end_utc=END,
+        station_totals=(_meter_total("Repair 2", ((minute(30), 12),)),),
+        attribution_rows=(),
+        production_times_by_wc=day_meter,
+    )
+
+    assert captured["segments"] == [(81, "Repair 2", minute(repair_2_starts), minute(60))]
+
+
+def test_timeline_scoring_returns_nothing_for_a_station_nobody_worked(monkeypatch):
+    from tests.people_performance_fixtures import DAY, END, START, span
+
+    # A malformed meter nobody was located at stays silent, as it did when
+    # People Performance only passed that station's spans.
+    malformed = _meter_total("Repair 1", (), units=10)
+
+    assert (
+        production_history.production_scores_for_timeline(
+            object(),
+            DAY,
+            (span(81, "Worker", 0, 60, "Repair 2", is_open=False),),
+            now_utc=END,
+            is_today=False,
+            window_start_utc=START,
+            window_end_utc=END,
+            station_totals=(malformed,),
+            attribution_rows=(),
+        )
+        == ()
+    )
+
+
 def test_timeline_scoring_rejects_naive_cap_before_reading_sources():
     from tests.people_performance_fixtures import DAY, END
 

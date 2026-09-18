@@ -207,23 +207,41 @@ def test_work_segments_from_timeline_smooths_quick_punches_before_clipping():
     ]
 
 
-def test_work_segments_from_timeline_never_bridges_a_location_conflict():
+@pytest.mark.parametrize(
+    # A work center on the middle span proves the status alone decides: it is
+    # never a valid stint either way, so only the blocking set can stop a bridge.
+    "middle_wc",
+    (None, "Repair 4"),
+)
+@pytest.mark.parametrize(
+    ("status", "bridged"),
+    (
+        ("conflicting_location", False),
+        ("unmapped_location", False),
+        ("stale_open_location", False),
+        ("pending_first_location", True),
+        ("missing_required_location", True),
+        ("exempt_no_location", True),
+    ),
+)
+def test_work_segments_from_timeline_never_bridges_a_location_conflict(
+    status, bridged, middle_wc
+):
     spans = (
         span(1, "Ana", at(13), at(14)),
-        span(1, "Ana", at(14), at(14, 2), status="conflicting_location", wc=None),
+        span(1, "Ana", at(14), at(14, 2), status=status, wc=middle_wc),
         span(1, "Ana", at(14, 2), at(15)),
-        span(2, "Bob", at(13), at(14)),
-        span(2, "Bob", at(14), at(14, 2), status="missing_required_location", wc=None),
-        span(2, "Bob", at(14, 2), at(15)),
     )
 
     segments = work_segments_from_timeline(spans, window_start_utc=START, window_end_utc=END)
 
-    assert _segment_shape(segments) == [
-        (1, "Repair 4", at(13), at(14)),
-        (1, "Repair 4", at(14, 2), at(15)),
-        (2, "Repair 4", at(13), at(15)),
-    ]
+    if bridged:
+        assert _segment_shape(segments) == [(1, "Repair 4", at(13), at(15))]
+    else:
+        assert _segment_shape(segments) == [
+            (1, "Repair 4", at(13), at(14)),
+            (1, "Repair 4", at(14, 2), at(15)),
+        ]
 
 
 def test_samples_in_a_smoothed_gap_are_credited_to_the_person():
@@ -382,6 +400,43 @@ def test_strict_inputs_smooth_a_wrong_first_pick_only_when_its_meter_was_idle(
     )
 
     assert _segment_shape(inputs.segments) == expected
+
+
+@pytest.mark.parametrize(
+    ("bounds", "error", "message"),
+    (
+        ((START.replace(tzinfo=None), END), TypeError, "timezone-aware"),
+        ((START, END.replace(tzinfo=None)), TypeError, "timezone-aware"),
+        ((END, START), ValueError, "positive duration"),
+        ((START, START), ValueError, "positive duration"),
+    ),
+)
+def test_strict_inputs_reject_bad_shift_bounds_before_reading_sources(
+    monkeypatch, bounds, error, message
+):
+    from zira_dashboard import attendance_timeline
+
+    monkeypatch.setattr(
+        attendance_timeline,
+        "timeline_for_range",
+        lambda *_a, **_k: pytest.fail("bad bounds read the attendance timeline"),
+    )
+    monkeypatch.setattr(
+        production_history,
+        "_metered_leaderboard",
+        lambda *_a, **_k: pytest.fail("bad bounds fetched production"),
+    )
+
+    with pytest.raises(error, match=message):
+        production_history._strict_inputs_for_day(
+            DAY,
+            object(),
+            now_utc=END,
+            mirror_health=SimpleNamespace(
+                baseline_completed_at=START, last_incremental_completed_at=END
+            ),
+            shift_bounds=bounds,
+        )
 
 
 def test_strict_branch_is_chosen_once_and_splits_duplicate_names_by_odoo_id(monkeypatch):

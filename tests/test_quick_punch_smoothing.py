@@ -445,3 +445,105 @@ def test_production_times_from_samples_keeps_only_pallet_timestamps():
         "Repair 2": (),
         "Repair 3": (),
     }
+
+
+DETOUR = (
+    seg("Repair 1", ct(8), ct(9)),
+    seg("Repair 2", ct(9), ct(9, 2)),
+    seg("Repair 1", ct(9, 3), ct(10)),
+)
+DETOUR_MERGED = [("Christian C.", "Repair 1", ct(8), ct(10))]
+
+
+def with_repair_2_pallets(*times):
+    return NO_PALLETS | {"Repair 2": tuple(times)}
+
+
+def test_detour_that_made_pallets_nobody_else_covers_is_kept():
+    assert smooth(DETOUR, production_times_by_wc=with_repair_2_pallets(ct(9, 1))) == DETOUR
+
+
+def test_detour_pallets_another_person_covers_still_merge():
+    bob = seg("Repair 2", ct(8, 30), ct(9, 30), person="Bob T.", odoo_id=6)
+
+    result = smooth((*DETOUR, bob), production_times_by_wc=with_repair_2_pallets(ct(9, 1)))
+
+    assert shape(result) == [*DETOUR_MERGED, ("Bob T.", "Repair 2", ct(8, 30), ct(9, 30))]
+
+
+@pytest.mark.parametrize(
+    ("pallet_at", "kept"),
+    (
+        (ct(8, 59), False),  # before the detour
+        (ct(9), True),  # the detour's first instant
+        (ct(9, 1, 59), True),
+        (ct(9, 2), False),  # the detour's end belongs to what comes next
+        (ct(9, 2, 30), False),  # in the sign-out gap, not the detour
+    ),
+)
+def test_orphaned_pallet_must_fall_inside_the_detour(pallet_at, kept):
+    result = smooth(DETOUR, production_times_by_wc=with_repair_2_pallets(pallet_at))
+
+    if kept:
+        assert result == DETOUR
+    else:
+        assert shape(result) == DETOUR_MERGED
+
+
+@pytest.mark.parametrize(
+    ("bob_start", "bob_end", "kept"),
+    (
+        (ct(9, 1), ct(9, 30), False),  # covers the pallet from its first instant
+        (ct(8, 30), ct(9, 1), True),  # left the station as the pallet landed
+    ),
+)
+def test_another_persons_cover_is_start_inclusive_and_end_exclusive(
+    bob_start, bob_end, kept
+):
+    bob = seg("Repair 2", bob_start, bob_end, person="Bob T.", odoo_id=6)
+
+    result = smooth((*DETOUR, bob), production_times_by_wc=with_repair_2_pallets(ct(9, 1)))
+
+    if kept:
+        assert result == (*DETOUR, bob)
+    else:
+        assert shape(result) == [*DETOUR_MERGED, shape((bob,))[0]]
+
+
+def test_orphaned_pallets_at_any_blip_of_a_multi_station_detour_keep_it():
+    segments = (
+        seg("Repair 1", ct(8), ct(9)),
+        seg("Repair 2", ct(9), ct(9, 1)),
+        seg("Repair 3", ct(9, 1), ct(9, 3)),
+        seg("Repair 1", ct(9, 4), ct(10)),
+    )
+
+    result = smooth(segments, production_times_by_wc=NO_PALLETS | {"Repair 3": (ct(9, 2),)})
+
+    assert result == segments
+
+
+def test_unknown_meter_data_never_stops_came_back():
+    assert shape(smooth(DETOUR, production_times_by_wc=None)) == DETOUR_MERGED
+    assert shape(smooth(DETOUR, production_times_by_wc={"Repair 1": ()})) == DETOUR_MERGED
+
+
+def test_christians_detour_still_merges_because_jose_covers_dismantler_2():
+    jose = seg("Dismantler 2", ct(7), ct(11), person="Jose C.", odoo_id=24)
+    segments = (
+        seg("Dismantler 3", ct(7), ct(7, 2, 10)),
+        seg("Dismantler 2", ct(7, 2, 10), ct(7, 4, 27)),
+        seg("Dismantler 3", ct(7, 4, 27), ct(11)),
+        jose,
+    )
+
+    result = smooth(
+        segments,
+        production_times_by_wc=NO_PALLETS | {"Dismantler 2": (ct(7, 3), ct(7, 4))},
+    )
+
+    assert shape(result) == [
+        ("Christian C.", "Dismantler 3", ct(7), ct(11)),
+        ("Jose C.", "Dismantler 2", ct(7), ct(11)),
+    ]
+    assert result[1] is jose
