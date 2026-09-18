@@ -83,9 +83,9 @@ A boundary at exactly 5:00 counts as quick (`<=`).
      station tagged (`pending_first_location`, `missing_required_location`,
      `exempt_no_location`) do not block smoothing. Those are the brief
      no-station moments a transfer produces.
-   - A detour whose in-between stint runs past the return. That only happens
-     with overlapping, bad source data, and it is left unsmoothed rather than
-     absorbing a long stint.
+   - A detour whose in-between stint starts before the person left, or runs
+     past their return. That only happens with overlapping, bad source data,
+     and it is left unsmoothed rather than absorbing a long stint.
 
 At the live edge the picture can change retroactively. For example, while
 Christian was on Dismantler 2 at 07:03, the wrong-first-pick rule showed him at
@@ -98,8 +98,10 @@ real gap, and the existing display join covers it.
 
 ## Architecture
 
-- **New pure module** `src/zira_dashboard/quick_punch_smoothing.py`: one public
-  function, `smooth_quick_punches(segments, *, limit=QUICK_PUNCH_LIMIT)`. It
+- **New pure module** `src/zira_dashboard/quick_punch_smoothing.py`:
+  `smooth_quick_punches(segments, *, blocked_windows=None, limit=QUICK_PUNCH_LIMIT)`
+  plus `person_key(segment)`, which defines the grouping key: the Odoo ID, or
+  the name when there is no ID. `blocked_windows` must use that same key. It
   takes and returns `WorkSegment`s, with no DB, network, or clock access.
   Smoothed segments keep `source="odoo"`, the person's name and ID, and the
   absorbing station's name.
