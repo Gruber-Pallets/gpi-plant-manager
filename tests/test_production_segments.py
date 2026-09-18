@@ -158,6 +158,63 @@ def test_display_scores_join_worker_across_lunch_when_another_worker_visited_bet
     assert (rows[0].actual_units, rows[0].goal_units, rows[0].is_active) == (150, 160, True)
 
 
+def test_display_scores_join_worker_with_their_latest_stint_not_their_first():
+    jose_a = _score("Jose C.", t(12), t(13), actual=10, goal=10, segment_id=0)
+    ana = _score("Ana M.", t(13), t(13, 10), actual=1, goal=1, segment_id=1)
+    # 13:00 -> 14:00 is productive time, so B must not join A.
+    jose_b = _score("Jose C.", t(14), t(15), actual=20, goal=20, segment_id=2)
+    # 15:00 -> 16:30 is an ignored break, so C joins B.
+    jose_c = _score("Jose C.", t(16, 30), t(18), actual=30, goal=30, segment_id=3)
+
+    rows = coalesce_display_scores(
+        (jose_a, ana, jose_b, jose_c),
+        ignored_gaps=((t(15), t(16, 30)),),
+    )
+
+    assert [(row.person_name, row.start_utc, row.end_utc) for row in rows] == [
+        ("Jose C.", t(12), t(13)),
+        ("Ana M.", t(13), t(13, 10)),
+        ("Jose C.", t(14), t(18)),
+    ]
+    assert rows[2].actual_units == 50
+
+
+def test_display_scores_join_worker_across_lunch_another_worker_covered():
+    jose_morning = _score("Jose C.", t(12), t(16), actual=100, goal=90, segment_id=0)
+    ana_cover = _score("Ana M.", t(16, 5), t(16, 20), actual=5, goal=5, segment_id=1)
+    jose_afternoon = _score(
+        "Jose C.", t(16, 30), t(19), actual=50, goal=70, active=True, segment_id=2
+    )
+
+    rows = coalesce_display_scores(
+        (jose_morning, ana_cover, jose_afternoon),
+        ignored_gaps=((t(16), t(16, 30)),),
+    )
+
+    assert [(row.person_name, row.start_utc, row.end_utc) for row in rows] == [
+        ("Jose C.", t(12), t(19)),
+        ("Ana M.", t(16, 5), t(16, 20)),
+    ]
+    assert rows[0].is_active is True
+
+
+def test_display_scores_join_each_worker_of_a_pair_across_lunch():
+    jose_morning = _score("Jose C.", t(12), t(16), actual=100, goal=90, segment_id=0)
+    ana_morning = _score("Ana M.", t(12), t(16), actual=80, goal=90, segment_id=1)
+    jose_afternoon = _score("Jose C.", t(16, 30), t(19), actual=50, goal=70, segment_id=2)
+    ana_afternoon = _score("Ana M.", t(16, 30), t(19), actual=60, goal=70, segment_id=3)
+
+    rows = coalesce_display_scores(
+        (jose_morning, ana_morning, jose_afternoon, ana_afternoon),
+        ignored_gaps=((t(16), t(16, 30)),),
+    )
+
+    assert [(row.person_name, row.start_utc, row.end_utc) for row in rows] == [
+        ("Jose C.", t(12), t(19)),
+        ("Ana M.", t(12), t(19)),
+    ]
+
+
 def test_worker_coverage_split_policy_ignores_scheduled_break_boundaries():
     full = _score("Jesus G.", t(12), t(19), actual=500, goal=480, active=True)
     lunch_now = _score("Jesus G.", t(12), t(16), actual=300, goal=260)
@@ -371,6 +428,53 @@ def test_display_scores_do_not_join_same_name_with_different_odoo_identity():
     rows = coalesce_display_scores((morning, afternoon), ignored_gaps=((t(12, 30), t(13)),))
 
     assert [row.person_odoo_id for row in rows] == [44, 45]
+
+
+def test_display_scores_do_not_join_different_odoo_identity_past_another_worker():
+    common = {
+        "wc_name": "Repair 1",
+        "source": "odoo",
+        "productive_minutes": 30,
+        "actual_units": 10,
+        "goal_units": 10,
+        "runway_units": 10,
+        "is_active": False,
+        "result": "ahead",
+    }
+    morning = SegmentScore(
+        segment_id=1,
+        person_name="Alex Worker",
+        start_utc=t(12),
+        end_utc=t(12, 30),
+        person_odoo_id=44,
+        **common,
+    )
+    visitor = SegmentScore(
+        segment_id=2,
+        person_name="Ana M.",
+        start_utc=t(12, 5),
+        end_utc=t(12, 10),
+        person_odoo_id=50,
+        **common,
+    )
+    afternoon = SegmentScore(
+        segment_id=3,
+        person_name="Alex Worker",
+        start_utc=t(13),
+        end_utc=t(13, 30),
+        person_odoo_id=45,
+        **common,
+    )
+
+    rows = coalesce_display_scores(
+        (morning, visitor, afternoon), ignored_gaps=((t(12, 30), t(13)),)
+    )
+
+    assert [(row.person_name, row.person_odoo_id) for row in rows] == [
+        ("Alex Worker", 44),
+        ("Ana M.", 50),
+        ("Alex Worker", 45),
+    ]
 
 
 def test_display_score_join_keeps_matching_odoo_identity():

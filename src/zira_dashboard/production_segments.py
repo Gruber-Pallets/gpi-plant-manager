@@ -258,14 +258,20 @@ def coalesce_display_scores(
     *,
     ignored_gaps: Sequence[tuple[datetime, datetime]] = (),
 ) -> tuple[SegmentScore, ...]:
-    """Join administrative break splits without changing sample credit."""
+    """Join administrative break splits without changing sample credit.
+
+    Callers pass one station's scores. Each person's stint is joined with that
+    same person's latest merged stint when the gap between them is zero or sits
+    entirely inside an ignored break, so other workers' stints in between never
+    block the join.
+    """
     named = sorted(
         (score for score in scores if score.person_name is not None),
         key=_score_order,
     )
     unassigned = [score for score in scores if score.person_name is None]
     merged: list[SegmentScore] = []
-    latest_by_person: dict[tuple[str | None, int | None], int] = {}
+    latest_by_person: dict[tuple[str, int | None], int] = {}
     for score in named:
         key = (score.person_name, score.person_odoo_id)
         latest = latest_by_person.get(key)
