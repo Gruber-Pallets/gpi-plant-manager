@@ -389,7 +389,10 @@ def _came_back_match(
             return None
         if candidate.wc_name != current.wc_name:
             continue
-        if any(segment.end_utc > candidate.start_utc for _idx, segment in stints[i + 1 : j]):
+        if any(
+            segment.start_utc < current.end_utc or segment.end_utc > candidate.start_utc
+            for _idx, segment in stints[i + 1 : j]
+        ):
             return None
         if _crosses_blocked(current.end_utc, candidate.start_utc, blocked):
             return None
@@ -462,7 +465,7 @@ def _apply_wrong_first_pick(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `ZIRA_API_KEY=test .venv/bin/python -m pytest tests/test_quick_punch_smoothing.py -q`
-Expected: all 19 tests pass.
+Expected: all 19 tests pass. (Review follow-up `6d37f59d` added the overlap guard shown above plus edge, rule-order and key tests; the file now has 29 tests.)
 
 - [ ] **Step 5: Lint**
 
