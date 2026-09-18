@@ -76,6 +76,16 @@ A boundary at exactly 5:00 counts as quick (`<=`).
    - Anything longer than 5 minutes.
    - Other people's stints. Smoothing never moves one person's time onto
      another person.
+   - Any stretch that overlaps a `conflicting_location`, `unmapped_location`,
+     or `stale_open_location` span for that person. This keeps the existing
+     promise that pallet credit is never invented while Odoo's location data
+     conflicts or is unknown. Moments when the person was clocked in without a
+     station tagged (`pending_first_location`, `missing_required_location`,
+     `exempt_no_location`) do not block smoothing. Those are the brief
+     no-station moments a transfer produces.
+   - A detour whose in-between stint runs past the return. That only happens
+     with overlapping, bad source data, and it is left unsmoothed rather than
+     absorbing a long stint.
 
 At the live edge the picture can change retroactively. For example, while
 Christian was on Dismantler 2 at 07:03, the wrong-first-pick rule showed him at
@@ -94,10 +104,15 @@ real gap, and the existing display join covers it.
   Smoothed segments keep `source="odoo"`, the person's name and ID, and the
   absorbing station's name.
 - **Single call site:** `assignment_windows.work_segments_from_timeline`.
-  Build unclipped segments from valid spans, smooth them per person, then clip
-  to the requested window and drop non-positive results. Smoothing on true
-  punch times means someone who clocked in early is not mistaken for a short
-  blip at the window start.
+  Build unclipped segments from valid spans and collect each person's blocking
+  windows from the non-valid spans listed above. Smooth per person, then clip to
+  the requested window and drop non-positive results. Smoothing sees as much
+  punch history as the caller's spans carry. Timeline spans arrive already
+  clipped to the range the caller read, so a stint cut at that boundary is
+  judged by its visible length.
+- **Order preserved:** people and stints that smoothing does not touch keep
+  their original order in the output. A merged stint takes the position of its
+  earliest input stint.
 - Every pallet-credit consumer already goes through
   `work_segments_from_timeline`, so they all receive smoothed stints with no
   other wiring:
@@ -161,8 +176,8 @@ Pure unit tests in `tests/test_quick_punch_smoothing.py`:
 
 Integration tests:
 
-- `work_segments_from_timeline`: smoothing runs before clipping. An early
-  clock-in is not treated as a blip.
+- `work_segments_from_timeline`: smoothing runs before clipping. It never
+  bridges a conflicting location, and it does bridge a no-station moment.
 - `credit_work_segments`: meter samples inside a filled gap are credited to the
   person instead of going unassigned.
 - `coalesce_display_scores` regression: Jose's two lunch-split stints join even
