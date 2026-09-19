@@ -197,6 +197,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
    Use an integer phase (e.g. 0, 1, 2, 3, 4, 5). Check `_validate_operation_progress` and any reservation logic for assumptions about order.
 2. **Fixer jobs:** a job whose `item_key` starts with `quick_punch_fixes.ITEM_KEY_PREFIX` (`"quick-punch:"`) gets special handling. Import the constant lazily, or define the prefix in `attendance_corrections` and have `quick_punch_fixes` import it. Pick one owner and document it.
    - **(a) Attempt cap:** once its `attempt_count` reaches `QUICK_PUNCH_MAX_ATTEMPTS = 6` and it hits another recoverable failure, it transitions to `failed` with a job event (outcome `failed`, reason `attempt_limit`) instead of scheduling a retry.
+
+     *As built, after review:* the cap applies only while no Odoo write has completed and the job hasn't been verified. After the first write, or after verification, fixer jobs retry uncapped until they converge, like manager jobs. A job counts as a fixer job only when the `item_key` prefix AND `actor_email == QUICK_PUNCH_ACTOR_UPN` both match. The constants `QUICK_PUNCH_ITEM_KEY_PREFIX`, `QUICK_PUNCH_ACTOR_UPN` and `QUICK_PUNCH_ACTOR_NAME` are owned by `attendance_corrections`. Fixer failures are left out of the attendance readiness blockers. The failure event detail carries the completed/total operations, the deleted IDs, and the original cause.
    - **(b) Completion audit:** `_complete_with_audit` records `action="quick_punch_merged"`, `item_kind="quick_punch_fix"`, `category_label="Quick-punch auto-fix"`, `person_name` (from the job's stored person name, if the job carries one; otherwise leave it None), `actor_upn`/`actor_name` from the job, `before_value`/`after_value` from the job's stored summaries, and `source="auto"`.
    - **Summaries:** store both on the job at creation, in a new nullable `audit_summary` JSONB column on `attendance_correction_jobs`. Add it with `ALTER TABLE … ADD COLUMN IF NOT EXISTS` in `_schema.py`, and pass it through `create_job_from_preview(..., audit_summary=None)`.
    - **Manager jobs:** they keep their exact current audit event.
@@ -670,7 +672,7 @@ Note one case explicitly in the docstring or tests. For a first pick whose short
 - Test `tests/test_quick_punch_fixer.py`.
 
 **`quick_punch_fixer.py` API:**
-- `SYSTEM_ACTOR_UPN = "system:quick-punch"`, `SYSTEM_ACTOR_NAME = "Quick-punch auto-fix"`.
+- The system actor is `attendance_corrections.QUICK_PUNCH_ACTOR_UPN` / `QUICK_PUNCH_ACTOR_NAME` (`"system:quick-punch"` / `"Quick-punch auto-fix"`). Import them; don't redefine. `quick_punch_fixes.ITEM_KEY_PREFIX` must likewise be `attendance_corrections.QUICK_PUNCH_ITEM_KEY_PREFIX` (import it).
 - `run_for_day(day, *, now_utc, mode, client, apply: bool) -> FixRun` is shared by the tick and the backfill. `FixRun` holds the scan, the payroll-skipped employees, the active-job-skipped employees, the deduped item keys, and the created or previewed keys.
 - `tick(now_utc=None) -> None`. It reads `quick_punch_fix_settings.current().mode` and returns immediately when `off`. Otherwise it calls `run_for_day(today, mode=mode, client=deps.client, apply=True)`. It catches and logs any exception (a warning naming the exception type), so the warmer never dies.
 
@@ -734,7 +736,7 @@ Note one case explicitly in the docstring or tests. For a first pick whose short
    - Use a distinct glyph (e.g. ⤳) and label each event: Preview ("Would merge") or Live ("Merged").
    - `quick_punch_failed` renders as a failure line.
    - Other events render exactly as before.
-3. **Failure alert:** add an urgent Exception Inbox section, "Quick-punch fixes that need a look", listing fixer jobs in `failed` status from the last 14 days. Each shows the person, the before summary, and the failure reason, with a link to the correction job page or `/exceptions?…` if one exists.
+3. **Failure alert:** use an alert key namespace distinct from the job's `quick-punch:` key (e.g. `quick-punch-alert:<job_id>`). Read the failure event's detail (`completed_operations`, `total_operations`, `deleted_attendance_ids`, `cause`). When any operation completed, say plainly that Odoo was partly changed and name the time range to check. Translate reason codes into plain words: `attempt_limit` becomes "Odoo kept refusing the change", and `*source_changed*` becomes "Someone changed these punches in Odoo first". Add an urgent Exception Inbox section, "Quick-punch fixes that need a look", listing fixer jobs in `failed` status from the last 14 days. Each shows the person, the before summary, and the failure reason, with a link to the correction job page or `/exceptions?…` if one exists.
    - Each row has a "Mark checked" action that records `inbox_events` action `quick_punch_failure_ack` with the real actor. Acknowledged failures leave the section.
    - Hide the section when it is empty, like the other inbox categories.
    - Follow how `auto_lunch_guard` publishes its alert (`auto_lunch_guard._alert_for` / `current_snapshot`, wired at `exception_inbox.py` ~48-59, ~648, section ~907-917).
@@ -795,6 +797,6 @@ If a `## 2026-09-18` section already exists, add this as a new `###` deploy entr
 
 - [ ] **Step 2:** Run the full suite and ruff: `ZIRA_API_KEY=test .venv/bin/python -m pytest -q -p no:cacheprovider` and `.venv/bin/ruff check src tests scripts`. Expect 0 failures.
 - [ ] **Step 3:** Read-only production check. Use the prod public DSN with `default_transaction_read_only=on`, the way the smoothing plan's Task 4 did; never pytest. Build today's scan with `quick_punch_fixes.find_fixes` from the mirror spans, no meter data, and today's breaks. Print the fixes and skips. Expect Christian's 2026-09-18 detour, blocked only by `meter_not_current` since no meters are loaded, and nothing unexpected.
-- [ ] **Step 4:** Commit the changelog, `git fetch`, then `git push origin main`.
+- [ ] **Step 4:** Before pushing, run a read-only production `SELECT status, count(*) FROM attendance_correction_jobs WHERE status IN ('planned','applying','verifying','recalculating') GROUP BY status`. It must return no rows, because the new operation order would fail an in-flight legacy job. Then commit the changelog, `git fetch`, and `git push origin main`.
 - [ ] **Step 5:** Confirm the Railway deploy is SUCCESS and `/healthz` returns 200. Confirm the new tables exist through a read-only SELECT of `quick_punch_fix_settings` (mode `preview`). A few minutes later, confirm the fixer tick is running without errors: `railway logs` and grep for `quick-punch`.
 - [ ] **Step 6:** Hand off to Dale. Tell him where the Preview lines appear and how to switch to Live. After he switches to Live, run `python -m scripts.quick_punch_backfill` (dry run) against production through `railway run`, show him the list, and apply with `--yes` only after his OK.
