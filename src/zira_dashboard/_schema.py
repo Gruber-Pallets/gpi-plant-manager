@@ -1642,6 +1642,29 @@ CREATE TABLE IF NOT EXISTS auto_lunch_setting_events (
 CREATE INDEX IF NOT EXISTS auto_lunch_setting_events_changed_at_idx
   ON auto_lunch_setting_events (changed_at DESC, id DESC);
 
+-- Quick-punch fixer mode (2026-09-18). Singleton row (id=1): 'off' leaves
+-- Odoo alone, 'preview' (default) only records what it would fix, 'live'
+-- merges quick sign-in mistakes in Odoo.
+CREATE TABLE IF NOT EXISTS quick_punch_fix_settings (
+  id    INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  mode  TEXT NOT NULL DEFAULT 'preview' CHECK (mode IN ('off','preview','live'))
+);
+INSERT INTO quick_punch_fix_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- Append-only quick-punch fixer mode history, audited like Auto-Lunch. A NULL
+-- before_mode marks the first observed baseline.
+CREATE TABLE IF NOT EXISTS quick_punch_fix_setting_events (
+  id          BIGSERIAL PRIMARY KEY,
+  before_mode TEXT CHECK (before_mode IN ('off','preview','live')),
+  after_mode  TEXT NOT NULL CHECK (after_mode IN ('off','preview','live')),
+  actor_upn   TEXT,
+  actor_name  TEXT,
+  source      TEXT NOT NULL CHECK (source IN ('settings','external','baseline')),
+  changed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS quick_punch_fix_setting_events_changed_at_idx
+  ON quick_punch_fix_setting_events (changed_at DESC, id DESC);
+
 -- Forklift demand-advisor settings (2026-06-27). Singleton row (id=1). Tunes
 -- the scheduler's forklift-driver recommendation: enabled toggle, per-driver
 -- throughput (calls_per_hour) trimmed by target_utilization to an effective

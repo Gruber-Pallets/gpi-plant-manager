@@ -533,6 +533,19 @@ def settings_page(
     except Exception:
         logging.warning("Auto-Lunch history unavailable", exc_info=True)
         auto_lunch_history_ctx = []
+    from .. import quick_punch_fix_settings
+    quick_punch_fix_ctx = settings_context.quick_punch_fix_context(
+        quick_punch_fix_settings.current()
+    )
+    try:
+        quick_punch_fix_history_ctx = (
+            settings_context.quick_punch_fix_history_context(
+                quick_punch_fix_settings.recent_events(20)
+            )
+        )
+    except Exception:
+        logging.warning("Quick-punch fixer history unavailable", exc_info=True)
+        quick_punch_fix_history_ctx = []
     # Forklift demand-advisor settings + a live forecast summary for the next
     # working day. Wrapped so the settings page never 500s if the forklift data
     # source (or DB) is unavailable.
@@ -594,6 +607,8 @@ def settings_page(
             "department_rounding": department_rounding_ctx,
             "auto_lunch": auto_lunch_ctx,
             "auto_lunch_history": auto_lunch_history_ctx,
+            "quick_punch_fix": quick_punch_fix_ctx,
+            "quick_punch_fix_history": quick_punch_fix_history_ctx,
             "work_schedules": work_schedules_ctx,
             "available_schedules": available_schedules,
             "integration_status": integration_status,
@@ -950,6 +965,31 @@ async def settings_save_auto_lunch(request: Request):
         )
         auto_lunch_settings.save(
             updated, actor_upn=actor_upn, actor_name=actor_name
+        )
+        if (request.headers.get("accept") or "").startswith("application/json"):
+            return JSONResponse({"ok": True})
+        return RedirectResponse(url="/settings?saved=1&section=timeclock", status_code=303)
+
+    return await asyncio.to_thread(_work)
+
+
+@router.post("/settings/quick_punch_fix")
+async def settings_save_quick_punch_fix(request: Request):
+    """Save the quick-punch fixer mode (Off / Preview / Live). Audited with
+    the request's actor; takes effect immediately (the store updates its
+    in-process cache). An unknown mode is rejected, never guessed."""
+    from .. import inbox_log, quick_punch_fix_settings
+    form = await request.form()
+    actor_upn, actor_name = inbox_log.actor_from(request)
+    mode = str(form.get("mode") or "").strip().lower()
+    if mode not in quick_punch_fix_settings.MODES:
+        return JSONResponse({"ok": False, "error": "invalid mode"}, status_code=400)
+
+    def _work():
+        quick_punch_fix_settings.save(
+            quick_punch_fix_settings.Settings(mode=mode),
+            actor_upn=actor_upn,
+            actor_name=actor_name,
         )
         if (request.headers.get("accept") or "").startswith("application/json"):
             return JSONResponse({"ok": True})

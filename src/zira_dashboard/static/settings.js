@@ -316,6 +316,7 @@
   attachAutosaver(document.getElementById('saturday-schedule-form'), '/settings/saturday_schedule');
   attachAutosaver(document.getElementById('wc-form'), '/settings/work_centers');
   attachAutosaver(document.getElementById('auto-lunch-form'), '/settings/auto_lunch');
+  attachAutosaver(document.getElementById('quick-punch-fix-form'), '/settings/quick_punch_fix');
   document.querySelectorAll('form.ws-rounding-fields').forEach(f => {
     attachAutosaver(f, '/settings/rounding_system');
   });

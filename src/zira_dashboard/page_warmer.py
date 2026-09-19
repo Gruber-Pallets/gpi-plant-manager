@@ -74,7 +74,9 @@ def warm_once() -> None:
 
 def warm_inbox_once() -> None:
     """Force-refresh the inbox top-nav sub-caches (assignments-todo +
-    late-report) and publish the Auto-Lunch settings guard. ``build_summary()``
+    late-report), publish the Auto-Lunch settings guard, and audit/refresh the
+    quick-punch fixer mode (so a direct DB edit is logged and every process
+    picks it up within one tick). ``build_summary()``
     renders these into the Inbox badge on
     EVERY page via _topnav.html; their 30 s in-process TTL doesn't slide on
     hits, so without this a human repeatedly pays the cold Zira/Odoo cascade
@@ -87,6 +89,13 @@ def warm_inbox_once() -> None:
         auto_lunch_guard.refresh()
     except Exception as e:  # noqa: BLE001 — warmer must never bubble
         _log.warning("page_warmer: auto-lunch guard refresh failed: %s", e)
+    try:
+        from . import quick_punch_fix_settings
+        quick_punch_fix_settings.reconcile_external_change()
+    except Exception as e:  # noqa: BLE001 — warmer must never bubble
+        _log.warning(
+            "page_warmer: quick-punch fixer setting reconcile failed: %s", e
+        )
     try:
         assignments_todo_payload(force=True)
     except Exception as e:  # noqa: BLE001 — warmer must never bubble

@@ -250,11 +250,9 @@ def _auto_lunch_value_label(row: dict, prefix: str) -> str:
 
 
 def auto_lunch_history_context(events: list[dict]) -> list[dict]:
-    from . import shift_config
     shaped = []
     for row in events:
-        source = row.get("source")
-        baseline = source == "baseline"
+        baseline = row.get("source") == "baseline"
         has_before = all(
             row.get(field) is not None
             for field in (
@@ -264,21 +262,63 @@ def auto_lunch_history_context(events: list[dict]) -> list[dict]:
                 "before_flex_minutes",
             )
         )
-        if baseline:
-            actor_label = "Monitoring started"
-        elif source == "external":
-            actor_label = "Outside app / detected automatically"
-        else:
-            actor_label = row.get("actor_name") or row.get("actor_upn") or "Unknown manager"
-        changed_at = row["changed_at"].astimezone(shift_config.SITE_TZ)
         shaped.append({
-            "time_label": changed_at.strftime("%-m/%-d/%Y %-I:%M %p"),
+            "time_label": _setting_event_time_label(row),
             "before_label": (
                 _auto_lunch_value_label(row, "before") if has_before else None
             ),
             "after_label": _auto_lunch_value_label(row, "after"),
-            "actor_label": actor_label,
+            "actor_label": _setting_event_actor_label(row),
             "has_before": has_before,
             "is_baseline": baseline,
+        })
+    return shaped
+
+
+def _setting_event_actor_label(row: dict) -> str:
+    """Who made an audited setting change, in plain words."""
+    source = row.get("source")
+    if source == "baseline":
+        return "Monitoring started"
+    if source == "external":
+        return "Outside app / detected automatically"
+    return row.get("actor_name") or row.get("actor_upn") or "Unknown manager"
+
+
+def _setting_event_time_label(row: dict) -> str:
+    from . import shift_config
+    changed_at = row["changed_at"].astimezone(shift_config.SITE_TZ)
+    return changed_at.strftime("%-m/%-d/%Y %-I:%M %p")
+
+
+_QUICK_PUNCH_FIX_MODE_LABELS = {
+    "off": "Off",
+    "preview": "Preview",
+    "live": "Live",
+}
+
+
+def quick_punch_fix_context(settings) -> dict:
+    return {"mode": settings.mode}
+
+
+def _quick_punch_fix_mode_label(mode) -> str:
+    return _QUICK_PUNCH_FIX_MODE_LABELS.get(mode, str(mode))
+
+
+def quick_punch_fix_history_context(events: list[dict]) -> list[dict]:
+    shaped = []
+    for row in events:
+        has_before = row.get("before_mode") is not None
+        shaped.append({
+            "time_label": _setting_event_time_label(row),
+            "before_label": (
+                _quick_punch_fix_mode_label(row["before_mode"])
+                if has_before else None
+            ),
+            "after_label": _quick_punch_fix_mode_label(row["after_mode"]),
+            "actor_label": _setting_event_actor_label(row),
+            "has_before": has_before,
+            "is_baseline": row.get("source") == "baseline",
         })
     return shaped

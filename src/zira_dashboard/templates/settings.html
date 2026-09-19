@@ -804,6 +804,49 @@
       {% endif %}
     </div>
 
+    <form method="post" action="/settings/quick_punch_fix" id="quick-punch-fix-form">
+      <h3>Quick-punch fixer</h3>
+      <p class="help">
+        Merges sign-outs and wrong-station taps fixed within 5 minutes into one
+        continuous Odoo record. Never touches days payroll has processed.
+      </p>
+
+      <h4 class="rounding-subhead">Mode</h4>
+      <div style="display:flex; flex-direction:column; gap:.45rem; margin:.4rem 0 1.1rem">
+        <label><input type="radio" name="mode" value="off"
+               {% if quick_punch_fix.mode == 'off' %}checked{% endif %}>
+          <strong>Off</strong> &mdash; Don't touch Odoo.</label>
+        <label><input type="radio" name="mode" value="preview"
+               {% if quick_punch_fix.mode == 'preview' %}checked{% endif %}>
+          <strong>Preview</strong> &mdash; List what would be fixed in the
+          Exception Inbox archive, but don't change Odoo.</label>
+        <label><input type="radio" name="mode" value="live"
+               {% if quick_punch_fix.mode == 'live' %}checked{% endif %}>
+          <strong>Live</strong> &mdash; Fix quick sign-in mistakes in Odoo
+          automatically.</label>
+      </div>
+    </form>
+
+    <div id="quick-punch-fix-history" style="margin-top:1rem">
+      <h4 class="rounding-subhead">Recent quick-punch fixer changes</h4>
+      {% if quick_punch_fix_history %}
+        <ul style="font-size:.88rem;line-height:1.5;margin:.35rem 0 0 1.2rem">
+          {% for event in quick_punch_fix_history %}
+          <li>
+            <strong>{{ event.time_label }}</strong> · {{ event.actor_label }}<br>
+            {% if event.has_before %}
+              {{ event.before_label }} → {{ event.after_label }}
+            {% else %}
+              {{ event.after_label }}
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="help">No changes recorded yet.</p>
+      {% endif %}
+    </div>
+
     </div><!-- /tc-tab-rules -->
 
     <div id="tc-tab-activity" class="tc-panel" role="tabpanel" aria-label="Activity" style="display:none">
