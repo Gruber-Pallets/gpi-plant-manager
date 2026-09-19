@@ -796,9 +796,13 @@ Note one case explicitly in the docstring or tests. For a first pick whose short
 - **When someone taps the wrong station, or signs out and back in by mistake, the app can now fix the time clock record too, not just the dashboards.** It joins the pieces into one steady record, so every screen and report matches.
 - **It starts in "Preview".** For now it only lists what it would fix in the Exception Inbox history. A manager can switch it to "Live" in Settings when the list looks right.
 - **It never changes days payroll has already finished.**
+
+#### Fixes
+
+- **When a manager moves someone's time to a different station, the fix now goes through.** Before, some of these fixes got stuck or failed and had to be redone, like a fix that ended while the person was still clocked in.
 ```
 
-If a `## 2026-09-18` section already exists, add this as a new `###` deploy entry under it, above the earlier one.
+If a `## 2026-09-18` section already exists, add this as a new `###` deploy entry under it, above the earlier one. The Fixes bullet covers the correction-engine order fixes that ship in the same push (`44841bd4` and the commit "fix: free a still-open row's time before correcting the range before it").
 
 - [ ] **Step 2:** Run the full suite and ruff: `ZIRA_API_KEY=test .venv/bin/python -m pytest -q -p no:cacheprovider` and `.venv/bin/ruff check src tests scripts`. Expect 0 failures.
 - [ ] **Step 3:** Read-only production check. Use the prod public DSN with `default_transaction_read_only=on`, the way the smoothing plan's Task 4 did; never pytest. Build today's scan with `quick_punch_fixes.find_fixes` from the mirror spans, no meter data, and today's breaks. Print the fixes and skips. Expect Christian's 2026-09-18 detour, blocked only by `meter_not_current` since no meters are loaded, and nothing unexpected.
