@@ -692,6 +692,12 @@ Note one case explicitly in the docstring or tests. For a first pick whose short
     - Call `attendance_corrections.correction_preview(item_key=fix.item_key, employee_odoo_ids=[fix.employee_odoo_id], target_work_center_name=fix.wc_name, start_utc=fix.start_utc, end_utc=fix.end_utc, merge=True)`.
     - Then `create_job_from_preview(preview, actor_upn=SYSTEM_ACTOR_UPN, actor_name=SYSTEM_ACTOR_NAME, audit_summary={"person_name": ..., "before": ..., "after": ...})`. Match the real signature: `grep -n "def create_job_from_preview" -A20`.
     - If the preview's plan has no operations (already fixed), do nothing.
+    - **Pin the source rows** (added after the Task 1 review). The preview re-reads live Odoo, which can differ from the mirror the fix was detected on. After `correction_preview`, create the job only if both of these hold:
+      - The Odoo IDs of the plan's source rows that overlap `[fix.start_utc, fix.end_utc or ∞)` equal `fix.source_attendance_ids`.
+      - An open row is among them exactly when `fix.end_utc is None`.
+
+      Otherwise skip this fix for the tick and log it at info level. The next tick re-detects from fresh data. This protects against a real station move, or a clock-out such as auto-lunch, that lands during the mirror's lag. Test both cases.
+    - `plan_correction` also raises for an open merge without the live row in range (commit after `12937691`). Treat that `ValueError` as a skip.
     - Any exception for one fix is logged and that fix is skipped; others continue.
 11. **Summaries:**
     - `before_summary`: `"D3 7:00–7:02 · D2 7:02–7:04 · D3 7:04–now"`. Use Central time and the station's short form: "Dismantler 3" becomes "D3", "Repair 2" becomes "R2", and any other name stays as it is. Use `–` between times, and "now" for an open end.
