@@ -100,9 +100,12 @@ validates exactly as today.
   `[start, end)` with the target station and department.
 - **Operation order:** production Odoo has had 0 overlapping attendance rows
   in 90 days, so it enforces no-overlap. Updates that grow a closed row's
-  interval now run after deletes, and updates that leave a row open already
-  run last. This applies to every job. For manager jobs it replaces an order
-  that could never succeed when Odoo rejects overlaps.
+  interval now run after deletes, and writes that open a row or move an open
+  row's check-in earlier run last. An open row that stays open with a later
+  check-in only gives time back, so it runs with the other shrinking updates,
+  before any create or growing update needs that time (a manager range that
+  ends inside a still-open row). This applies to every job. For manager jobs it
+  replaces an order that could never succeed when Odoo rejects overlaps.
 - **Attempt cap for fixer jobs:** a fixer job is a job whose `item_key`
   starts with `quick-punch:` and whose actor is `system:quick-punch`.
   - **The cap:** it stops after 6 recoverable failures, but only while no

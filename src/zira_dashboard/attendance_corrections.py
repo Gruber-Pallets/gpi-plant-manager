@@ -3561,25 +3561,32 @@ def _ordered_operations(
     the same employee, so every write must land in time that is already free:
 
     0. close an open row, freeing everything after its new check-out;
-    1. updates that only shrink or relabel a closed row;
+    1. updates that only shrink or relabel a row, including an open row that
+       stays open with a later check-in (it gives that time back, and a
+       create or growing update may need it);
     2. creates (the planner only creates in time no remaining row covers);
     3. deletes;
     4. updates that grow a closed row, now that the rows they absorb are gone;
-    5. writes that leave a row open, last, once no other open row remains.
+    5. writes that open a row or move an open row's check-in earlier, last,
+       once no other open row remains.
 
     The worker validates durable progress as a prefix of exactly this order.
     """
 
     def phase(operation: CorrectionOperation) -> int:
-        if _is_open_producing(operation, source_rows):
-            return 5
         if operation.kind == "update":
             source = _source_row_by_id(source_rows, int(operation.attendance_id))
             if source["check_out_utc"] is None:
-                return 0
+                if not _is_open_producing(operation, source_rows):
+                    return 0
+                return 5 if _extends_source_interval(operation, source) else 1
+            if _is_open_producing(operation, source_rows):
+                return 5
             if _extends_source_interval(operation, source):
                 return 4
             return 1
+        if _is_open_producing(operation, source_rows):
+            return 5
         if operation.kind == "create":
             return 2
         return 3

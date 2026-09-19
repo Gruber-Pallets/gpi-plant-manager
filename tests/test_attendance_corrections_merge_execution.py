@@ -15,6 +15,7 @@ real Postgres job table through ``create_job_from_preview`` and
 
 import json
 import os
+import random
 import uuid
 import xmlrpc.client
 from contextlib import contextmanager
@@ -22,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from tests.test_attendance_correction_planner import _golden_request, _golden_rows
 from zira_dashboard import attendance_corrections, db, inbox_log
 
 CHRISTIAN = 8
@@ -465,6 +467,168 @@ def test_legacy_manager_closed_correction_that_extends_a_row_now_completes(monke
         )
         for row in odoo.rows.values()
     ] == [(201, at(60), at(180), DISMANTLER_3)]
+
+
+def _live_row_legacy_preview(rows, *, start, end, base=SEVEN_AM, item_key=None):
+    return _preview(
+        rows,
+        item_key=item_key or "production_unassigned_run:dismantler-3:live",
+        start=at(start, base=base),
+        end=at(end, base=base),
+        merge=False,
+    )
+
+
+def _intervals(odoo):
+    return {
+        attendance_id: (row["check_in_utc"], row["check_out_utc"], row["odoo_work_center_id"])
+        for attendance_id, row in odoo.rows.items()
+    }
+
+
+# A manager range that ends while the person is still clocked in. The live row
+# keeps its ID and gives back the corrected time by moving its check-in to the
+# range end; that write must land before anything is written into that time.
+LIVE_ROW_CASES = {
+    # Clocked in at 8:00 on station 11 and still working; the manager moves
+    # 8:00-9:00 to D3. Odoo held the live row over 8:00-9:00 when the create
+    # ran, so the job used to fail at once with "create interval overlaps".
+    "live_row_starts_in_range": (
+        [_row(301, at(60), None, 11)],
+        (60, 120),
+        [("update", 301), ("create", 9000)],
+        {
+            301: (at(120), None, 11),
+            9000: (at(60), at(120), DISMANTLER_3),
+        },
+    ),
+    # 8:00-8:30 on station 11, then 8:30-now on station 99. The 8:00 row is
+    # reused and grows to 9:00 into time the live row still held, so Odoo
+    # refused it and the job retried forever.
+    "closed_row_then_live_row": (
+        [_row(401, at(60), at(90), 11), _row(402, at(90), None, 99)],
+        (60, 120),
+        [("update", 402), ("update", 401)],
+        {
+            401: (at(60), at(120), DISMANTLER_3),
+            402: (at(120), None, 99),
+        },
+    ),
+    # 7:30-8:30 on station 11, then 8:30-now on station 99; the manager moves
+    # 8:00-9:00. Both rows keep their outside time, and the corrected hour is
+    # a create that used to overlap the live row.
+    "range_splits_a_closed_row_then_a_live_row": (
+        [_row(501, at(30), at(90), 11), _row(502, at(90), None, 99)],
+        (60, 120),
+        [("update", 501), ("update", 502), ("create", 9000)],
+        {
+            501: (at(30), at(60), 11),
+            502: (at(120), None, 99),
+            9000: (at(60), at(120), DISMANTLER_3),
+        },
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "rows, window, writes, expected", LIVE_ROW_CASES.values(), ids=LIVE_ROW_CASES
+)
+def test_manager_correction_ending_inside_a_live_row_completes(
+    monkeypatch, rows, window, writes, expected
+):
+    preview = _live_row_legacy_preview(rows, start=window[0], end=window[1])
+    odoo = _NoOverlapOdoo(rows)
+    worker = _Worker(monkeypatch, odoo)
+
+    result = worker.run(_claim(preview))
+
+    assert result.status == "complete"
+    assert odoo.rejected == []
+    assert odoo.writes == writes
+    assert _intervals(odoo) == expected
+
+
+def test_an_open_row_that_only_gives_time_back_moves_with_the_shrinks():
+    source_rows = (
+        _row(1, at(0), at(30), 11),
+        _row(2, at(30), None, 11),
+    )
+    by_id = {row["odoo_attendance_id"]: row for row in source_rows}
+
+    def update(attendance_id, after, suffix):
+        return attendance_corrections.CorrectionOperation(
+            key="attendance-correction-v2:1:" + suffix * 64,
+            kind="update",
+            attendance_id=attendance_id,
+            employee_odoo_id=CHRISTIAN,
+            before={field: by_id[attendance_id][field] for field in after},
+            after=after,
+        )
+
+    grow = update(1, {"check_out_utc": at(60)}, "1")
+    give_back = update(2, {"check_in_utc": at(60)}, "2")
+    create = attendance_corrections.CorrectionOperation(
+        key="attendance-correction-v2:0:" + "3" * 64,
+        kind="create",
+        attendance_id=None,
+        employee_odoo_id=CHRISTIAN,
+        before=None,
+        after={
+            "employee_odoo_id": CHRISTIAN,
+            "check_in_utc": at(60),
+            "check_out_utc": at(90),
+            "odoo_work_center_id": DISMANTLER_3,
+            "odoo_department_id": DEPARTMENT,
+        },
+    )
+    reach_back = update(2, {"check_in_utc": at(20)}, "4")
+
+    assert attendance_corrections._ordered_operations(
+        (grow, create, give_back), source_rows=source_rows
+    ) == (give_back, create, grow)
+    # Moving the live row's check-in EARLIER takes time, so it still waits
+    # until every other write is done.
+    assert attendance_corrections._ordered_operations(
+        (reach_back, create), source_rows=source_rows
+    ) == (create, reach_back)
+
+
+def test_every_planned_correction_applies_in_order_without_an_overlap():
+    """Seeded sweep of the planner's row shapes, legacy and merge alike."""
+    rng = random.Random(20260919)
+    applied = 0
+
+    def landed(rows):
+        return sorted(
+            (
+                row["check_in_utc"],
+                row["check_out_utc"] or datetime.max.replace(tzinfo=UTC),
+                row["odoo_work_center_id"] or 0,
+            )
+            for row in rows
+        )
+
+    for _ in range(3000):
+        rows = _golden_rows(rng)
+        request = _golden_request(rng, rows)
+        merge = rng.random() < 0.5
+        try:
+            plan = attendance_corrections.plan_correction(rows=rows, merge=merge, **request)
+        except (TypeError, ValueError):
+            continue
+        odoo = _NoOverlapOdoo(rows)
+        for operation in attendance_corrections._ordered_operations(
+            plan.operations, source_rows=tuple(rows)
+        ):
+            if operation.kind == "create":
+                odoo.create_attendance_interval(**operation.after)
+            elif operation.kind == "update":
+                odoo.update_attendance_interval(operation.attendance_id, values=operation.after)
+            else:
+                odoo.delete_attendance_interval(operation.attendance_id)
+        assert landed(odoo.rows.values()) == landed(plan.expected_intervals), (merge, request)
+        applied += 1
+    assert applied > 2000
 
 
 def test_operation_phases_shrink_create_delete_then_grow_then_open():
@@ -1321,6 +1485,38 @@ def test_postgres_manager_extension_completes_with_the_legacy_audit_event(
             "actor_name": "Manager",
             "source": "inbox",
         }
+    ]
+
+
+@requires_postgres
+def test_postgres_manager_correction_before_a_live_row_completes(monkeypatch, job_table):
+    base = _recent_base() - timedelta(hours=3)
+    key = _unique("production_unassigned_run:dismantler-3:")
+    job_table.append(key)
+    rows = [
+        _row(401, at(60, base=base), at(90, base=base), 11),
+        _row(402, at(90, base=base), None, 99),
+    ]
+    odoo = _NoOverlapOdoo(rows)
+    _install_real_worker(monkeypatch, odoo)
+
+    job_id = attendance_corrections.create_job_from_preview(
+        preview=_live_row_legacy_preview(rows, start=60, end=120, base=base, item_key=key),
+        actor_email="manager@example.com",
+        actor_name="Manager",
+    )
+
+    assert attendance_corrections.process_job(job_id).status == "complete"
+    assert odoo.rejected == []
+    assert odoo.writes == [("update", 402), ("update", 401)]
+    assert _intervals(odoo) == {
+        401: (at(60, base=base), at(120, base=base), DISMANTLER_3),
+        402: (at(120, base=base), None, 99),
+    }
+    job = _job(job_id)
+    assert (job["status"], job["attempt_count"]) == ("complete", 1)
+    assert [(row["action"], row["outcome"]) for row in _inbox_rows(key)] == [
+        ("corrected_odoo_attendance", "Verified and recalculated")
     ]
 
 
