@@ -80,9 +80,13 @@ _MAX_RECALC_HORIZON_DAYS = 500
 # detection module (``quick_punch_fixes.ITEM_KEY_PREFIX``) imports it from here,
 # so the worker and the fixer can never disagree about which jobs are fixer jobs.
 QUICK_PUNCH_ITEM_KEY_PREFIX = "quick-punch:"
-# A fixer job that hits a recoverable failure on (or after) this attempt stops
-# retrying and fails with an ``attempt_limit`` event. Manager jobs never stop.
+# A fixer job that hits a recoverable failure on (or after) this attempt while
+# it is still changing or verifying Odoo stops retrying and fails with an
+# ``attempt_limit`` event. Once Odoo is verified (the job is recalculating), the
+# remaining mirror, recalculation, and audit steps retry without a cap, like
+# every manager job.
 QUICK_PUNCH_MAX_ATTEMPTS = 6
+_QUICK_PUNCH_CAPPED_STATUSES = frozenset(("planned", "applying", "verifying"))
 QUICK_PUNCH_ITEM_KIND = "quick_punch_fix"
 QUICK_PUNCH_CATEGORY_LABEL = "Quick-punch auto-fix"
 _AUDIT_SUMMARY_FIELDS = frozenset(("person_name", "before", "after"))
@@ -4176,11 +4180,19 @@ def _retry_or_fail(
 
     Manager jobs always retry with backoff, exactly as before. A quick-punch
     fixer job that fails recoverably on (or after) attempt
-    ``QUICK_PUNCH_MAX_ATTEMPTS`` fails instead, with an ``attempt_limit``
-    event; ``_transition`` records its failure alert in the same transaction.
+    ``QUICK_PUNCH_MAX_ATTEMPTS`` while Odoo is not yet verified (status
+    applying or verifying) fails instead, with an ``attempt_limit`` event;
+    ``_transition`` records its failure alert in the same transaction. After
+    verification Odoo is already correct, so the fixer waits out the mirror,
+    recalculation, and audit steps like a manager job and still finishes with
+    its merge event.
     """
-    if _is_quick_punch_job(claim.row) and claim.attempt_count >= QUICK_PUNCH_MAX_ATTEMPTS:
-        _transition(
+    if (
+        _is_quick_punch_job(claim.row)
+        and claim.row.get("status") in _QUICK_PUNCH_CAPPED_STATUSES
+        and claim.attempt_count >= QUICK_PUNCH_MAX_ATTEMPTS
+    ):
+        if not _transition(
             claim,
             status="failed",
             phase=phase,
@@ -4193,7 +4205,8 @@ def _retry_or_fail(
                 }
             ),
             last_error=f"attempt_limit: {error}",
-        )
+        ):
+            return _result(claim, "superseded")
         return _result(claim, "failed", error=error)
     retry = retry_at if retry_at is not None else _retry_at(claim.attempt_count, now)
     _transition(

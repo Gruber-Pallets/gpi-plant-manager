@@ -188,6 +188,17 @@ class _ReadOutageOdoo(_NoOverlapOdoo):
         raise ConnectionError("Odoo is unreachable")
 
 
+class _SwitchableReadsOdoo(_NoOverlapOdoo):
+    """Odoo whose interval reads (used to verify) can be switched off."""
+
+    reads_down = False
+
+    def fetch_employee_attendance_rows(self, employee_odoo_id, start, end):
+        if self.reads_down:
+            raise ConnectionError("Odoo is unreachable")
+        return super().fetch_employee_attendance_rows(employee_odoo_id, start, end)
+
+
 def _preview(rows, *, item_key, start, end, target=DISMANTLER_3, merge):
     plan = attendance_corrections.plan_correction(
         rows=rows,
@@ -595,6 +606,126 @@ def test_fixer_attempt_cap_also_covers_recoverable_failures_outside_writes(monke
     assert [event["outcome"] for event in worker.inbox] == ["attempt_limit"]
 
 
+def test_fixer_attempt_cap_covers_verifying_the_odoo_writes(monkeypatch):
+    odoo = _SwitchableReadsOdoo(christian_rows())
+    odoo.reads_down = True
+    worker = _Worker(monkeypatch, odoo)
+
+    result = worker.run(_claim(christian_preview(), attempt=6, status="verifying"))
+
+    assert result.status == "failed"
+    phase, outcome, detail = worker.table.job_events()[-1]
+    assert (phase, outcome, detail["reason_code"]) == ("verifying", "failed", "attempt_limit")
+    assert [event["action"] for event in worker.inbox] == ["quick_punch_failed"]
+
+
+def test_fixer_cap_reports_superseded_when_its_failure_does_not_persist(monkeypatch):
+    worker = _Worker(monkeypatch, _BusyOdoo(christian_rows()))
+    real_transition = attendance_corrections._transition
+
+    def stale_on_failure(claim, **kwargs):
+        if kwargs.get("status") == "failed":
+            return False
+        return real_transition(claim, **kwargs)
+
+    monkeypatch.setattr(attendance_corrections, "_transition", stale_on_failure)
+
+    result = worker.run(_claim(christian_preview(), attempt=6))
+
+    assert result.status == "superseded"
+    assert worker.inbox == []
+
+
+# After Odoo is verified, only the plant's own bookkeeping is left. A fixer
+# job then waits it out like a manager job: no cap, and no "check Odoo" alert.
+POST_VERIFICATION_FAILURES = 8
+
+
+def _recalculation_stays_pending(monkeypatch, _worker, _odoo, attempt):
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_run_recalculation",
+        lambda _days: attempt["number"] > POST_VERIFICATION_FAILURES,
+    )
+
+
+def _recalculation_errors(monkeypatch, _worker, _odoo, attempt):
+    def run(_days):
+        if attempt["number"] <= POST_VERIFICATION_FAILURES:
+            raise RuntimeError("recalculation worker unavailable")
+        return True
+
+    monkeypatch.setattr(attendance_corrections, "_run_recalculation", run)
+
+
+def _mirror_update_fails(monkeypatch, _worker, _odoo, attempt):
+    def mirror(claim, *_args, **_kwargs):
+        if attempt["number"] <= POST_VERIFICATION_FAILURES:
+            raise RuntimeError("mirror table locked")
+        claim.row["completed_operations"].append({"stage": "mirror_complete"})
+        return True
+
+    monkeypatch.setattr(attendance_corrections, "_mirror_verified_rows", mirror)
+
+
+def _reverification_read_fails(monkeypatch, _worker, odoo, attempt):
+    # Attempt 1 verifies Odoo, then waits on recalculation. Later attempts
+    # re-read the verified rows before resuming, and that read is down.
+    monkeypatch.setattr(
+        attendance_corrections, "_run_recalculation", lambda _days: attempt["number"] > 1
+    )
+    attempt["on_attempt"] = lambda number: setattr(
+        odoo, "reads_down", 1 < number <= POST_VERIFICATION_FAILURES
+    )
+
+
+def _audit_write_fails(monkeypatch, worker, _odoo, attempt):
+    def record(_cursor, **kwargs):
+        if attempt["number"] <= POST_VERIFICATION_FAILURES:
+            raise RuntimeError("inbox log unavailable")
+        worker.inbox.append(kwargs)
+        return len(worker.inbox)
+
+    monkeypatch.setattr(inbox_log, "record_event_with_cursor", record)
+
+
+@pytest.mark.parametrize(
+    "after_verification",
+    [
+        _recalculation_stays_pending,
+        _recalculation_errors,
+        _mirror_update_fails,
+        _reverification_read_fails,
+        _audit_write_fails,
+    ],
+)
+def test_fixer_keeps_retrying_after_odoo_is_verified_and_records_the_merge(
+    monkeypatch, after_verification
+):
+    preview = christian_preview()
+    odoo = _SwitchableReadsOdoo(christian_rows())
+    worker = _Worker(monkeypatch, odoo)
+    attempt = {"number": 1}
+    after_verification(monkeypatch, worker, odoo, attempt)
+    claim = _claim(preview)
+    results = []
+
+    for number in range(1, POST_VERIFICATION_FAILURES + 2):
+        if number > 1:
+            claim = _next_attempt(claim)
+        attempt["number"] = number
+        attempt.get("on_attempt", lambda _number: None)(number)
+        results.append(worker.run(claim).status)
+
+    assert results == ["recoverable"] * POST_VERIFICATION_FAILURES + ["complete"]
+    assert "failed" not in worker.table.statuses()
+    assert all(
+        detail.get("reason_code") != "attempt_limit" for *_, detail in worker.table.job_events()
+    )
+    assert [event["action"] for event in worker.inbox] == ["quick_punch_merged"]
+    assert odoo.writes == [("delete", 6190), ("delete", 6207), ("update", 6208)]
+
+
 def _change_live_row_in_odoo(odoo, _claim_value):
     odoo.rows[6208]["odoo_write_date"] = NOW
 
@@ -852,6 +983,19 @@ def test_the_fixer_item_key_prefix_has_one_owner():
 def job_table(monkeypatch):
     db.init_pool()
     db.bootstrap_schema()
+    # Production and CI Postgres run in UTC, and the worker requires the job's
+    # timestamps to come back in UTC. Pin every transaction these tests open to
+    # UTC (SET LOCAL ends with the transaction, so pooled connections that other
+    # tests reuse are untouched), so a local server in any timezone works.
+    real_cursor = db.cursor
+
+    @contextmanager
+    def utc_cursor():
+        with real_cursor() as cur:
+            cur.execute("SET LOCAL TIME ZONE 'UTC'")
+            yield cur
+
+    monkeypatch.setattr(db, "cursor", utc_cursor)
     keys = []
     yield keys
     for key in keys:
@@ -1085,6 +1229,41 @@ def test_postgres_fixer_retry_cap_fails_and_alerts_while_manager_keeps_retrying(
     manager = _job(manager_id)
     assert (manager["status"], manager["attempt_count"]) == ("applying", 8)
     assert _inbox_rows(manager_key) == []
+
+
+@requires_postgres
+def test_postgres_fixer_waits_out_pending_recalculation_then_records_the_merge(
+    monkeypatch, job_table
+):
+    base = _recent_base()
+    key = _unique("quick-punch:8:")
+    job_table.append(key)
+    odoo = _NoOverlapOdoo(christian_rows(base))
+    _install_real_worker(monkeypatch, odoo)
+    recalculation_runs = []
+    monkeypatch.setattr(
+        attendance_corrections,
+        "_run_recalculation",
+        lambda _days: recalculation_runs.append(True) or len(recalculation_runs) > 7,
+    )
+    job_id = attendance_corrections.create_job_from_preview(
+        preview=christian_preview(base, item_key=key),
+        actor_email=FIXER_UPN,
+        actor_name=FIXER_NAME,
+        audit_summary=SUMMARY,
+    )
+
+    results = []
+    for _attempt in range(8):
+        _make_retryable_now(job_id)
+        results.append(attendance_corrections.process_job(job_id).status)
+
+    assert results == ["recoverable"] * 7 + ["complete"]
+    job = _job(job_id)
+    assert (job["status"], job["attempt_count"]) == ("complete", 8)
+    assert [(row["action"], row["outcome"]) for row in _inbox_rows(key)] == [
+        ("quick_punch_merged", "Merged in Odoo")
+    ]
 
 
 @requires_postgres
