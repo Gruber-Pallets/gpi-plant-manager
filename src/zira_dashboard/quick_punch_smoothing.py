@@ -28,7 +28,7 @@ Pure -- no DB, no network, no clock.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 import math
@@ -90,11 +90,24 @@ def person_key(segment: WorkSegment) -> PersonKey:
     return segment.person_name
 
 
+def _in_metered_scope(
+    wc_name: str, metered_wc_names: Collection[str] | None
+) -> bool:
+    """Whether this station may be auto-smoothed.
+
+    ``None`` means no extra restriction (unit tests). A set is the allowlist
+    of production stations that have a meter; Maintenance and other
+    unmetered names stay as real punches.
+    """
+    return metered_wc_names is None or wc_name in metered_wc_names
+
+
 def smooth_quick_punches(
     segments: Sequence[WorkSegment],
     *,
     blocked_windows: Mapping[PersonKey, Sequence[Window]] | None = None,
     production_times_by_wc: Mapping[str, Sequence[datetime]] | None = None,
+    metered_wc_names: Collection[str] | None = None,
     limit: timedelta = QUICK_PUNCH_LIMIT,
 ) -> tuple[WorkSegment, ...]:
     """Return ``segments`` with each person's quick punch mistakes merged away.
@@ -113,6 +126,12 @@ def smooth_quick_punches(
     pallet during the blip that no other person's input segment at that
     station covers. None, or no entry for a station, means unknown: the
     wrong-first-pick rule does not fire there, and came-back merges as usual.
+
+    ``metered_wc_names`` limits smoothing to production stations that have a
+    meter. When it is a set, a came-back merge needs the home station and
+    every absorbed blip to be in it, and a wrong first pick needs both
+    stations in it. Maintenance, trucks, forklifts, and unmetered production
+    stations are left as real punches. ``None`` applies no extra restriction.
 
     Came-back also never merges across a relief: another person's input
     segment at the same station that overlaps the gap without strictly
@@ -136,10 +155,15 @@ def smooth_quick_punches(
         )
         blocked = tuple(blocked_windows.get(key, ()))
         ordered = _apply_came_back(
-            ordered, blocked, production_times_by_wc, segments_by_wc, limit
+            ordered,
+            blocked,
+            production_times_by_wc,
+            segments_by_wc,
+            metered_wc_names,
+            limit,
         )
         ordered = _apply_wrong_first_pick(
-            ordered, blocked, production_times_by_wc, limit
+            ordered, blocked, production_times_by_wc, metered_wc_names, limit
         )
         placed.extend(ordered)
     return tuple(segment for _index, segment in sorted(placed, key=lambda item: item[0]))
@@ -158,9 +182,12 @@ def _came_back_match(
     blocked: Sequence[Window],
     production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
     segments_by_wc: Mapping[str, Sequence[WorkSegment]],
+    metered_wc_names: Collection[str] | None,
     limit: timedelta,
 ) -> int | None:
     _index, current = stints[i]
+    if not _in_metered_scope(current.wc_name, metered_wc_names):
+        return None
     for j in range(i + 1, len(stints)):
         _candidate_index, candidate = stints[j]
         if candidate.start_utc - current.end_utc > limit:
@@ -170,6 +197,11 @@ def _came_back_match(
         between = stints[i + 1 : j]
         if any(
             segment.start_utc < current.end_utc or segment.end_utc > candidate.start_utc
+            for _idx, segment in between
+        ):
+            return None
+        if any(
+            not _in_metered_scope(segment.wc_name, metered_wc_names)
             for _idx, segment in between
         ):
             return None
@@ -216,13 +248,20 @@ def _apply_came_back(
     blocked: Sequence[Window],
     production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
     segments_by_wc: Mapping[str, Sequence[WorkSegment]],
+    metered_wc_names: Collection[str] | None,
     limit: timedelta,
 ) -> list[_Stint]:
     stints = list(stints)
     i = 0
     while i < len(stints):
         match = _came_back_match(
-            stints, i, blocked, production_times_by_wc, segments_by_wc, limit
+            stints,
+            i,
+            blocked,
+            production_times_by_wc,
+            segments_by_wc,
+            metered_wc_names,
+            limit,
         )
         if match is None:
             i += 1
@@ -296,6 +335,7 @@ def _is_wrong_first_pick(
     k: int,
     blocked: Sequence[Window],
     production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
+    metered_wc_names: Collection[str] | None,
     limit: timedelta,
 ) -> bool:
     _index, current = stints[k]
@@ -307,6 +347,8 @@ def _is_wrong_first_pick(
         and current.end_utc - current.start_utc <= limit
         and following.wc_name != current.wc_name
         and following.start_utc - current.end_utc <= limit
+        and _in_metered_scope(current.wc_name, metered_wc_names)
+        and _in_metered_scope(following.wc_name, metered_wc_names)
         and not _crosses_blocked(current.end_utc, following.start_utc, blocked)
         and _station_was_idle(current, production_times_by_wc)
     )
@@ -316,12 +358,15 @@ def _apply_wrong_first_pick(
     stints: Sequence[_Stint],
     blocked: Sequence[Window],
     production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
+    metered_wc_names: Collection[str] | None,
     limit: timedelta,
 ) -> list[_Stint]:
     stints = list(stints)
     k = 0
     while k < len(stints) - 1:
-        if not _is_wrong_first_pick(stints, k, blocked, production_times_by_wc, limit):
+        if not _is_wrong_first_pick(
+            stints, k, blocked, production_times_by_wc, metered_wc_names, limit
+        ):
             k += 1
             continue
         index, current = stints[k]

@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-19
 
+### Quick-punch fixes stay on metered production stations
+
+#### Fixes
+
+- **The automatic time-clock fix only joins punches at production stations that have a meter.** Maintenance, trucks, forklifts, and stations without a meter keep their real punches.
+
 ### The app can now fix quick sign-in mix-ups in the time clock records
 
 #### Features

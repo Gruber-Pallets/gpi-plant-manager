@@ -26,6 +26,9 @@ while any of these holds:
   meter data known through the blip's end -- missing, truncated, read before
   the blip ended, or absent from ``production_times_by_wc`` (so smoothing
   could not check it for pallets that nobody else covers).
+- ``not_metered``: the merged station, or a punch it absorbed, is not a
+  production station with a Zira meter (Maintenance, trucks, forklifts, or
+  an unmetered production station). Those punches are never rewritten.
 
 A first pick at a station with no meter data is never folded in the first
 place (unknown means not idle), so it yields neither a fix nor a skip.
@@ -84,7 +87,7 @@ class PlannedFix:
 class SkippedFix:
     employee_odoo_id: int
     person_name: str
-    reason: str  # break | relief | settling | first_pick_not_settled | meter_not_current
+    reason: str  # break | relief | settling | first_pick_not_settled | meter_not_current | not_metered
     before: tuple[SourceStint, ...]
 
 
@@ -214,10 +217,14 @@ def find_fixes(
             )
         )
     inputs = [segment for segment, _stint in stints]
+    from . import staffing
+
+    metered = staffing.metered_work_center_names()
     smoothed = quick_punch_smoothing.smooth_quick_punches(
         inputs,
         blocked_windows=assignment_windows.blocking_windows(spans),
         production_times_by_wc=production_times_by_wc,
+        metered_wc_names=metered,
         limit=limit,
     )
     input_ids = {id(segment) for segment in inputs}
@@ -263,6 +270,11 @@ def find_fixes(
         )
         if reason is not None:
             skipped.append(SkippedFix(employee, merged.person_name, reason, before))
+            continue
+        if merged.wc_name not in metered or any(
+            stint.wc_name not in metered for stint in absorbed
+        ):
+            skipped.append(SkippedFix(employee, merged.person_name, "not_metered", before))
             continue
         fixes.append(
             PlannedFix(

@@ -378,3 +378,34 @@ def test_closed_and_unabbreviated_summaries():
     (fix,) = scan(spans, now).fixes
     assert before_summary(fix) == "R2 7:00–8:00 · R2 8:03–8:50"
     assert after_summary(fix) == "R2 7:00–8:50"
+
+
+def test_maintenance_sign_out_gap_is_never_a_fix():
+    now = ct(8, 30)
+    spans = (
+        span(1, "Work Orders", ct(7), ct(8), emp=40, name="Sam M."),
+        span(2, "Work Orders", ct(8, 3), now, emp=40, name="Sam M.", is_open=True),
+    )
+    result = scan(spans, now)
+    assert result.fixes == ()
+
+
+def test_detour_through_maintenance_is_never_a_fix():
+    now = ct(7, 10)
+    spans = (
+        span(1, "Dismantler 3", ct(7), ct(7, 2)),
+        span(2, "Work Orders", ct(7, 2), ct(7, 4)),
+        span(3, "Dismantler 3", ct(7, 4), now, is_open=True),
+    )
+    result = scan(spans, now)
+    assert result.fixes == ()
+
+
+def test_unmetered_production_sign_out_gap_is_never_a_fix():
+    now = ct(8, 30)
+    spans = (
+        span(1, "Chop/Notch", ct(7), ct(8)),
+        span(2, "Chop/Notch", ct(8, 3), now, is_open=True),
+    )
+    result = scan(spans, now)
+    assert result.fixes == ()

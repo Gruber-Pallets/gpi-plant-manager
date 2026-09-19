@@ -146,6 +146,15 @@ def location_by_name(name: str) -> Location | None:
     return next((loc for loc in LOCATIONS if loc.name == name), None)
 
 
+def metered_work_center_names() -> frozenset[str]:
+    """Configured production stations that have a Zira meter.
+
+    Maintenance, transportation, supervisor desks, and production stations
+    without a meter are not included.
+    """
+    return frozenset(loc.name for loc in LOCATIONS if loc.meter_id)
+
+
 @dataclass(frozen=True)
 class SchedulingPreferenceTarget:
     key: str

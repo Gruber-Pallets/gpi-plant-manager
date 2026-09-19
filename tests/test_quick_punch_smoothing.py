@@ -9,6 +9,7 @@ from zira_dashboard.quick_punch_smoothing import (
     production_times_from_samples,
     smooth_quick_punches,
 )
+from zira_dashboard.staffing import metered_work_center_names
 
 CT = ZoneInfo("America/Chicago")
 
@@ -646,3 +647,63 @@ def test_relief_at_the_home_station_during_a_detour_stops_came_back():
     result = smooth((*DETOUR, relief))
 
     assert result == (*DETOUR, relief)
+
+
+METERED = metered_work_center_names()
+
+
+def test_metered_catalog_is_production_stations_with_a_meter():
+    assert "Repair 1" in METERED
+    assert "Dismantler 3" in METERED
+    assert "Work Orders" not in METERED
+    assert "Chop/Notch" not in METERED
+    assert "Loading/Jockeying" not in METERED
+    assert "Truck Driver" not in METERED
+
+
+def test_maintenance_sign_out_gap_is_not_smoothed():
+    segments = (
+        seg("Work Orders", ct(7), ct(8)),
+        seg("Work Orders", ct(8, 3), ct(11)),
+    )
+
+    assert smooth(segments, metered_wc_names=METERED) == segments
+
+
+def test_detour_through_maintenance_is_not_smoothed():
+    segments = (
+        seg("Dismantler 3", ct(7), ct(7, 2)),
+        seg("Work Orders", ct(7, 2), ct(7, 4)),
+        seg("Dismantler 3", ct(7, 4), ct(11)),
+    )
+
+    assert smooth(segments, metered_wc_names=METERED) == segments
+
+
+def test_unmetered_production_sign_out_gap_is_not_smoothed():
+    segments = (
+        seg("Chop/Notch", ct(7), ct(8)),
+        seg("Chop/Notch", ct(8, 3), ct(11)),
+    )
+
+    assert smooth(segments, metered_wc_names=METERED) == segments
+
+
+def test_metered_production_sign_out_gap_still_smoothes():
+    segments = (
+        seg("Repair 1", ct(8), ct(9)),
+        seg("Repair 1", ct(9, 3), ct(10)),
+    )
+
+    assert shape(smooth(segments, metered_wc_names=METERED)) == [
+        ("Christian C.", "Repair 1", ct(8), ct(10))
+    ]
+
+
+def test_wrong_first_pick_into_maintenance_is_not_smoothed():
+    segments = (
+        seg("Dismantler 3", ct(7), ct(7, 2)),
+        seg("Work Orders", ct(7, 2), ct(11)),
+    )
+
+    assert smooth(segments, metered_wc_names=METERED) == segments

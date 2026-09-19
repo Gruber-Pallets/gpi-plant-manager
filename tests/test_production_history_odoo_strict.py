@@ -181,6 +181,20 @@ def _segment_shape(segments):
     ]
 
 
+def test_work_segments_from_timeline_does_not_smooth_maintenance():
+    spans = (
+        span(4, "Sam", at(13), at(14), wc="Work Orders"),
+        span(4, "Sam", at(14, 3), at(15), wc="Work Orders"),
+    )
+
+    segments = work_segments_from_timeline(spans, window_start_utc=START, window_end_utc=END)
+
+    assert _segment_shape(segments) == [
+        (4, "Work Orders", at(13), at(14)),
+        (4, "Work Orders", at(14, 3), at(15)),
+    ]
+
+
 def test_work_segments_from_timeline_smooths_quick_punches_before_clipping():
     spans = (
         # Long before the window, only 2 minutes inside it: not a wrong first pick.

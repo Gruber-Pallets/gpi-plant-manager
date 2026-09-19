@@ -88,12 +88,14 @@ def work_segments_from_timeline(
 
     With ``smooth`` (the default), quick punch mistakes are merged per person
     (see ``quick_punch_smoothing``) before clipping, never across a
-    conflicting, unmapped or stale location. ``production_times_by_wc`` is the
-    meter data that keeps smoothing from erasing real work: a short first
-    stint is only treated as a wrong pick when the meter proves its station
-    made no pallets then, and a detour is only merged away when the meter
-    shows no pallets there that nobody else covers. Without meter data, short
-    first stints are kept and detours merge.
+    conflicting, unmapped or stale location, and only at production stations
+    that have a meter. Maintenance and other unmetered punches stay as they
+    are. ``production_times_by_wc`` is the meter data that keeps smoothing
+    from erasing real work: a short first stint is only treated as a wrong
+    pick when the meter proves its station made no pallets then, and a
+    detour is only merged away when the meter shows no pallets there that
+    nobody else covers. Without meter data, short first stints are kept and
+    detours merge.
 
     ``smooth=False`` returns exactly the valid spans, clipped, for views that
     must match real punches one to one (People Performance). If smoothing
@@ -119,10 +121,13 @@ def work_segments_from_timeline(
     stints: Sequence[WorkSegment] = raw
     if smooth:
         try:
+            from . import staffing
+
             stints = quick_punch_smoothing.smooth_quick_punches(
                 raw,
                 blocked_windows=blocking_windows(spans),
                 production_times_by_wc=production_times_by_wc,
+                metered_wc_names=staffing.metered_work_center_names(),
             )
         except Exception as exc:  # noqa: BLE001 - smoothing must never take a page down
             _log.warning(
