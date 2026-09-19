@@ -10,6 +10,20 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-09-19
+
+### The app can now fix quick sign-in mix-ups in the time clock records
+
+#### Features
+
+- **When someone taps the wrong station, or signs out and back in by mistake, the app can now fix the time clock record too, not just the dashboards.** It joins the pieces into one steady record, so every screen and report matches.
+- **It starts in "Preview".** For now it only lists what it would fix in the Exception Inbox history. A manager can switch it to "Live" in Settings when the list looks right.
+- **It never changes days payroll has already finished.**
+
+#### Fixes
+
+- **When a manager moves someone's time to a different station, the fix now goes through.** Before, some of these fixes got stuck or failed and had to be redone, like a fix that ended while the person was still clocked in.
+
 ## 2026-09-18
 
 ### Quick sign-in mix-ups smoothed out
