@@ -5,6 +5,8 @@ from zira_dashboard.attendance_timeline import LocationSpan
 from zira_dashboard.quick_punch_fixes import (
     ITEM_KEY_PREFIX,
     MeterFreshness,
+    after_summary,
+    before_summary,
     find_fixes,
 )
 
@@ -357,3 +359,22 @@ def test_a_blip_during_a_break_is_never_fixed():
     result = scan(spans, now)
     assert result.fixes == ()
     assert [s.reason for s in result.skipped] == ["break"]
+
+
+def test_before_and_after_summaries_use_short_names_and_central_time():
+    now = ct(7, 7)
+    (fix,) = scan(christian(now), now).fixes
+    assert before_summary(fix) == "D3 7:00–7:02 · D2 7:02–7:04 · D3 7:04–now"
+    assert after_summary(fix) == "D3 7:00–now"
+
+
+def test_closed_and_unabbreviated_summaries():
+    now = ct(10)
+    spans = (
+        span(1, "Repair 2", ct(7), ct(8)),
+        span(2, "Repair 2", ct(8, 3), ct(8, 50)),
+        span(3, "Trim Saw", ct(8, 50), now, is_open=True),
+    )
+    (fix,) = scan(spans, now).fixes
+    assert before_summary(fix) == "R2 7:00–8:00 · R2 8:03–8:50"
+    assert after_summary(fix) == "R2 7:00–8:50"

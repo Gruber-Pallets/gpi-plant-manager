@@ -2837,6 +2837,48 @@ def find_reusable_job_for_binding(*, item_key: str, binding: Mapping[str, object
     return job_id
 
 
+def active_job_employee_ids() -> set[int]:
+    """Employees who currently have a correction job in flight.
+
+    A fixer tick skips these people so it never races a manager job or its
+    own earlier job. Corrupt ``employee_odoo_ids`` on one row are ignored.
+    """
+    from . import db
+
+    rows = db.query(
+        "SELECT employee_odoo_ids FROM attendance_correction_jobs "
+        "WHERE status IN ('planned','applying','verifying','recalculating')"
+    )
+    employees: set[int] = set()
+    for row in rows:
+        try:
+            raw = _decode_json_column(row.get("employee_odoo_ids"), "employee_odoo_ids")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+            continue
+        for value in raw:
+            try:
+                employees.add(_positive_int(value, "employee_odoo_id"))
+            except (TypeError, ValueError):
+                continue
+    return employees
+
+
+def existing_job_item_keys(item_keys: Sequence[str]) -> set[str]:
+    """Return the subset of ``item_keys`` that already have a correction job."""
+    keys = [key for key in item_keys if isinstance(key, str) and key]
+    if not keys:
+        return set()
+    from . import db
+
+    rows = db.query(
+        "SELECT item_key FROM attendance_correction_jobs WHERE item_key = ANY(%s)",
+        (keys,),
+    )
+    return {str(row["item_key"]) for row in rows if row.get("item_key")}
+
+
 def _json_column_matches(value: object, expected: object) -> bool:
     try:
         return _decode_json_column(value, "job value") == expected

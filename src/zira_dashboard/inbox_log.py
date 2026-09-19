@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -191,6 +192,19 @@ def mark_undone(event_id: int, undo_event_id: int | None) -> None:
         "UPDATE inbox_events SET undone_at = now(), undo_event_id = %s WHERE id = %s",
         (undo_event_id, event_id),
     )
+
+
+def item_keys_with_action(item_keys: Sequence[str], action: str) -> set[str]:
+    """Return the subset of ``item_keys`` that already have this archive action."""
+    keys = [key for key in item_keys if isinstance(key, str) and key]
+    if not keys:
+        return set()
+    rows = db.query(
+        "SELECT DISTINCT item_key FROM inbox_events "
+        "WHERE action = %s AND item_key = ANY(%s)",
+        (action, keys),
+    )
+    return {str(row["item_key"]) for row in rows if row.get("item_key")}
 
 
 def has_human_event_since(item_key: str, since) -> bool:

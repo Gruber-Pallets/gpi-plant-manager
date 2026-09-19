@@ -176,6 +176,13 @@ async def _tick_auto_lunch():
     await asyncio.to_thread(auto_lunch.run_tick)
 
 
+async def _tick_quick_punch_fixer():
+    """Drive the quick-punch Odoo fixer. No-ops while the setting is Off."""
+    from . import quick_punch_fixer
+
+    await asyncio.to_thread(quick_punch_fixer.tick)
+
+
 async def _tick_auto_salaried():
     """Auto-salaried punch worker (see auto_salaried.py). Off unless
     AUTO_SALARIED_ENABLED=1 or AUTO_SALARIED_DRY_RUN=1."""
@@ -531,6 +538,7 @@ _WARMERS = [
     ("attendance department repair", _tick_attendance_department_repair, 15),
     ("attendance readiness", _tick_attendance_readiness, 30),
     ("auto-lunch", _tick_auto_lunch, 60),
+    ("quick-punch fixer", _tick_quick_punch_fixer, 60),
     ("auto-salaried punch", _tick_auto_salaried, 60),
     ("auto-salaried reconcile", _tick_auto_salaried_reconcile, 600),
     ("time-off sync", _tick_time_off_sync, 60),

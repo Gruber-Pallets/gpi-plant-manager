@@ -44,7 +44,7 @@ from datetime import datetime, timedelta
 import hashlib
 from typing import TYPE_CHECKING
 
-from . import assignment_windows, quick_punch_smoothing
+from . import assignment_windows, quick_punch_smoothing, shift_config
 from .attendance_corrections import QUICK_PUNCH_ITEM_KEY_PREFIX as ITEM_KEY_PREFIX
 
 if TYPE_CHECKING:
@@ -99,6 +99,40 @@ def item_key_for(employee_odoo_id: int, attendance_ids: Sequence[int]) -> str:
     joined = ",".join(str(value) for value in sorted(set(attendance_ids)))
     digest = hashlib.sha256(joined.encode()).hexdigest()[:24]
     return f"{ITEM_KEY_PREFIX}{employee_odoo_id}:{digest}"
+
+
+def _short_station(name: str) -> str:
+    """Dismantler 3 -> D3, Repair 2 -> R2; every other name stays as it is."""
+    for prefix, letter in (("Dismantler ", "D"), ("Repair ", "R")):
+        if name.startswith(prefix):
+            rest = name[len(prefix) :]
+            if rest.isdigit():
+                return f"{letter}{rest}"
+    return name
+
+
+def _clock(moment: datetime) -> str:
+    local = moment.astimezone(shift_config.SITE_TZ)
+    return f"{local.hour}:{local.minute:02d}"
+
+
+def _stint_text(wc_name: str, start_utc: datetime, end_utc: datetime | None) -> str:
+    end = "now" if end_utc is None else _clock(end_utc)
+    return f"{_short_station(wc_name)} {_clock(start_utc)}–{end}"
+
+
+def before_summary(fix: PlannedFix) -> str:
+    """``D3 7:00–7:02 · D2 7:02–7:04 · D3 7:04–now`` in Central time."""
+    parts = []
+    for stint in fix.before:
+        end = None if (fix.end_utc is None and stint.is_open) else stint.end_utc
+        parts.append(_stint_text(stint.wc_name, stint.start_utc, end))
+    return " · ".join(parts)
+
+
+def after_summary(fix: PlannedFix) -> str:
+    """``D3 7:00–now`` (or a closed end) in Central time."""
+    return _stint_text(fix.wc_name, fix.start_utc, fix.end_utc)
 
 
 def _overlaps(start: datetime, end: datetime, windows: Sequence[tuple[datetime, datetime]]) -> bool:
