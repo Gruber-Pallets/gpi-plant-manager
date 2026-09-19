@@ -121,13 +121,18 @@ def _stint_text(wc_name: str, start_utc: datetime, end_utc: datetime | None) -> 
     return f"{_short_station(wc_name)} {_clock(start_utc)}–{end}"
 
 
-def before_summary(fix: PlannedFix) -> str:
+def source_stints_summary(stints: Sequence[SourceStint], *, open_end: bool = False) -> str:
     """``D3 7:00–7:02 · D2 7:02–7:04 · D3 7:04–now`` in Central time."""
     parts = []
-    for stint in fix.before:
-        end = None if (fix.end_utc is None and stint.is_open) else stint.end_utc
+    for stint in stints:
+        end = None if (open_end and stint.is_open) else stint.end_utc
         parts.append(_stint_text(stint.wc_name, stint.start_utc, end))
     return " · ".join(parts)
+
+
+def before_summary(fix: PlannedFix) -> str:
+    """``D3 7:00–7:02 · D2 7:02–7:04 · D3 7:04–now`` in Central time."""
+    return source_stints_summary(fix.before, open_end=fix.end_utc is None)
 
 
 def after_summary(fix: PlannedFix) -> str:
