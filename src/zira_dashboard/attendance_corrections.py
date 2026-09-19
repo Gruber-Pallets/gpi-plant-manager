@@ -76,17 +76,23 @@ _MAX_OPERATIONS = 1000
 _MAX_EVENT_IDS = 100
 _MAX_RECALC_HORIZON_DAYS = 500
 # Quick-punch fixer jobs are ordinary correction jobs whose ``item_key`` starts
-# with this prefix. This module is the prefix's single owner: the fixer's
-# detection module (``quick_punch_fixes.ITEM_KEY_PREFIX``) imports it from here,
-# so the worker and the fixer can never disagree about which jobs are fixer jobs.
+# with this prefix AND whose actor is the fixer's system actor; a manager job
+# with such a key is an ordinary manager job. This module is the single owner of
+# that identity: the fixer modules (``quick_punch_fixes.ITEM_KEY_PREFIX`` and the
+# fixer's actor) import these constants from here, so the worker, readiness,
+# and the fixer can never disagree about which jobs are fixer jobs.
 QUICK_PUNCH_ITEM_KEY_PREFIX = "quick-punch:"
-# A fixer job that hits a recoverable failure on (or after) this attempt while
-# it is still changing or verifying Odoo stops retrying and fails with an
-# ``attempt_limit`` event. Once Odoo is verified (the job is recalculating), the
-# remaining mirror, recalculation, and audit steps retry without a cap, like
-# every manager job.
+QUICK_PUNCH_ACTOR_UPN = "system:quick-punch"
+QUICK_PUNCH_ACTOR_NAME = "Quick-punch auto-fix"
+# A fixer job that hits a recoverable failure on (or after) this attempt stops
+# retrying and fails with an ``attempt_limit`` event, but only while nothing has
+# been written to Odoo yet. Once any of its writes completed, it retries without
+# a cap until Odoo matches the plan, like every manager job; so do the mirror,
+# recalculation, and audit steps after Odoo is verified.
 QUICK_PUNCH_MAX_ATTEMPTS = 6
-_QUICK_PUNCH_CAPPED_STATUSES = frozenset(("planned", "applying", "verifying"))
+# ``_claim_job`` moves a planned job to ``applying`` before any work, so a claim
+# never runs as ``planned``; ``recalculating`` means Odoo is already verified.
+_QUICK_PUNCH_CAPPED_STATUSES = frozenset(("applying", "verifying"))
 QUICK_PUNCH_ITEM_KIND = "quick_punch_fix"
 QUICK_PUNCH_CATEGORY_LABEL = "Quick-punch auto-fix"
 _AUDIT_SUMMARY_FIELDS = frozenset(("person_name", "before", "after"))
@@ -106,8 +112,15 @@ _EVENT_DETAIL_FIELDS = frozenset(
         "reason_code",
         "attempt_count",
         "verification_failure_count",
+        # A failed fixer job's progress, and the failure behind ``attempt_limit``.
+        "cause",
+        "completed_operations",
+        "total_operations",
+        "deleted_attendance_ids",
     )
 )
+# Event counts that may legitimately be zero.
+_EVENT_COUNT_FIELDS = frozenset(("completed_operations", "total_operations"))
 _EVENT_OUTCOMES = frozenset(
     (
         ("planning", "created"),
@@ -1845,9 +1858,76 @@ def _plan_merge(plan: CorrectionPlan) -> bool:
 
 
 def _is_quick_punch_job(row: Mapping[str, object]) -> bool:
-    """Whether a persisted job row belongs to the quick-punch fixer."""
+    """Whether a persisted job row belongs to the quick-punch fixer.
+
+    Both the key prefix and the fixer's actor are required, so a manager
+    correction whose key happens to use the prefix stays a manager job.
+    ``QUICK_PUNCH_JOB_SQL`` is the same rule for SQL.
+    """
     item_key = row.get("item_key")
-    return isinstance(item_key, str) and item_key.startswith(QUICK_PUNCH_ITEM_KEY_PREFIX)
+    return (
+        isinstance(item_key, str)
+        and item_key.startswith(QUICK_PUNCH_ITEM_KEY_PREFIX)
+        and row.get("actor_email") == QUICK_PUNCH_ACTOR_UPN
+    )
+
+
+def _sql_text_constant(value: str) -> str:
+    """Quote one of this module's own constants as a SQL string literal."""
+    if not value or any(character in value for character in "'%\\"):
+        raise ValueError("constant cannot be inlined as a SQL literal")
+    return f"'{value}'"
+
+
+# ``_is_quick_punch_job`` over ``attendance_correction_jobs`` columns. The
+# values are this module's constants (never input), so they are inlined; that
+# keeps callers' parameter lists unchanged. A NULL actor is never the fixer.
+QUICK_PUNCH_JOB_SQL = (
+    f"(starts_with(item_key, {_sql_text_constant(QUICK_PUNCH_ITEM_KEY_PREFIX)}) "
+    f"AND actor_email IS NOT DISTINCT FROM {_sql_text_constant(QUICK_PUNCH_ACTOR_UPN)})"
+)
+
+
+def _completed_operation_records(row: Mapping[str, object]) -> list[dict[str, object]]:
+    """The confirmed Odoo operations recorded on a job row (never reservations)."""
+    try:
+        records = _json_list(row.get("completed_operations", []), "completed_operations")
+    except (TypeError, ValueError):
+        return []
+    return [
+        item
+        for item in records
+        if item.get("operation_key") is not None and item.get("kind") in _KINDS
+    ]
+
+
+def _fixer_progress(row: Mapping[str, object]) -> dict[str, object]:
+    """How far a fixer job got in Odoo, for its failure events.
+
+    ``total_operations`` is omitted when the saved plan itself is unreadable.
+    """
+    done = _completed_operation_records(row)
+    deleted: list[int] = []
+    for item in done:
+        if item.get("kind") != "delete":
+            continue
+        try:
+            deleted.append(_positive_int(item.get("attendance_id"), "attendance_id"))
+        except (TypeError, ValueError):
+            continue
+    progress: dict[str, object] = {
+        "completed_operations": len(done),
+        "deleted_attendance_ids": sorted(set(deleted))[:_MAX_EVENT_IDS],
+    }
+    try:
+        employees = _employee_ids(
+            _decode_json_column(row.get("employee_odoo_ids"), "employee_odoo_ids")
+        )
+        plans = _plans_from_json(row.get("operations"), employees)
+    except (TypeError, ValueError, KeyError):
+        return progress
+    progress["total_operations"] = sum(len(plan.operations) for plan in plans.values())
+    return progress
 
 
 def _validated_audit_summary(value: object) -> dict[str, str | None] | None:
@@ -2539,6 +2619,10 @@ def _event_detail(**values: object) -> dict[str, object]:
             if not value or len(value) > _TEXT_LIMIT:
                 raise ValueError("event detail is not bounded")
             detail[key] = value
+        elif key in _EVENT_COUNT_FIELDS:
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{key} must be a non-negative integer")
+            detail[key] = value
         else:
             detail[key] = _positive_int(value, key)
     encoded = json.dumps(detail, sort_keys=True, separators=(",", ":"))
@@ -2996,6 +3080,11 @@ def _transition(
 
     if status is not None and status not in _JOB_STATUSES:
         raise ValueError("invalid correction job status")
+    fixer_failure = status == "failed" and _is_quick_punch_job(claim.row)
+    if fixer_failure:
+        # Say how far Odoo got, so a partly applied merge is never mistaken
+        # for an untouched one.
+        detail = _event_detail(**{**dict(detail or {}), **_fixer_progress(claim.row)})
     updated_at = claim.lease_until if retry_at is None else _aware_utc(retry_at, "retry_at")
     bounded_error = None if last_error is None else str(last_error)[:_ERROR_LIMIT]
     with db.cursor() as cur:
@@ -3017,7 +3106,7 @@ def _transition(
         if cur.fetchone() is None:
             return False
         _append_event_cur(cur, claim.job_id, phase, result, detail)
-        if status == "failed" and _is_quick_punch_job(claim.row):
+        if fixer_failure:
             _record_quick_punch_failure_cur(
                 cur, claim, phase=phase, result=result, detail=detail
             )
@@ -3036,12 +3125,25 @@ def _record_quick_punch_failure_cur(
 
     Every path to ``failed`` goes through ``_transition``, so a fixer job can
     never fail without this event. ``outcome`` is the failure's reason code
-    (for example ``attempt_limit`` or ``preflight_source_changed``).
+    (for example ``attempt_limit`` or ``preflight_source_changed``). The detail
+    also says how far Odoo got (``completed_operations`` of
+    ``total_operations``, and the ``deleted_attendance_ids`` already applied)
+    and, for ``attempt_limit``, the underlying ``cause``.
     """
     from . import inbox_log
 
-    reason_code = (detail or {}).get("reason_code")
+    source = dict(detail or {})
+    reason_code = source.get("reason_code")
     reason = reason_code if isinstance(reason_code, str) and reason_code else result
+    event_detail: dict[str, object] = {
+        "job_id": claim.job_id,
+        "phase": phase,
+        "result": result,
+        "reason_code": reason,
+    }
+    for key in ("cause", "completed_operations", "total_operations", "deleted_attendance_ids"):
+        if key in source:
+            event_detail[key] = source[key]
     summary = _stored_audit_summary(claim.row)
     inbox_log.record_event_with_cursor(
         cur,
@@ -3057,7 +3159,7 @@ def _record_quick_punch_failure_cur(
         actor_name=claim.row.get("actor_name"),
         source="auto",
         reversible=False,
-        detail={"job_id": claim.job_id, "phase": phase, "result": result, "reason_code": reason},
+        detail=event_detail,
     )
 
 
@@ -4180,18 +4282,22 @@ def _retry_or_fail(
 
     Manager jobs always retry with backoff, exactly as before. A quick-punch
     fixer job that fails recoverably on (or after) attempt
-    ``QUICK_PUNCH_MAX_ATTEMPTS`` while Odoo is not yet verified (status
-    applying or verifying) fails instead, with an ``attempt_limit`` event;
-    ``_transition`` records its failure alert in the same transaction. After
-    verification Odoo is already correct, so the fixer waits out the mirror,
-    recalculation, and audit steps like a manager job and still finishes with
-    its merge event.
+    ``QUICK_PUNCH_MAX_ATTEMPTS`` fails instead, with an ``attempt_limit`` event
+    naming the underlying ``cause``, but only while it has written nothing to
+    Odoo (no completed operation) and Odoo is not yet verified (status applying
+    or verifying). ``_transition`` records its failure alert in the same
+    transaction. A job that already changed Odoo never stops halfway: it keeps
+    retrying until Odoo matches the plan. After verification Odoo is already
+    correct, so the fixer waits out the mirror, recalculation, and audit steps
+    like a manager job and still finishes with its merge event.
     """
     if (
         _is_quick_punch_job(claim.row)
         and claim.row.get("status") in _QUICK_PUNCH_CAPPED_STATUSES
+        and not _completed_operation_records(claim.row)
         and claim.attempt_count >= QUICK_PUNCH_MAX_ATTEMPTS
     ):
+        cause = detail.get("reason_code")
         if not _transition(
             claim,
             status="failed",
@@ -4201,6 +4307,7 @@ def _retry_or_fail(
                 **{
                     **dict(detail),
                     "reason_code": "attempt_limit",
+                    "cause": cause if isinstance(cause, str) and cause else result,
                     "attempt_count": claim.attempt_count,
                 }
             ),

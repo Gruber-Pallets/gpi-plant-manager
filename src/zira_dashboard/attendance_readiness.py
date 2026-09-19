@@ -20,6 +20,7 @@ from typing import Literal
 
 from . import (
     app_settings,
+    attendance_corrections,
     attendance_location_policy,
     attendance_mirror,
     attendance_timeline,
@@ -738,18 +739,23 @@ def _timeline_metrics_cur(
 
 
 def _correction_health_cur(cur, day_start: datetime, day_end: datetime) -> dict:
-    """Return health from the latest immutable intent for each inbox item."""
+    """Return health from the latest immutable intent for each inbox item.
+
+    Quick-punch fixer jobs are left out: a failed fixer job raises the fixer's
+    own Exception Inbox alert, and must not block the attendance rollout.
+    """
     cur.execute(
         "WITH latest AS ("
         "SELECT DISTINCT ON (item_key) item_key, status, attempt_count, "
-        "verification_failure_count, updated_at FROM attendance_correction_jobs "
+        "verification_failure_count, updated_at, actor_email "
+        "FROM attendance_correction_jobs "
         "ORDER BY item_key, created_at DESC, id DESC"
         ") SELECT COUNT(*) FILTER (WHERE status = 'failed') AS failed, "
         "COALESCE(SUM(GREATEST(attempt_count - 1, 0)) "
         "FILTER (WHERE updated_at >= %s AND updated_at < %s), 0) AS retries, "
         "COALESCE(SUM(verification_failure_count) "
         "FILTER (WHERE updated_at >= %s AND updated_at < %s), 0) AS verification_failures "
-        "FROM latest",
+        "FROM latest WHERE NOT " + attendance_corrections.QUICK_PUNCH_JOB_SQL,
         (day_start, day_end, day_start, day_end),
     )
     return dict(cur.fetchone() or {})

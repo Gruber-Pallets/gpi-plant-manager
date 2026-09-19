@@ -548,7 +548,13 @@ def test_fixer_job_fails_after_six_recoverable_errors_and_records_the_failure(mo
     phase, result, detail = worker.table.job_events()[-1]
     assert (phase, result) == ("applying", "failed")
     assert detail["reason_code"] == "attempt_limit"
+    assert detail["cause"] == "recoverable_odoo_failure"
     assert detail["attempt_count"] == 6
+    assert (
+        detail["completed_operations"],
+        detail["total_operations"],
+        detail["deleted_attendance_ids"],
+    ) == (0, 3, [])
     assert worker.inbox == [
         {
             "item_kind": "quick_punch_fix",
@@ -568,6 +574,10 @@ def test_fixer_job_fails_after_six_recoverable_errors_and_records_the_failure(mo
                 "phase": "applying",
                 "result": "failed",
                 "reason_code": "attempt_limit",
+                "cause": "recoverable_odoo_failure",
+                "completed_operations": 0,
+                "total_operations": 3,
+                "deleted_attendance_ids": [],
             },
         }
     ]
@@ -606,17 +616,122 @@ def test_fixer_attempt_cap_also_covers_recoverable_failures_outside_writes(monke
     assert [event["outcome"] for event in worker.inbox] == ["attempt_limit"]
 
 
-def test_fixer_attempt_cap_covers_verifying_the_odoo_writes(monkeypatch):
-    odoo = _SwitchableReadsOdoo(christian_rows())
+def test_fixer_attempt_cap_covers_verifying_a_plan_that_wrote_nothing(monkeypatch):
+    # Odoo already holds the merged row, so the plan has no writes, and Odoo
+    # cannot be read to confirm it.
+    merged = [_row(6208, at(0), None, DISMANTLER_3)]
+    preview = _preview(
+        merged, item_key="quick-punch:8:6208", start=at(0), end=None, merge=True
+    )
+    assert preview.plans[0].operations == ()
+    odoo = _SwitchableReadsOdoo(merged)
     odoo.reads_down = True
     worker = _Worker(monkeypatch, odoo)
 
-    result = worker.run(_claim(christian_preview(), attempt=6, status="verifying"))
+    result = worker.run(_claim(preview, attempt=6))
 
     assert result.status == "failed"
     phase, outcome, detail = worker.table.job_events()[-1]
-    assert (phase, outcome, detail["reason_code"]) == ("verifying", "failed", "attempt_limit")
+    assert (phase, outcome, detail["reason_code"], detail["cause"]) == (
+        "verifying",
+        "failed",
+        "attempt_limit",
+        "verification_read_unavailable",
+    )
     assert [event["action"] for event in worker.inbox] == ["quick_punch_failed"]
+
+
+class _OutageAfterWritesOdoo(_SwitchableReadsOdoo):
+    """Odoo that accepts ``allowed_writes`` writes, then refuses while ``outage``."""
+
+    allowed_writes = 1
+    outage = True
+
+    def _check_outage(self):
+        if self.outage and len(self.writes) >= self.allowed_writes:
+            raise xmlrpc.client.Fault(1, "Odoo is busy, please retry")
+
+    def update_attendance_interval(self, attendance_id, *, values):
+        self._check_outage()
+        super().update_attendance_interval(attendance_id, values=values)
+
+    def create_attendance_interval(self, **values):
+        self._check_outage()
+        return super().create_attendance_interval(**values)
+
+    def delete_attendance_interval(self, attendance_id):
+        self._check_outage()
+        super().delete_attendance_interval(attendance_id)
+
+
+def _outage_after_the_first_write(odoo):
+    odoo.allowed_writes = 1
+    return lambda number: setattr(odoo, "outage", number <= POST_WRITE_FAILURES)
+
+
+def _verification_down_after_every_write(odoo):
+    odoo.outage = False
+    return lambda number: setattr(odoo, "reads_down", number <= POST_WRITE_FAILURES)
+
+
+POST_WRITE_FAILURES = 8
+
+
+@pytest.mark.parametrize(
+    "outage", [_outage_after_the_first_write, _verification_down_after_every_write]
+)
+def test_fixer_that_already_changed_odoo_keeps_retrying_until_it_finishes(monkeypatch, outage):
+    preview = christian_preview()
+    odoo = _OutageAfterWritesOdoo(christian_rows())
+    worker = _Worker(monkeypatch, odoo)
+    set_attempt = outage(odoo)
+    claim = _claim(preview)
+    results = []
+
+    for number in range(1, POST_WRITE_FAILURES + 2):
+        if number > 1:
+            claim = _next_attempt(claim)
+        set_attempt(number)
+        results.append(worker.run(claim).status)
+
+    assert results == ["recoverable"] * POST_WRITE_FAILURES + ["complete"]
+    assert "failed" not in worker.table.statuses()
+    assert [event["action"] for event in worker.inbox] == ["quick_punch_merged"]
+    assert list(odoo.rows) == [6208]
+    assert odoo.rows[6208]["check_in_utc"] == at(0)
+
+
+def test_fixer_failure_detail_says_how_far_odoo_was_changed(monkeypatch):
+    preview = christian_preview()
+    odoo = _NoOverlapOdoo(christian_rows())
+    real_delete = odoo.delete_attendance_interval
+
+    def delete_then_someone_edits_the_detour(attendance_id):
+        real_delete(attendance_id)
+        odoo.rows[6207]["odoo_write_date"] = NOW
+
+    odoo.delete_attendance_interval = delete_then_someone_edits_the_detour
+    worker = _Worker(monkeypatch, odoo)
+
+    result = worker.run(_claim(preview))
+
+    assert result.status == "failed"
+    phase, outcome, detail = worker.table.job_events()[-1]
+    assert (phase, outcome) == ("applying", "source_changed")
+    progress = ("completed_operations", "total_operations", "deleted_attendance_ids")
+    assert tuple(detail[key] for key in progress) == (1, 3, [6190])
+    assert "cause" not in detail
+    [event] = worker.inbox
+    assert event["outcome"] == "fresh_preview_required"
+    assert event["detail"] == {
+        "job_id": 5,
+        "phase": "applying",
+        "result": "source_changed",
+        "reason_code": "fresh_preview_required",
+        "completed_operations": 1,
+        "total_operations": 3,
+        "deleted_attendance_ids": [6190],
+    }
 
 
 def test_fixer_cap_reports_superseded_when_its_failure_does_not_persist(monkeypatch):
@@ -778,6 +893,46 @@ def test_manager_failures_record_no_fixer_event(monkeypatch, break_job):
     assert result.status == "failed"
     assert worker.table.statuses() == ["failed"]
     assert worker.inbox == []
+
+
+@pytest.mark.parametrize(
+    ("item_key", "fixer_actor"),
+    [
+        # A manager correction whose key happens to use the fixer's prefix.
+        ("quick-punch:8:6190,6207,6208", False),
+        # The fixer's actor on an ordinary inbox item.
+        ("production_unassigned_run:dismantler-3:6190", True),
+    ],
+)
+def test_only_the_fixer_actor_on_a_fixer_key_is_a_fixer_job(monkeypatch, item_key, fixer_actor):
+    preview = christian_preview(item_key=item_key)
+
+    busy = _Worker(monkeypatch, _BusyOdoo(christian_rows()))
+    retries = [
+        busy.run(_claim(preview, attempt=attempt, fixer=fixer_actor)).status
+        for attempt in (6, 7)
+    ]
+    assert retries == ["recoverable", "recoverable"]
+    assert busy.inbox == []
+
+    changed = _NoOverlapOdoo(christian_rows())
+    changed.rows[6208]["odoo_write_date"] = NOW
+    failing = _Worker(monkeypatch, changed)
+    assert failing.run(_claim(preview, fixer=fixer_actor)).status == "failed"
+    assert failing.inbox == []
+    assert all("completed_operations" not in detail for *_, detail in failing.table.job_events())
+
+    finishing = _Worker(monkeypatch, _NoOverlapOdoo(christian_rows()))
+    assert finishing.run(_claim(preview, fixer=fixer_actor)).status == "complete"
+    assert [(event["action"], event["item_kind"]) for event in finishing.inbox] == [
+        ("corrected_odoo_attendance", "attendance_correction")
+    ]
+
+
+def test_the_fixer_identity_constants_have_one_owner():
+    assert attendance_corrections.QUICK_PUNCH_ITEM_KEY_PREFIX == "quick-punch:"
+    assert attendance_corrections.QUICK_PUNCH_ACTOR_UPN == FIXER_UPN
+    assert attendance_corrections.QUICK_PUNCH_ACTOR_NAME == FIXER_NAME
 
 
 def test_fixer_failure_without_a_stored_summary_still_alerts(monkeypatch):
@@ -969,10 +1124,6 @@ def test_job_creation_rejects_a_malformed_summary_before_the_database(monkeypatc
             actor_name=FIXER_NAME,
             audit_summary=summary,
         )
-
-
-def test_the_fixer_item_key_prefix_has_one_owner():
-    assert attendance_corrections.QUICK_PUNCH_ITEM_KEY_PREFIX == "quick-punch:"
 
 
 # ---------------------------------------------------------------------------
@@ -1287,3 +1438,80 @@ def test_postgres_fixer_source_change_records_the_failure_event(monkeypatch, job
     assert [(row["action"], row["outcome"]) for row in _inbox_rows(key)] == [
         ("quick_punch_failed", "preflight_source_changed")
     ]
+
+
+@requires_postgres
+def test_postgres_failure_status_job_event_and_inbox_event_commit_together(
+    monkeypatch, job_table
+):
+    base = _recent_base()
+    key = _unique("quick-punch:8:")
+    job_table.append(key)
+    odoo = _NoOverlapOdoo(christian_rows(base))
+    _install_real_worker(monkeypatch, odoo)
+    job_id = attendance_corrections.create_job_from_preview(
+        preview=christian_preview(base, item_key=key),
+        actor_email=FIXER_UPN,
+        actor_name=FIXER_NAME,
+        audit_summary=SUMMARY,
+    )
+    odoo.rows[6208]["odoo_write_date"] = datetime.now(UTC)
+    real_record = inbox_log.record_event_with_cursor
+
+    def insert_then_fail(cursor, **kwargs):
+        real_record(cursor, **kwargs)
+        raise RuntimeError("inbox log write failed")
+
+    monkeypatch.setattr(inbox_log, "record_event_with_cursor", insert_then_fail)
+
+    with pytest.raises(RuntimeError, match="inbox log write failed"):
+        attendance_corrections.process_job(job_id)
+
+    assert _job(job_id)["status"] == "applying"
+    assert ("applying", "source_changed") not in [
+        (row["phase"], row["result"]) for row in _job_event_rows(job_id)
+    ]
+    assert _inbox_rows(key) == []
+
+
+@requires_postgres
+def test_postgres_readiness_ignores_failed_fixer_jobs_but_not_manager_jobs(
+    monkeypatch, job_table
+):
+    from zira_dashboard import attendance_readiness
+
+    base = _recent_base()
+    now = datetime.now(UTC)
+
+    def health():
+        with db.cursor() as cur:
+            counts = attendance_readiness._correction_health_cur(
+                cur, now - timedelta(days=1), now + timedelta(days=1)
+            )
+        return tuple(int(counts[name]) for name in ("failed", "verification_failures"))
+
+    def failed_job(prefix, actor_email, actor_name, summary=None):
+        key = _unique(prefix)
+        job_table.append(key)
+        job_id = attendance_corrections.create_job_from_preview(
+            preview=christian_preview(base, item_key=key),
+            actor_email=actor_email,
+            actor_name=actor_name,
+            audit_summary=summary,
+        )
+        db.execute(
+            "UPDATE attendance_correction_jobs SET status = 'failed', attempt_count = 6, "
+            "verification_failure_count = 1, updated_at = now() WHERE id = %s",
+            (job_id,),
+        )
+
+    before = health()
+    failed_job("quick-punch:8:", FIXER_UPN, FIXER_NAME, SUMMARY)
+    assert health() == before
+
+    failed_job("production_unassigned_run:dismantler-3:", "manager@example.com", "Manager")
+    failed_job("quick-punch:8:", "manager@example.com", "Manager")
+    failed_job("quick-punch:8:", None, None)
+    failed_job("production_unassigned_run:dismantler-3:", FIXER_UPN, FIXER_NAME)
+    after = health()
+    assert (after[0] - before[0], after[1] - before[1]) == (4, 4)
