@@ -51,10 +51,14 @@ class WorkSegment:
     person_odoo_id: int | None = None
 
 
-def _blocking_windows(
+def blocking_windows(
     spans: Sequence[LocationSpan],
 ) -> dict[int, list[tuple[datetime, datetime]]]:
-    """Each person's conflicting, unmapped or stale location windows."""
+    """Each person's conflicting, unmapped or stale location windows.
+
+    Smoothing never bridges these. Keyed by Odoo employee ID, as
+    ``quick_punch_smoothing.smooth_quick_punches`` expects.
+    """
     blocked: dict[int, list[tuple[datetime, datetime]]] = {}
     for span in spans:
         if span.status in _SMOOTHING_BLOCKING_STATUSES:
@@ -117,7 +121,7 @@ def work_segments_from_timeline(
         try:
             stints = quick_punch_smoothing.smooth_quick_punches(
                 raw,
-                blocked_windows=_blocking_windows(spans),
+                blocked_windows=blocking_windows(spans),
                 production_times_by_wc=production_times_by_wc,
             )
         except Exception as exc:  # noqa: BLE001 - smoothing must never take a page down

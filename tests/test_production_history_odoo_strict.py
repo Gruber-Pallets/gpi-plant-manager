@@ -239,7 +239,7 @@ def test_work_segments_from_timeline_can_skip_smoothing_for_real_punch_views():
 
 @pytest.mark.parametrize(
     "failing",
-    ("quick_punch_smoothing.smooth_quick_punches", "_blocking_windows"),
+    ("quick_punch_smoothing.smooth_quick_punches", "blocking_windows"),
 )
 def test_work_segments_from_timeline_falls_back_to_real_punches_if_smoothing_fails(
     monkeypatch, caplog, failing
