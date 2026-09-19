@@ -718,32 +718,41 @@ def _closed_merge_pieces(
     return pieces
 
 
+_OPEN_MERGE_LIVE_ROW_REQUIRED = (
+    "open merge requires the open attendance row inside the merge range"
+)
+
+
 def _open_merge_pieces(
     sources: tuple[_SourceRow, ...],
     start: datetime,
     work_center_id: int,
     department_id: int | None,
 ) -> list[_Piece]:
-    """Merge every row from ``start`` onward into one open target row.
+    """Merge every row from ``start`` onward into the live open row.
 
-    The same as ``_open_pieces`` except for the survivor: the currently open
-    affected row (``check_out`` is null) keeps its Odoo ID, because the kiosk
-    and the plant-floor app close a person's shift by that attendance ID. Its
-    ``check_in`` moves to ``start`` and its location is set; the other affected
-    rows are deleted. Without an unused open row the legacy survivor rule (the
-    earliest affected row starting at or after ``start``) applies, and the
-    first affected row's left remainder is handled exactly as in the legacy
+    The survivor is the currently open row (``check_out`` is null): it keeps
+    its Odoo ID, because the kiosk and the plant-floor app close a person's
+    shift by that attendance ID. Its ``check_in`` moves to ``start`` and its
+    location is set; the other affected rows are deleted, and the first
+    affected row keeps any time before ``start`` exactly as in the legacy
     planner.
+
+    The live row must therefore be inside the range, or the request is
+    refused (a merge no-op never reaches here). Without an open row the person
+    clocked out after the caller looked (for example, auto-lunch signed
+    everyone out), and any open plan would clock them back in. An open row
+    starting before ``start`` would be closed at ``start`` as the left
+    remainder, and the target would become a brand-new open row that nothing
+    ever closes.
     """
+    live = next((item for item in sources if item.end is None), None)
+    if live is None or live.start < start:
+        raise ValueError(_OPEN_MERGE_LIVE_ROW_REQUIRED)
     affected = [item for item in sources if item.end is None or item.end > start]
-    unaffected = [item for item in sources if item.end is not None and item.end <= start]
-    if not affected:
-        return [
-            *map(_untouched_piece, sources),
-            _target_piece(None, start, None, work_center_id, department_id),
-        ]
-    used_ids: set[int] = set()
-    pieces = [*map(_untouched_piece, unaffected)]
+    pieces = [
+        _untouched_piece(item) for item in sources if item.end is not None and item.end <= start
+    ]
     first = affected[0]
     if first.start < start:
         pieces.append(
@@ -757,25 +766,7 @@ def _open_merge_pieces(
                 target=False,
             )
         )
-        used_ids.add(first.attendance_id)
-    candidates = [
-        source
-        for source in affected
-        if source.attendance_id not in used_ids and source.start >= start
-    ]
-    reusable = next((source for source in candidates if source.end is None), None)
-    if reusable is None and candidates:
-        reusable = candidates[0]
-    pieces.append(
-        _target_piece(
-            reusable,
-            start,
-            None,
-            work_center_id,
-            department_id,
-            key_sources=tuple(affected),
-        )
-    )
+    pieces.append(_target_piece(live, start, None, work_center_id, department_id))
     return pieces
 
 
@@ -1097,9 +1088,11 @@ def plan_correction(
 
     ``merge=True`` asks for one continuous row over the range: a closed range
     fills gaps between the rows it covers, and an open range keeps the
-    currently open row's ID. The request then carries ``"merge": True``, which
-    the operation keys, integrity hash, and re-derivation all authenticate.
-    Without it the request is exactly the legacy five keys.
+    currently open row's ID. An open merge that is not a no-op raises
+    ``ValueError`` unless that open row starts at or after ``start_utc``. The
+    request then carries ``"merge": True``, which the operation keys,
+    integrity hash, and re-derivation all authenticate. Without it the request
+    is exactly the legacy five keys.
     """
 
     if not isinstance(merge, bool):

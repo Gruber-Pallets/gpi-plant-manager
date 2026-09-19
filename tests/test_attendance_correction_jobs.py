@@ -1034,11 +1034,21 @@ def test_merge_preview_threads_the_flag_into_every_plan(monkeypatch):
         "fetch_employee_statuses",
         lambda: [{"id": 7, "active": True}, {"id": 8, "active": True}],
     )
+    # Employee 8 is still clocked in too: an open merge refuses a person whose
+    # live open row is not inside the range.
+    employee_8_live_row = {
+        **_row(31, start=MERGE_START + timedelta(minutes=1), end=None, work_center=80),
+        "employee_odoo_id": 8,
+    }
     monkeypatch.setattr(
         odoo_client,
         "fetch_employee_attendance_rows",
         lambda employee_id, *_args: reads.append(employee_id)
-        or ([dict(item) for item in _merge_rows()] if employee_id == 7 else []),
+        or (
+            [dict(item) for item in _merge_rows()]
+            if employee_id == 7
+            else [dict(employee_8_live_row)]
+        ),
     )
     monkeypatch.setattr(odoo_client, "_app_wc_name_for_odoo_id", lambda _wc_id: "Repair 1")
     monkeypatch.setattr(odoo_client, "_department_id_for_wc", lambda _name, **_kwargs: 9)

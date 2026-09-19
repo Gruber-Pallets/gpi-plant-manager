@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import hashlib
 from itertools import permutations
 import json
+import random
 
 import pytest
 
@@ -1396,15 +1397,143 @@ def test_open_merge_keeps_the_first_rows_left_remainder_and_the_live_id():
     ]
 
 
-def test_open_merge_without_an_open_row_keeps_the_legacy_survivor():
+OPEN_MERGE_REFUSAL = "open merge requires the open attendance row inside the merge range"
+
+
+def test_open_merge_without_an_open_row_is_refused():
+    # Intended spec change: this used to fall back to the legacy survivor, which
+    # sets check_out=NULL on closed row 1 and clocks a clocked-out person back in.
     rows = [
         row(1, at(7), at(7, 2), work_center=99, department=DEPARTMENT),
         row(2, at(7, 2), at(8), work_center=WORK_CENTER, department=DEPARTMENT),
     ]
 
-    assert interval_tuples(merged(rows, at(7), None)) == interval_tuples(
-        planned(rows, at(7), None)
-    )
+    with pytest.raises(ValueError, match=OPEN_MERGE_REFUSAL):
+        merged(rows, at(7), None)
+    # The legacy request keeps its survivor rule.
+    assert interval_tuples(planned(rows, at(7), None)) == [
+        (1, at(7), None, WORK_CENTER, DEPARTMENT)
+    ]
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param([], id="no-rows"),
+        pytest.param(
+            [row(1, at(6), at(7), work_center=WORK_CENTER, department=DEPARTMENT)],
+            id="clocked-out-before-start",
+        ),
+        pytest.param(
+            [row(1, at(6), at(11), work_center=WORK_CENTER, department=DEPARTMENT)],
+            id="closed-target-row-spanning-start",
+        ),
+        pytest.param(
+            [
+                row(1, at(7), at(7, 2), work_center=WORK_CENTER, department=DEPARTMENT),
+                row(2, at(7, 2), at(7, 4), work_center=99, department=DEPARTMENT),
+                row(3, at(7, 4), at(11, 30), work_center=WORK_CENTER, department=DEPARTMENT),
+            ],
+            id="auto-lunch-signed-out-after-the-quick-punches",
+        ),
+    ],
+)
+def test_open_merge_refuses_a_person_who_is_no_longer_clocked_in(rows):
+    with pytest.raises(ValueError, match=OPEN_MERGE_REFUSAL):
+        merged(rows, at(7), None)
+
+
+@pytest.mark.parametrize(
+    ("work_center", "department"),
+    [(99, DEPARTMENT), (WORK_CENTER, DEPARTMENT + 1), (None, None)],
+)
+def test_open_merge_refuses_an_open_row_that_started_before_start_elsewhere(
+    work_center, department
+):
+    rows = [
+        row(1, at(5), at(6), work_center=WORK_CENTER, department=DEPARTMENT),
+        row(2, at(6), None, work_center=work_center, department=department),
+    ]
+
+    with pytest.raises(ValueError, match=OPEN_MERGE_REFUSAL):
+        merged(rows, at(7), None)
+    # The hazard: the live row 2 is closed at start and a brand-new open row is
+    # created, which the kiosk (it closes shifts by the live row's ID) never closes.
+    legacy = planned(rows, at(7), None)
+    assert interval_tuples(legacy) == [
+        (1, at(5), at(6), WORK_CENTER, DEPARTMENT),
+        (2, at(6), at(7), work_center, department),
+        (None, at(7), None, WORK_CENTER, DEPARTMENT),
+    ]
+
+
+@pytest.mark.parametrize("open_start", [at(7), at(7, 3)])
+def test_open_merge_with_the_open_row_inside_the_range_keeps_its_id(open_start):
+    rows = [
+        row(1, at(6), at(7), work_center=99, department=DEPARTMENT),
+        *(
+            [row(2, at(7), open_start, work_center=11, department=3)]
+            if open_start > at(7)
+            else []
+        ),
+        row(3, open_start, None, work_center=99, department=DEPARTMENT),
+    ]
+
+    plan = merged(rows, at(7), None)
+
+    assert interval_tuples(plan) == [
+        (1, at(6), at(7), 99, DEPARTMENT),
+        (3, at(7), None, WORK_CENTER, DEPARTMENT),
+    ]
+    live_update = {"odoo_work_center_id": WORK_CENTER}
+    if open_start > at(7):
+        live_update = {"check_in_utc": at(7), **live_update}
+    assert [op for op in _ops(plan) if op[1] == 3] == [("update", 3, live_update)]
+    assert plan_from_json(json.loads(json.dumps(plan_to_json(plan)))) == plan
+
+
+@pytest.mark.parametrize("open_start", [at(6), at(7)])
+def test_open_merge_no_op_still_returns_an_empty_plan(open_start):
+    rows = [
+        row(1, at(5), open_start, work_center=99, department=DEPARTMENT),
+        row(2, open_start, None, work_center=WORK_CENTER, department=DEPARTMENT),
+    ]
+
+    plan = merged(rows, at(7), None)
+
+    assert plan.operations == ()
+    assert plan.request["merge"] is True
+    assert interval_tuples(plan) == [
+        (1, at(5), open_start, 99, DEPARTMENT),
+        (2, open_start, None, WORK_CENTER, DEPARTMENT),
+    ]
+    assert plan_from_json(json.loads(json.dumps(plan_to_json(plan)))) == plan
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param([], id="no-rows"),
+        pytest.param(
+            [
+                row(1, at(7), at(7, 2), work_center=99, department=DEPARTMENT),
+                row(2, at(7, 2), at(8), work_center=WORK_CENTER, department=DEPARTMENT),
+            ],
+            id="clocked-out",
+        ),
+        pytest.param(
+            [row(1, at(6), None, work_center=99, department=DEPARTMENT)],
+            id="open-row-before-start-elsewhere",
+        ),
+    ],
+)
+def test_validation_refuses_an_open_merge_plan_the_planner_would_refuse(rows):
+    # The legacy plan is exactly what the old open-merge fallback produced; re-keyed
+    # under a merge request it authenticates, so only re-derivation can refuse it.
+    legacy_plan = planned(rows, at(7), None)
+
+    with pytest.raises(ValueError, match=OPEN_MERGE_REFUSAL):
+        _rekeyed_plan(legacy_plan, {**legacy_plan.request, "merge": True})
 
 
 def test_closed_merge_keeps_left_and_right_remainders_and_reuses_an_inside_row():
@@ -1501,10 +1630,11 @@ def test_closed_merge_of_an_open_source_keeps_the_open_suffix():
 
 
 def test_merge_without_source_rows_creates_the_requested_interval():
-    for end in (at(10), None):
-        assert interval_tuples(merged([], at(8), end)) == [
-            (None, at(8), end, WORK_CENTER, DEPARTMENT)
-        ]
+    # Only a closed range: an open merge without the live row is refused (see
+    # test_open_merge_refuses_a_person_who_is_no_longer_clocked_in).
+    assert interval_tuples(merged([], at(8), at(10))) == [
+        (None, at(8), at(10), WORK_CENTER, DEPARTMENT)
+    ]
 
 
 def test_merge_operation_keys_differ_from_the_legacy_request():
@@ -1513,3 +1643,105 @@ def test_merge_operation_keys_differ_from_the_legacy_request():
     assert merged(rows, at(8), at(10)).operations[0].key != planned(
         rows, at(8), at(10)
     ).operations[0].key
+
+
+# ---------------------------------------------------------------------------
+# Legacy golden digest: merge mode must not move a single legacy byte.
+
+# Proven equal to the pre-merge engine (4df8ccce) when this test was added.
+LEGACY_GOLDEN_DIGEST = "1b5360b31a4a9f1258ffed2a87d2d01d38b528813ee5e0021fa0630aa403524b"
+_GOLDEN_SEED = 20260919
+_GOLDEN_CASES = 2000
+_GOLDEN_ROW_WORK_CENTERS = (11, WORK_CENTER, 99, None)
+_GOLDEN_TARGET_WORK_CENTERS = (11, WORK_CENTER, 99)
+_GOLDEN_DEPARTMENTS = (3, DEPARTMENT, None)
+
+
+def _golden_rows(rng: random.Random) -> list[dict[str, object]]:
+    """Non-overlapping rows: gaps, touching rows, an optional open last row."""
+    count = rng.choice((0, 1, 1, 2, 2, 3, 3, 4))
+    ids = rng.sample(range(1, 40), count)
+    cursor = at(6) + timedelta(minutes=rng.randrange(0, 45))
+    rows: list[dict[str, object]] = []
+    for index, attendance_id in enumerate(ids):
+        start = cursor
+        end = (
+            None
+            if index == count - 1 and rng.random() < 0.45
+            else start + timedelta(minutes=rng.choice((1, 2, 4, 30, 60, 95)))
+        )
+        extra: dict[str, object] = {}
+        if rng.random() < 0.3:
+            extra["odoo_work_center_name"] = f"WC {attendance_id}"
+            extra["odoo_department_name"] = f"Dept {attendance_id}"
+        rows.append(
+            row(
+                attendance_id,
+                start,
+                end,
+                work_center=rng.choice(_GOLDEN_ROW_WORK_CENTERS),
+                department=rng.choice(_GOLDEN_DEPARTMENTS),
+                write_minute=rng.randrange(0, 600),
+                **extra,
+            )
+        )
+        if end is not None:
+            cursor = end + timedelta(minutes=rng.choice((0, 0, 1, 3, 25)))
+    rng.shuffle(rows)
+    return rows
+
+
+def _golden_request(
+    rng: random.Random, rows: list[dict[str, object]]
+) -> dict[str, object]:
+    """A request whose edges mostly land on, or one minute beside, row edges."""
+    edges = {at(5), at(13)}
+    for item in rows:
+        for value in (item["check_in_utc"], item["check_out_utc"]):
+            if isinstance(value, datetime):
+                edges.update((value, value - timedelta(minutes=1), value + timedelta(minutes=1)))
+    points = sorted(edges)
+    start = rng.choice(points)
+    later = [point for point in points if point > start]
+    roll = rng.random()
+    if roll < 0.4:
+        end = None
+    elif roll < 0.42:
+        end = start  # an invalid empty range: the error text is part of the digest
+    else:
+        end = rng.choice(later) if later else start + timedelta(minutes=30)
+    return {
+        "employee_odoo_id": EMPLOYEE,
+        "start_utc": start,
+        "end_utc": end,
+        "odoo_work_center_id": rng.choice(_GOLDEN_TARGET_WORK_CENTERS),
+        "odoo_department_id": rng.choice(_GOLDEN_DEPARTMENTS),
+    }
+
+
+def legacy_golden_digest(plan_correction_fn=plan_correction, plan_to_json_fn=plan_to_json) -> str:
+    """Hash every seeded legacy (no ``merge`` argument) plan or refusal text.
+
+    The engine functions are parameters so the same cases can be replayed
+    against another engine revision.
+    """
+    rng = random.Random(_GOLDEN_SEED)
+    digest = hashlib.sha256()
+    for _ in range(_GOLDEN_CASES):
+        rows = _golden_rows(rng)
+        request = _golden_request(rng, rows)
+        try:
+            plan = plan_correction_fn(rows=rows, **request)
+        except (TypeError, ValueError) as exc:
+            text = f"error:{type(exc).__name__}:{exc}"
+        else:
+            text = json.dumps(
+                plan_to_json_fn(plan), sort_keys=True, separators=(",", ":")
+            )
+        digest.update(text.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def test_legacy_requests_match_the_pre_merge_golden_digest():
+    assert legacy_golden_digest() == LEGACY_GOLDEN_DIGEST
