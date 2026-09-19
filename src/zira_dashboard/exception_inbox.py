@@ -611,6 +611,7 @@ def build_summary() -> dict:
         missed_punch_out,
         missing_wc,
         odoo_sync,
+        quick_punch_inbox,
         unexpected_worker,
     )
     from .routes import staffing as staffing_routes
@@ -649,6 +650,9 @@ def build_summary() -> dict:
         source_errors,
         auto_lunch_guard.current_snapshot,
     )
+    quick_punch_rows = _capture(
+        source_errors, "Quick-punch fixer", quick_punch_inbox.current_rows, []
+    )
     schedule_count = _capture(
         source_errors, "Plant Schedule", lambda: _plant_schedule_reminder()[0], 0
     )
@@ -673,6 +677,7 @@ def build_summary() -> dict:
     breakdown_count = len(breakdown_rows)
     roster_sync_count = int(roster_sync_alert is not None)
     auto_lunch_count = int(auto_lunch_alert is not None)
+    quick_punch_count = len(quick_punch_rows)
     attendance_counts = (
         {kind: len(attendance_snapshot.issues_for(kind)) for kind in _ATTENDANCE_SECTION_META}
         if _attendance_sections_should_render(attendance_snapshot)
@@ -694,6 +699,7 @@ def build_summary() -> dict:
         + sum(1 for r in breakdown_rows if r.get("priority") == "urgent")
         + roster_sync_count
         + auto_lunch_count
+        + quick_punch_count
         + attendance_urgent_count
     )
     total = (
@@ -708,6 +714,7 @@ def build_summary() -> dict:
         + breakdown_count
         + roster_sync_count
         + auto_lunch_count
+        + quick_punch_count
         + sum(attendance_counts.values())
     )
     summary = {
@@ -730,6 +737,7 @@ def build_summary() -> dict:
             "breakdown": breakdown_count,
             "odoo_roster_sync": roster_sync_count,
             "auto_lunch": auto_lunch_count,
+            "quick_punch": quick_punch_count,
             **attendance_counts,
         },
     }
@@ -745,6 +753,7 @@ def build_snapshot() -> dict:
         missed_punch_out,
         missing_wc,
         odoo_sync,
+        quick_punch_inbox,
         unexpected_worker,
     )
     from .routes import staffing as staffing_routes
@@ -788,6 +797,9 @@ def build_snapshot() -> dict:
         auto_lunch_guard.current_snapshot,
     )
     auto_lunch_count = int(auto_lunch_alert is not None)
+    quick_punch_rows = _capture(
+        source_errors, "Quick-punch fixer", quick_punch_inbox.current_rows, []
+    )
     schedule_count, schedule_rows = _capture(
         source_errors, "Plant Schedule", _plant_schedule_reminder, (0, [])
     )
@@ -914,6 +926,18 @@ def build_snapshot() -> dict:
             "empty": "Live",
             "context": {},
             "rows": [auto_lunch_alert] if auto_lunch_alert else [],
+        },
+        {
+            "id": "quick_punch",
+            "title": "Quick-punch fixes that need a look",
+            "count": len(quick_punch_rows),
+            "tone": "bad",
+            "action_key": None,
+            "action_label": None,
+            "href": None,
+            "empty": "All clear",
+            "context": {},
+            "rows": quick_punch_rows,
         },
         {
             "id": "assignments",

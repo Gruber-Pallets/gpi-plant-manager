@@ -191,6 +191,7 @@ def test_build_snapshot_aggregates_existing_alert_sources(monkeypatch):
     assert counts == {
         "odoo_roster_sync": 0,
         "auto_lunch": 0,
+        "quick_punch": 0,
         "assignments": 1,
         "plant_schedule": 0,
         "saturday_recruiting": 0,
@@ -377,6 +378,7 @@ def test_build_summary_counts_open_urgent_followup_and_time_off(monkeypatch):
     assert summary["sections"] == {
         "odoo_roster_sync": 0,
         "auto_lunch": 0,
+        "quick_punch": 0,
         "assignments": 2,
         "plant_schedule": 0,
         "saturday_recruiting": 0,
@@ -593,6 +595,7 @@ def test_snapshot_marks_degraded_sources_without_hiding_page(monkeypatch):
     assert [s["id"] for s in snap["sections"]] == [
         "odoo_roster_sync",
         "auto_lunch",
+        "quick_punch",
         "assignments",
         "plant_schedule",
         "saturday_recruiting",

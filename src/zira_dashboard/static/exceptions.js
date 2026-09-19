@@ -1123,6 +1123,10 @@
     if (action === 'deny') return {text: '✗', cls: 'bad'};
     if (action === 'dismiss') return {text: '–', cls: 'muted'};
     if (action === 'auto_resolved') return {text: '↻', cls: 'muted'};
+    if (action === 'quick_punch_failed') return {text: '⚠', cls: 'bad'};
+    if (action === 'quick_punch_would_merge' || action === 'quick_punch_merged') {
+      return {text: '⤳', cls: 'ok'};
+    }
     return {text: '✓', cls: 'ok'};
   }
 
@@ -1134,6 +1138,9 @@
     if (action === 'assign') return 'Assigned';
     if (action === 'absent') return 'Marked absent';
     if (action === 'auto_resolved') return 'Auto-resolved';
+    if (action === 'quick_punch_would_merge') return 'Would merge';
+    if (action === 'quick_punch_merged') return 'Merged';
+    if (action === 'quick_punch_failed') return 'Failed';
     return 'Resolved';
   }
 
@@ -1198,7 +1205,16 @@
     outcome.className = 'archive-event-outcome';
     var by = event.auto ? 'auto-resolved' : (event.actor_name || event.actor_upn || 'unknown');
     var text = (event.outcome || defaultOutcome(event.action)) + ' by ' + by;
-    if (event.before_value) text += ' (was ' + event.before_value + ')';
+    var isQuickPunch = event.action === 'quick_punch_would_merge'
+      || event.action === 'quick_punch_merged'
+      || event.action === 'quick_punch_failed';
+    if (isQuickPunch && event.before_value && event.after_value) {
+      text += ': ' + event.before_value + ' → ' + event.after_value;
+    } else if (isQuickPunch && event.before_value) {
+      text += ': ' + event.before_value;
+    } else if (event.before_value) {
+      text += ' (was ' + event.before_value + ')';
+    }
     outcome.textContent = text;
     if (event.reason) {
       var reason = document.createElement('span');
@@ -1444,6 +1460,21 @@
 
     if (rowBtn.classList.contains('js-test-work-center-dismiss')) {
       dismissTestWorkCenter(row);
+      return;
+    }
+
+    if (rowBtn.classList.contains('js-quick-punch-ack')) {
+      var jobId = row.dataset.jobId;
+      if (!jobId) {
+        failRow(row, 'Missing job id.');
+        return;
+      }
+      setBusy(row, true);
+      rowStatus(row, 'Marking checked...', false);
+      postJson('/api/exceptions/quick-punch/ack', {job_id: jobId}).then(function (resp) {
+        if (resp && resp.ok) resolveRow(row, 'Checked', resp.event_id);
+        else failRow(row, (resp && resp.error) || 'Could not mark checked.');
+      }).catch(function () { failRow(row, 'Network error.'); });
       return;
     }
 

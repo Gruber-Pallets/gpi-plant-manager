@@ -79,6 +79,15 @@ def auto_lunch_setting() -> str:
     return "auto_lunch:setting"
 
 
+def quick_punch_alert(job_id: int) -> str:
+    """Identity for one fixer job that needs a manager to look at Odoo.
+
+    Distinct from the job's ``quick-punch:`` item key so an acknowledgement
+    cannot collide with the merge event itself.
+    """
+    return f"quick-punch-alert:{int(job_id)}"
+
+
 def attendance_issue_key(
     kind: str,
     employee_odoo_id: int,

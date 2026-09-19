@@ -117,6 +117,7 @@ _EVENT_DETAIL_FIELDS = frozenset(
         "completed_operations",
         "total_operations",
         "deleted_attendance_ids",
+        "uncertain_operation",
     )
 )
 # Event counts that may legitimately be zero.
@@ -1901,32 +1902,54 @@ def _completed_operation_records(row: Mapping[str, object]) -> list[dict[str, ob
     ]
 
 
+def _has_unconfirmed_reservation(row: Mapping[str, object]) -> bool:
+    """Whether completed_operations ends with a reserved-but-not-confirmed write."""
+    try:
+        records = _json_list(row.get("completed_operations", []), "completed_operations")
+    except (TypeError, ValueError):
+        return False
+    return any(isinstance(item, Mapping) and "reservation_token" in item for item in records)
+
+
 def _fixer_progress(row: Mapping[str, object]) -> dict[str, object]:
     """How far a fixer job got in Odoo, for its failure events.
 
-    ``total_operations`` is omitted when the saved plan itself is unreadable.
+    Diagnostic only: never raises, so a bad row cannot stop the job reaching
+    ``failed``. ``total_operations`` is omitted when the saved plan is
+    unreadable. ``uncertain_operation`` is set when a write was reserved but
+    never confirmed completed.
     """
-    done = _completed_operation_records(row)
-    deleted: list[int] = []
-    for item in done:
-        if item.get("kind") != "delete":
-            continue
-        try:
-            deleted.append(_positive_int(item.get("attendance_id"), "attendance_id"))
-        except (TypeError, ValueError):
-            continue
     progress: dict[str, object] = {
-        "completed_operations": len(done),
-        "deleted_attendance_ids": sorted(set(deleted))[:_MAX_EVENT_IDS],
+        "completed_operations": 0,
+        "deleted_attendance_ids": [],
     }
+    try:
+        done = _completed_operation_records(row)
+        deleted: list[int] = []
+        for item in done:
+            if item.get("kind") != "delete":
+                continue
+            try:
+                deleted.append(_positive_int(item.get("attendance_id"), "attendance_id"))
+            except (TypeError, ValueError):
+                continue
+        progress["completed_operations"] = len(done)
+        progress["deleted_attendance_ids"] = sorted(set(deleted))[:_MAX_EVENT_IDS]
+    except Exception:
+        _log.exception("fixer progress could not read completed operations")
     try:
         employees = _employee_ids(
             _decode_json_column(row.get("employee_odoo_ids"), "employee_odoo_ids")
         )
         plans = _plans_from_json(row.get("operations"), employees)
-    except (TypeError, ValueError, KeyError):
-        return progress
-    progress["total_operations"] = sum(len(plan.operations) for plan in plans.values())
+        progress["total_operations"] = sum(len(plan.operations) for plan in plans.values())
+    except Exception:
+        pass
+    try:
+        if _has_unconfirmed_reservation(row):
+            progress["uncertain_operation"] = True
+    except Exception:
+        pass
     return progress
 
 
@@ -2619,6 +2642,11 @@ def _event_detail(**values: object) -> dict[str, object]:
             if not value or len(value) > _TEXT_LIMIT:
                 raise ValueError("event detail is not bounded")
             detail[key] = value
+        elif key == "uncertain_operation":
+            if not isinstance(value, bool):
+                raise ValueError("uncertain_operation must be a boolean")
+            if value:
+                detail[key] = True
         elif key in _EVENT_COUNT_FIELDS:
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{key} must be a non-negative integer")
@@ -3125,8 +3153,12 @@ def _transition(
     fixer_failure = status == "failed" and _is_quick_punch_job(claim.row)
     if fixer_failure:
         # Say how far Odoo got, so a partly applied merge is never mistaken
-        # for an untouched one.
-        detail = _event_detail(**{**dict(detail or {}), **_fixer_progress(claim.row)})
+        # for an untouched one. Progress is diagnostic: a bad row must not
+        # stop the job from reaching failed.
+        try:
+            detail = _event_detail(**{**dict(detail or {}), **_fixer_progress(claim.row)})
+        except Exception:
+            _log.exception("fixer failure progress could not be recorded for job %s", claim.job_id)
     updated_at = claim.lease_until if retry_at is None else _aware_utc(retry_at, "retry_at")
     bounded_error = None if last_error is None else str(last_error)[:_ERROR_LIMIT]
     with db.cursor() as cur:
@@ -3183,7 +3215,13 @@ def _record_quick_punch_failure_cur(
         "result": result,
         "reason_code": reason,
     }
-    for key in ("cause", "completed_operations", "total_operations", "deleted_attendance_ids"):
+    for key in (
+        "cause",
+        "completed_operations",
+        "total_operations",
+        "deleted_attendance_ids",
+        "uncertain_operation",
+    ):
         if key in source:
             event_detail[key] = source[key]
     summary = _stored_audit_summary(claim.row)

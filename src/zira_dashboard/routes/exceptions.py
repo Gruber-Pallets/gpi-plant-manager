@@ -1027,6 +1027,7 @@ def _group_archive_by_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "reason": r.get("reason"),
             "actor_name": r.get("actor_name"),
             "actor_upn": r.get("actor_upn"),
+            "source": r.get("source"),
             "auto": r.get("actor_upn") is None,
             "time_label": local.strftime("%-I:%M %p"),
         })
@@ -1678,3 +1679,26 @@ async def breakdown_report(request: Request):
     """
     body = await request.json()
     return await asyncio.to_thread(_breakdown_report_sync, body)
+
+
+def _quick_punch_ack_sync(body: dict, actor_upn=None, actor_name=None) -> JSONResponse:
+    from .. import quick_punch_inbox
+
+    try:
+        job_id = int(body.get("job_id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "Missing job id."}, status_code=400)
+    if job_id <= 0:
+        return JSONResponse({"ok": False, "error": "Missing job id."}, status_code=400)
+    event_id = quick_punch_inbox.acknowledge(
+        job_id, actor_upn=actor_upn, actor_name=actor_name
+    )
+    return JSONResponse({"ok": True, "event_id": event_id})
+
+
+@router.post("/api/exceptions/quick-punch/ack")
+async def quick_punch_ack(request: Request):
+    """Mark a fixer failure as checked so it leaves the urgent section."""
+    body = await request.json()
+    actor_upn, actor_name = inbox_log.actor_from(request)
+    return await asyncio.to_thread(_quick_punch_ack_sync, body, actor_upn, actor_name)
