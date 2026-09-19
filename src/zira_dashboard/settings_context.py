@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .quick_punch_fix_settings import Settings as QuickPunchFixSettings
+
 
 def schedule_context(schedule, weekday_names: list[str]) -> dict:
     return {
@@ -249,6 +254,22 @@ def _auto_lunch_value_label(row: dict, prefix: str) -> str:
     return f"{mode} · {hours_label} · {int(row[f'{prefix}_flex_minutes'])} minutes"
 
 
+def _setting_event_actor_label(row: dict) -> str:
+    """Who made an audited setting change, in plain words."""
+    source = row.get("source")
+    if source == "baseline":
+        return "Monitoring started"
+    if source == "external":
+        return "Outside app / detected automatically"
+    return row.get("actor_name") or row.get("actor_upn") or "Unknown manager"
+
+
+def _setting_event_time_label(row: dict) -> str:
+    from . import shift_config
+    changed_at = row["changed_at"].astimezone(shift_config.SITE_TZ)
+    return changed_at.strftime("%-m/%-d/%Y %-I:%M %p")
+
+
 def auto_lunch_history_context(events: list[dict]) -> list[dict]:
     shaped = []
     for row in events:
@@ -275,22 +296,6 @@ def auto_lunch_history_context(events: list[dict]) -> list[dict]:
     return shaped
 
 
-def _setting_event_actor_label(row: dict) -> str:
-    """Who made an audited setting change, in plain words."""
-    source = row.get("source")
-    if source == "baseline":
-        return "Monitoring started"
-    if source == "external":
-        return "Outside app / detected automatically"
-    return row.get("actor_name") or row.get("actor_upn") or "Unknown manager"
-
-
-def _setting_event_time_label(row: dict) -> str:
-    from . import shift_config
-    changed_at = row["changed_at"].astimezone(shift_config.SITE_TZ)
-    return changed_at.strftime("%-m/%-d/%Y %-I:%M %p")
-
-
 _QUICK_PUNCH_FIX_MODE_LABELS = {
     "off": "Off",
     "preview": "Preview",
@@ -298,7 +303,7 @@ _QUICK_PUNCH_FIX_MODE_LABELS = {
 }
 
 
-def quick_punch_fix_context(settings) -> dict:
+def quick_punch_fix_context(settings: QuickPunchFixSettings) -> dict:
     return {"mode": settings.mode}
 
 

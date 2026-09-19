@@ -72,17 +72,34 @@ def warm_once() -> None:
         _log.warning("page_warmer: day-view warm failed: %s", e)
 
 
+def _refresh_quick_punch_fix_mode() -> None:
+    """Audit and publish the quick-punch fixer mode. If reconciliation can't
+    lock or commit, still reload the row (like ``auto_lunch_guard.observe``)
+    so a direct DB switch, e.g. to Off, reaches this process's cache."""
+    from . import quick_punch_fix_settings
+    try:
+        quick_punch_fix_settings.reconcile_external_change()
+    except Exception as e:  # noqa: BLE001 — fall back to a plain reload
+        _log.warning(
+            "page_warmer: quick-punch fixer setting reconcile failed: %s", e
+        )
+        quick_punch_fix_settings.reload()
+
+
 def warm_inbox_once() -> None:
     """Force-refresh the inbox top-nav sub-caches (assignments-todo +
-    late-report), publish the Auto-Lunch settings guard, and audit/refresh the
-    quick-punch fixer mode (so a direct DB edit is logged and every process
-    picks it up within one tick). ``build_summary()``
-    renders these into the Inbox badge on
-    EVERY page via _topnav.html; their 30 s in-process TTL doesn't slide on
+    late-report). ``build_summary()`` renders those two into the Inbox badge
+    on EVERY page via _topnav.html; their 30 s in-process TTL doesn't slide on
     hits, so without this a human repeatedly pays the cold Zira/Odoo cascade
     just to draw the nav. Run on a cadence below the 30 s TTL (see _tick_inbox)
-    so the badge is always served warm. Each source refreshes independently;
-    a failure must never bubble (the warmer loop must never die)."""
+    so the badge is always served warm.
+
+    The same tick also publishes the Auto-Lunch settings guard and
+    audits/refreshes the quick-punch fixer mode, so a direct DB edit to
+    either setting is logged and reaches every process within one tick.
+
+    Each source refreshes independently; a failure must never bubble (the
+    warmer loop must never die)."""
     from . import auto_lunch_guard
     from .routes.staffing import assignments_todo_payload, late_report_payload
     try:
@@ -90,11 +107,10 @@ def warm_inbox_once() -> None:
     except Exception as e:  # noqa: BLE001 — warmer must never bubble
         _log.warning("page_warmer: auto-lunch guard refresh failed: %s", e)
     try:
-        from . import quick_punch_fix_settings
-        quick_punch_fix_settings.reconcile_external_change()
+        _refresh_quick_punch_fix_mode()
     except Exception as e:  # noqa: BLE001 — warmer must never bubble
         _log.warning(
-            "page_warmer: quick-punch fixer setting reconcile failed: %s", e
+            "page_warmer: quick-punch fixer setting reload failed: %s", e
         )
     try:
         assignments_todo_payload(force=True)

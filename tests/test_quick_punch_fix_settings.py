@@ -369,27 +369,53 @@ def test_warm_inbox_once_reconciles_the_quick_punch_fix_setting(monkeypatch):
         qpf, "reconcile_external_change",
         lambda: calls.append("quick_punch_fix") or qpf.DEFAULT,
     )
+    monkeypatch.setattr(qpf, "reload", lambda: calls.append("reload"))
 
     page_warmer.warm_inbox_once()
 
     assert calls.count("quick_punch_fix") == 1
     assert calls.index("auto_lunch") < calls.index("quick_punch_fix")
+    assert "reload" not in calls  # reconcile already refreshed the cache
 
 
-def test_warm_inbox_once_survives_a_failing_quick_punch_fix_reconcile(monkeypatch):
+def _failing_reconcile():
+    raise RuntimeError("advisory lock timed out")
+
+
+def test_warm_inbox_once_reloads_the_mode_when_reconcile_fails(monkeypatch):
+    from zira_dashboard._singleton import CachedSingleton
     from zira_dashboard import page_warmer
 
     calls = []
     _quiet_inbox_sources(monkeypatch, calls)
-
-    def boom():
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(qpf, "reconcile_external_change", boom)
+    monkeypatch.setattr(qpf, "reconcile_external_change", _failing_reconcile)
+    # An isolated cache holding the stale mode; the DB now says Off.
+    monkeypatch.setattr(qpf, "_store", CachedSingleton(qpf._load_from_db))
+    qpf._store.set(qpf.Settings("preview"))
+    monkeypatch.setattr(db, "query", lambda *_args, **_kwargs: [{"mode": "off"}])
 
     page_warmer.warm_inbox_once()  # must not raise
 
+    assert qpf.current() == qpf.Settings("off")
     assert calls == ["auto_lunch", "assign", "late"]
+
+
+def test_warm_inbox_once_survives_reconcile_and_reload_both_failing(monkeypatch):
+    from zira_dashboard import page_warmer
+
+    calls = []
+    _quiet_inbox_sources(monkeypatch, calls)
+    monkeypatch.setattr(qpf, "reconcile_external_change", _failing_reconcile)
+
+    def reload_boom():
+        calls.append("reload")
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(qpf, "reload", reload_boom)
+
+    page_warmer.warm_inbox_once()  # must not raise
+
+    assert calls == ["auto_lunch", "reload", "assign", "late"]
 
 
 # ---- settings context -----------------------------------------------------
@@ -551,7 +577,7 @@ class _FormRequest:
         return self._values
 
 
-def _route_with_recorded_save(monkeypatch, current="preview"):
+def _route_with_recorded_save(monkeypatch):
     from zira_dashboard import inbox_log
 
     saves = []
@@ -559,7 +585,6 @@ def _route_with_recorded_save(monkeypatch, current="preview"):
         inbox_log, "actor_from",
         lambda _request: ("manager@gruberpallets.com", "Plant Manager"),
     )
-    monkeypatch.setattr(qpf, "current", lambda: qpf.Settings(current))
     monkeypatch.setattr(
         qpf, "save",
         lambda settings, **kwargs: saves.append((settings, kwargs)) or True,
@@ -724,15 +749,32 @@ def test_db_reconcile_logs_baseline_then_external_after_a_direct_change(
 
 
 @db_required
+def test_db_warmer_reload_publishes_a_direct_switch_when_reconcile_fails(
+    fresh_setting, monkeypatch,
+):
+    from zira_dashboard import page_warmer
+
+    _quiet_inbox_sources(monkeypatch, [])
+    monkeypatch.setattr(qpf, "reconcile_external_change", _failing_reconcile)
+    assert qpf.current() == qpf.Settings("preview")
+    db.execute("UPDATE quick_punch_fix_settings SET mode = 'off' WHERE id = 1")
+
+    page_warmer.warm_inbox_once()
+
+    assert qpf.current() == qpf.Settings("off")
+
+
+@db_required
 def test_db_settings_page_renders_three_options_with_current_checked(
     fresh_setting,
 ):
     from fastapi.testclient import TestClient
     from zira_dashboard.app import app
 
+    actor = "Quintessa Fixerly"
     qpf.save(
         qpf.Settings("live"),
-        actor_upn="manager@gruberpallets.com", actor_name="Plant Manager",
+        actor_upn="quintessa.fixerly@gruberpallets.com", actor_name=actor,
     )
 
     response = TestClient(app).get("/settings?section=timeclock")
@@ -744,9 +786,15 @@ def test_db_settings_page_renders_three_options_with_current_checked(
     assert "Quick-punch fixer" in text
     for option in (OFF_TEXT, PREVIEW_TEXT, LIVE_TEXT, HELP_TEXT):
         assert option in text
-    assert "Recent quick-punch fixer changes" in text
-    assert "Plant Manager" in text
-    assert "Preview → Live" in text
+    history = re.search(
+        r'<div id="quick-punch-fix-history".*?</div>', response.text,
+        flags=re.DOTALL,
+    )
+    assert history, "Quick-punch fixer history block missing"
+    history_text = _normalized(history.group(0))
+    assert "Recent quick-punch fixer changes" in history_text
+    assert actor in history_text
+    assert "Preview → Live" in history_text
 
 
 @db_required

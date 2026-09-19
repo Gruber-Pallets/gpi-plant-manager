@@ -195,6 +195,21 @@ def test_lifespan_fails_before_serving_when_persisted_holiday_reload_fails(
 # cold Zira/Odoo cascade just to draw the nav badge. These tests pin the fix.
 
 
+@pytest.fixture(autouse=True)
+def _stub_quick_punch_fix_reconcile(monkeypatch):
+    """warm_inbox_once also reconciles the quick-punch fixer mode. Stub it so
+    these wiring tests stay self-contained: no audit rows written to a test
+    DB and no failure warnings when there is no DB. Its own behavior is
+    covered in tests/test_quick_punch_fix_settings.py."""
+    from zira_dashboard import quick_punch_fix_settings
+
+    monkeypatch.setattr(
+        quick_punch_fix_settings,
+        "reconcile_external_change",
+        lambda: quick_punch_fix_settings.DEFAULT,
+    )
+
+
 def test_warm_inbox_once_force_refreshes_both_payloads(monkeypatch):
     calls = []
     monkeypatch.setattr(
