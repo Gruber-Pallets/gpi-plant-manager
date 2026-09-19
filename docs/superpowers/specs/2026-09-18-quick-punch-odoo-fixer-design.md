@@ -104,9 +104,12 @@ validates exactly as today.
   run last. This applies to every job. For manager jobs it replaces an order
   that could never succeed when Odoo rejects overlaps.
 - **Attempt cap for fixer jobs:** jobs whose `item_key` starts with
-  `quick-punch:` stop retrying after 6 recoverable failures (about 16 minutes
-  of backoff). They are marked `failed` with an event, and an Exception Inbox
-  alert is raised. Manager jobs keep today's behavior.
+  `quick-punch:` stop retrying after 6 recoverable failures (about 8 minutes
+  of backoff) while Odoo is still being changed or checked. They are marked
+  `failed` with an event, and an Exception Inbox alert is raised. Once Odoo is
+  verified, the later steps (mirror update, recalculation, audit) never touch
+  Odoo, so they keep retrying without a cap, as manager jobs do. Manager jobs
+  keep today's behavior.
 
 ## The Fixer
 
