@@ -3562,8 +3562,8 @@ def _ordered_operations(
 
     0. close an open row, freeing everything after its new check-out;
     1. updates that only shrink or relabel a row, including an open row that
-       stays open with a later check-in (it gives that time back, and a
-       create or growing update may need it);
+       stays open without an earlier check-in (a later one gives time back
+       that a create or growing update may need);
     2. creates (the planner only creates in time no remaining row covers);
     3. deletes;
     4. updates that grow a closed row, now that the rows they absorb are gone;

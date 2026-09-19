@@ -565,8 +565,9 @@ def test_an_open_row_that_only_gives_time_back_moves_with_the_shrinks():
             after=after,
         )
 
+    # 0-30 grows to 0-60, the live row gives back 30-90, and 60-90 is created.
     grow = update(1, {"check_out_utc": at(60)}, "1")
-    give_back = update(2, {"check_in_utc": at(60)}, "2")
+    give_back = update(2, {"check_in_utc": at(90)}, "2")
     create = attendance_corrections.CorrectionOperation(
         key="attendance-correction-v2:0:" + "3" * 64,
         kind="create",
@@ -582,10 +583,32 @@ def test_an_open_row_that_only_gives_time_back_moves_with_the_shrinks():
         },
     )
     reach_back = update(2, {"check_in_utc": at(20)}, "4")
+    relabel = update(2, {"odoo_work_center_id": DISMANTLER_3}, "5")
+    delete_first = attendance_corrections.CorrectionOperation(
+        key="attendance-correction-v2:1:" + "6" * 64,
+        kind="delete",
+        attendance_id=1,
+        employee_odoo_id=CHRISTIAN,
+        before={
+            field: by_id[1][field]
+            for field in (
+                "employee_odoo_id",
+                "check_in_utc",
+                "check_out_utc",
+                "odoo_work_center_id",
+                "odoo_department_id",
+            )
+        },
+        after=None,
+    )
 
     assert attendance_corrections._ordered_operations(
         (grow, create, give_back), source_rows=source_rows
     ) == (give_back, create, grow)
+    # Relabelling the live row keeps its time, so it moves with the shrinks too.
+    assert attendance_corrections._ordered_operations(
+        (delete_first, relabel), source_rows=source_rows
+    ) == (relabel, delete_first)
     # Moving the live row's check-in EARLIER takes time, so it still waits
     # until every other write is done.
     assert attendance_corrections._ordered_operations(
@@ -599,11 +622,14 @@ def test_every_planned_correction_applies_in_order_without_an_overlap():
     applied = 0
 
     def landed(rows):
+        # Created rows get fake-Odoo IDs from 9000; the plan expects them as None.
         return sorted(
             (
                 row["check_in_utc"],
                 row["check_out_utc"] or datetime.max.replace(tzinfo=UTC),
                 row["odoo_work_center_id"] or 0,
+                row["odoo_department_id"] or 0,
+                0 if (row["odoo_attendance_id"] or 9000) >= 9000 else row["odoo_attendance_id"],
             )
             for row in rows
         )
