@@ -697,7 +697,7 @@ Note one case explicitly in the docstring or tests. For a first pick whose short
       - An open row is among them exactly when `fix.end_utc is None`.
 
       Otherwise skip this fix for the tick and log it at info level. The next tick re-detects from fresh data. This protects against a real station move, or a clock-out such as auto-lunch, that lands during the mirror's lag. Test both cases.
-    - `plan_correction` also raises for an open merge without the live row in range (commit after `12937691`). Treat that `ValueError` as a skip.
+    - `plan_correction` also raises for an open merge without the live row in range (commit `7a98ae8b`). Treat that `ValueError` as a skip.
     - Any exception for one fix is logged and that fix is skipped; others continue.
 11. **Summaries:**
     - `before_summary`: `"D3 7:00–7:02 · D2 7:02–7:04 · D3 7:04–now"`. Use Central time and the station's short form: "Dismantler 3" becomes "D3", "Repair 2" becomes "R2", and any other name stays as it is. Use `–` between times, and "now" for an open end.
