@@ -303,6 +303,10 @@ CREATE TABLE IF NOT EXISTS attendance_correction_jobs (
   completed_at TIMESTAMPTZ,
   last_error TEXT
 );
+-- 2026-09-19: the quick-punch fixer stores its before/after text with each job
+-- (person_name/before/after) for its completion and failure inbox events.
+ALTER TABLE attendance_correction_jobs
+  ADD COLUMN IF NOT EXISTS audit_summary JSONB;
 
 CREATE UNIQUE INDEX IF NOT EXISTS attendance_correction_jobs_active_item_idx
   ON attendance_correction_jobs (item_key)

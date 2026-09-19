@@ -75,6 +75,18 @@ _MAX_EMPLOYEES = 100
 _MAX_OPERATIONS = 1000
 _MAX_EVENT_IDS = 100
 _MAX_RECALC_HORIZON_DAYS = 500
+# Quick-punch fixer jobs are ordinary correction jobs whose ``item_key`` starts
+# with this prefix. This module is the prefix's single owner: the fixer's
+# detection module (``quick_punch_fixes.ITEM_KEY_PREFIX``) imports it from here,
+# so the worker and the fixer can never disagree about which jobs are fixer jobs.
+QUICK_PUNCH_ITEM_KEY_PREFIX = "quick-punch:"
+# A fixer job that hits a recoverable failure on (or after) this attempt stops
+# retrying and fails with an ``attempt_limit`` event. Manager jobs never stop.
+QUICK_PUNCH_MAX_ATTEMPTS = 6
+QUICK_PUNCH_ITEM_KIND = "quick_punch_fix"
+QUICK_PUNCH_CATEGORY_LABEL = "Quick-punch auto-fix"
+_AUDIT_SUMMARY_FIELDS = frozenset(("person_name", "before", "after"))
+_AUDIT_SUMMARY_TEXT_LIMIT = 1000
 _EVENT_DETAIL_FIELDS = frozenset(
     (
         "job_id",
@@ -98,6 +110,8 @@ _EVENT_OUTCOMES = frozenset(
         ("planning", "horizon_frozen"),
         ("planning", "horizon_failed"),
         ("planning", "invalid_plan"),
+        # ``failed`` with reason ``attempt_limit``: a fixer job out of attempts.
+        ("planning", "failed"),
         ("claim", "claimed"),
         ("applying", "reserved"),
         ("applying", "source_changed"),
@@ -106,9 +120,11 @@ _EVENT_OUTCOMES = frozenset(
         ("applying", "adopted"),
         ("applying", "adopted_timeout"),
         ("applying", "operations_complete"),
+        ("applying", "failed"),
         ("verifying", "mismatch"),
         ("verifying", "verified"),
         ("verifying", "odoo_failure"),
+        ("verifying", "failed"),
         ("mirror", "failed"),
         ("mirror", "complete"),
         ("recalculation", "enqueued"),
@@ -1824,6 +1840,50 @@ def _plan_merge(plan: CorrectionPlan) -> bool:
     return plan.request.get("merge", False) is True
 
 
+def _is_quick_punch_job(row: Mapping[str, object]) -> bool:
+    """Whether a persisted job row belongs to the quick-punch fixer."""
+    item_key = row.get("item_key")
+    return isinstance(item_key, str) and item_key.startswith(QUICK_PUNCH_ITEM_KEY_PREFIX)
+
+
+def _validated_audit_summary(value: object) -> dict[str, str | None] | None:
+    """Validate the fixer's before/after text stored with a job.
+
+    The summary is exactly ``person_name`` (text, or None when unknown),
+    ``before`` and ``after`` (non-empty text), each bounded, so it stays a small
+    JSON object that the completion and failure events copy verbatim.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise TypeError("audit_summary must be a mapping")
+    if set(value) != _AUDIT_SUMMARY_FIELDS:
+        raise ValueError("audit_summary must contain exactly person_name, before, and after")
+    return {
+        "person_name": _optional_bounded_text(
+            value["person_name"], "audit_summary person_name", _AUDIT_SUMMARY_TEXT_LIMIT
+        ),
+        "before": _bounded_text(value["before"], "audit_summary before", _AUDIT_SUMMARY_TEXT_LIMIT),
+        "after": _bounded_text(value["after"], "audit_summary after", _AUDIT_SUMMARY_TEXT_LIMIT),
+    }
+
+
+def _stored_audit_summary(row: Mapping[str, object]) -> dict[str, str | None]:
+    """Read a job's stored summary leniently: a bad one never blocks an event."""
+    empty: dict[str, str | None] = {"person_name": None, "before": None, "after": None}
+    value = row.get("audit_summary")
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return empty
+    try:
+        summary = _validated_audit_summary(value)
+    except (TypeError, ValueError):
+        return empty
+    return summary if summary is not None else empty
+
+
 @dataclass(frozen=True)
 class CorrectionJobResult:
     job_id: int
@@ -2753,11 +2813,21 @@ def create_job_from_preview(
     preview: CorrectionPreview,
     actor_email: str | None,
     actor_name: str | None,
+    audit_summary: Mapping[str, object] | None = None,
 ) -> int:
-    """Persist exactly one verified preview and authenticate any dedupe winner."""
+    """Persist exactly one verified preview and authenticate any dedupe winner.
+
+    ``audit_summary`` is the quick-punch fixer's ``person_name``/``before``/
+    ``after`` text, stored for its completion and failure events. Without it
+    the insert is exactly the legacy statement.
+    """
     source_snapshot, plans = _preview_job_payloads(preview)
     email = _optional_bounded_text(actor_email, "actor_email", _ACTOR_LIMIT)
     name = _optional_bounded_text(actor_name, "actor_name", _ACTOR_LIMIT)
+    summary = _validated_audit_summary(audit_summary)
+    summary_column = "" if summary is None else ", audit_summary"
+    summary_value = "" if summary is None else ", %s::jsonb"
+    summary_params = () if summary is None else (json.dumps(summary, separators=(",", ":")),)
     from . import db
 
     with db.cursor() as cur:
@@ -2765,10 +2835,12 @@ def create_job_from_preview(
             "INSERT INTO attendance_correction_jobs "
             "(item_key, status, target_work_center_name, "
             "target_odoo_work_center_id, start_utc, end_utc, employee_odoo_ids, "
-            "source_snapshot, operations, completed_operations, actor_email, actor_name) "
-            "VALUES (%s, 'planned', %s, %s, %s, %s, %s::jsonb, %s::jsonb, "
-            "%s::jsonb, '[]'::jsonb, %s, %s) "
-            "ON CONFLICT (item_key) WHERE status IN "
+            "source_snapshot, operations, completed_operations, actor_email, actor_name"
+            + summary_column
+            + ") VALUES (%s, 'planned', %s, %s, %s, %s, %s::jsonb, %s::jsonb, "
+            "%s::jsonb, '[]'::jsonb, %s, %s"
+            + summary_value
+            + ") ON CONFLICT (item_key) WHERE status IN "
             "('planned','applying','verifying','recalculating') DO NOTHING "
             "RETURNING id",
             (
@@ -2782,6 +2854,7 @@ def create_job_from_preview(
                 json.dumps(plans, separators=(",", ":")),
                 email,
                 name,
+                *summary_params,
             ),
         )
         row = cur.fetchone()
@@ -2940,7 +3013,48 @@ def _transition(
         if cur.fetchone() is None:
             return False
         _append_event_cur(cur, claim.job_id, phase, result, detail)
+        if status == "failed" and _is_quick_punch_job(claim.row):
+            _record_quick_punch_failure_cur(
+                cur, claim, phase=phase, result=result, detail=detail
+            )
         return True
+
+
+def _record_quick_punch_failure_cur(
+    cur,
+    claim: _JobClaim,
+    *,
+    phase: str,
+    result: str,
+    detail: Mapping[str, object] | None,
+) -> None:
+    """Record a failed fixer job in the inbox log, in the failing transaction.
+
+    Every path to ``failed`` goes through ``_transition``, so a fixer job can
+    never fail without this event. ``outcome`` is the failure's reason code
+    (for example ``attempt_limit`` or ``preflight_source_changed``).
+    """
+    from . import inbox_log
+
+    reason_code = (detail or {}).get("reason_code")
+    reason = reason_code if isinstance(reason_code, str) and reason_code else result
+    summary = _stored_audit_summary(claim.row)
+    inbox_log.record_event_with_cursor(
+        cur,
+        item_kind=QUICK_PUNCH_ITEM_KIND,
+        item_key=str(claim.row["item_key"]),
+        person_name=summary["person_name"],
+        category_label=QUICK_PUNCH_CATEGORY_LABEL,
+        action="quick_punch_failed",
+        outcome=reason,
+        before_value=summary["before"],
+        after_value=summary["after"],
+        actor_upn=claim.row.get("actor_email"),
+        actor_name=claim.row.get("actor_name"),
+        source="auto",
+        reversible=False,
+        detail={"job_id": claim.job_id, "phase": phase, "result": result, "reason_code": reason},
+    )
 
 
 def _complete_record(
@@ -3303,18 +3417,62 @@ def _is_open_producing(
     return source["check_out_utc"] is None
 
 
+def _extends_source_interval(
+    operation: CorrectionOperation, source: Mapping[str, object]
+) -> bool:
+    """Whether an update's interval reaches outside its source row's interval.
+
+    That is an earlier ``check_in``, or a later non-null ``check_out`` on a
+    closed row. Such an update can cover time still held by rows the plan
+    deletes, so it must wait until those deletes are done.
+    """
+    assert operation.after is not None
+    source_start = _aware_utc(source["check_in_utc"], "check_in_utc")
+    source_end = _optional_aware_utc(source["check_out_utc"], "check_out_utc")
+    after_start = (
+        _aware_utc(operation.after["check_in_utc"], "check_in_utc")
+        if "check_in_utc" in operation.after
+        else source_start
+    )
+    after_end = (
+        _optional_aware_utc(operation.after["check_out_utc"], "check_out_utc")
+        if "check_out_utc" in operation.after
+        else source_end
+    )
+    if after_start < source_start:
+        return True
+    return after_end is not None and source_end is not None and after_end > source_end
+
+
 def _ordered_operations(
     operations: Sequence[CorrectionOperation],
     *,
     source_rows: Sequence[Mapping[str, object]],
 ) -> tuple[CorrectionOperation, ...]:
+    """Order writes so Odoo never holds two overlapping rows of one employee.
+
+    Odoo rejects any create or write that overlaps another attendance row of
+    the same employee, so every write must land in time that is already free:
+
+    0. close an open row, freeing everything after its new check-out;
+    1. updates that only shrink or relabel a closed row;
+    2. creates (the planner only creates in time no remaining row covers);
+    3. deletes;
+    4. updates that grow a closed row, now that the rows they absorb are gone;
+    5. writes that leave a row open, last, once no other open row remains.
+
+    The worker validates durable progress as a prefix of exactly this order.
+    """
+
     def phase(operation: CorrectionOperation) -> int:
         if _is_open_producing(operation, source_rows):
-            return 4
+            return 5
         if operation.kind == "update":
             source = _source_row_by_id(source_rows, int(operation.attendance_id))
             if source["check_out_utc"] is None:
                 return 0
+            if _extends_source_interval(operation, source):
+                return 4
             return 1
         if operation.kind == "create":
             return 2
@@ -3917,27 +4075,48 @@ def _complete_with_audit(
         stages = _json_list(locked["completed_operations"], "completed_operations")
         if any(item.get("stage") == "audit_complete" for item in stages):
             return False
-        inbox_log.record_event_with_cursor(
-            cur,
-            item_kind="attendance_correction",
-            item_key=str(claim.row["item_key"]),
-            person_name=None,
-            category_label="Odoo attendance correction",
-            action="corrected_odoo_attendance",
-            outcome="Verified and recalculated",
-            actor_upn=claim.row.get("actor_email"),
-            actor_name=claim.row.get("actor_name"),
-            source="inbox",
-            reversible=False,
-            detail={
-                "job_id": claim.job_id,
-                "employee_ids": sorted(source_rows),
-                "before_attendance_ids": before_ids[:_MAX_EVENT_IDS],
-                "after_attendance_ids": expected_ids[:_MAX_EVENT_IDS],
-                "operation_keys": operation_keys[:_MAX_EVENT_IDS],
-            },
-            resolved_at=completed_at,
-        )
+        audit_detail = {
+            "job_id": claim.job_id,
+            "employee_ids": sorted(source_rows),
+            "before_attendance_ids": before_ids[:_MAX_EVENT_IDS],
+            "after_attendance_ids": expected_ids[:_MAX_EVENT_IDS],
+            "operation_keys": operation_keys[:_MAX_EVENT_IDS],
+        }
+        if _is_quick_punch_job(claim.row):
+            summary = _stored_audit_summary(claim.row)
+            inbox_log.record_event_with_cursor(
+                cur,
+                item_kind=QUICK_PUNCH_ITEM_KIND,
+                item_key=str(claim.row["item_key"]),
+                person_name=summary["person_name"],
+                category_label=QUICK_PUNCH_CATEGORY_LABEL,
+                action="quick_punch_merged",
+                outcome="Merged in Odoo",
+                before_value=summary["before"],
+                after_value=summary["after"],
+                actor_upn=claim.row.get("actor_email"),
+                actor_name=claim.row.get("actor_name"),
+                source="auto",
+                reversible=False,
+                detail=audit_detail,
+                resolved_at=completed_at,
+            )
+        else:
+            inbox_log.record_event_with_cursor(
+                cur,
+                item_kind="attendance_correction",
+                item_key=str(claim.row["item_key"]),
+                person_name=None,
+                category_label="Odoo attendance correction",
+                action="corrected_odoo_attendance",
+                outcome="Verified and recalculated",
+                actor_upn=claim.row.get("actor_email"),
+                actor_name=claim.row.get("actor_name"),
+                source="inbox",
+                reversible=False,
+                detail=audit_detail,
+                resolved_at=completed_at,
+            )
         _append_event_cur(
             cur,
             claim.job_id,
@@ -3981,6 +4160,51 @@ def _complete_with_audit(
 def _retry_at(attempt_count: int, now: datetime) -> datetime:
     seconds = min(15 * (2 ** min(max(attempt_count - 1, 0), 10)), 900)
     return now + timedelta(seconds=seconds)
+
+
+def _retry_or_fail(
+    claim: _JobClaim,
+    *,
+    now: datetime,
+    phase: str,
+    result: str,
+    detail: Mapping[str, object],
+    error: str,
+    retry_at: datetime | None = None,
+) -> CorrectionJobResult:
+    """Schedule a retry after a recoverable failure, within the fixer's cap.
+
+    Manager jobs always retry with backoff, exactly as before. A quick-punch
+    fixer job that fails recoverably on (or after) attempt
+    ``QUICK_PUNCH_MAX_ATTEMPTS`` fails instead, with an ``attempt_limit``
+    event; ``_transition`` records its failure alert in the same transaction.
+    """
+    if _is_quick_punch_job(claim.row) and claim.attempt_count >= QUICK_PUNCH_MAX_ATTEMPTS:
+        _transition(
+            claim,
+            status="failed",
+            phase=phase,
+            result="failed",
+            detail=_event_detail(
+                **{
+                    **dict(detail),
+                    "reason_code": "attempt_limit",
+                    "attempt_count": claim.attempt_count,
+                }
+            ),
+            last_error=f"attempt_limit: {error}",
+        )
+        return _result(claim, "failed", error=error)
+    retry = retry_at if retry_at is not None else _retry_at(claim.attempt_count, now)
+    _transition(
+        claim,
+        phase=phase,
+        result=result,
+        detail=detail,
+        last_error=error,
+        retry_at=retry,
+    )
+    return _result(claim, "recoverable", error=error, retry_at=retry)
 
 
 def _saved_target_department_id(
@@ -4156,19 +4380,17 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
         try:
             frozen = _freeze_recalc_horizon(claim, days)
         except Exception as error:  # noqa: BLE001 - no Odoo work has started
-            retry_at = _retry_at(claim.attempt_count, now)
-            _transition(
+            return _retry_or_fail(
                 claim,
+                now=now,
                 phase="planning",
                 result="horizon_failed",
                 detail=_event_detail(
                     job_id=claim.job_id,
                     reason_code="horizon_persistence_failed",
                 ),
-                last_error=str(error),
-                retry_at=retry_at,
+                error=str(error),
             )
-            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
         if not frozen:
             return _result(claim, "superseded")
         horizon_marker = {
@@ -4211,19 +4433,17 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             )
             return _result(claim, "failed", error=str(error))
         except Exception as error:  # noqa: BLE001 - target read is retryable
-            retry_at = _retry_at(claim.attempt_count, now)
-            _transition(
+            return _retry_or_fail(
                 claim,
+                now=now,
                 phase="applying",
                 result="odoo_failure",
                 detail=_event_detail(
                     job_id=claim.job_id,
                     reason_code="target_validation_unavailable",
                 ),
-                last_error=str(error),
-                retry_at=retry_at,
+                error=str(error),
             )
-            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
         try:
             _preflight_operations(
                 facade,
@@ -4249,19 +4469,17 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             )
             return _result(claim, "failed", error=str(error))
         except Exception as error:  # noqa: BLE001 - preflight read is retryable
-            retry_at = _retry_at(claim.attempt_count, now)
-            _transition(
+            return _retry_or_fail(
                 claim,
+                now=now,
                 phase="applying",
                 result="odoo_failure",
                 detail=_event_detail(
                     job_id=claim.job_id,
                     reason_code="preflight_read_unavailable",
                 ),
-                last_error=str(error),
-                retry_at=retry_at,
+                error=str(error),
             )
-            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
         for operation in all_operations:
             if operation.key in completed_keys:
                 continue
@@ -4302,12 +4520,9 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                 )
                 return _result(claim, "failed", error=str(error))
             except _RecoverableWrite as error:
-                retry_at = max(
-                    _retry_at(claim.attempt_count, now),
-                    reservation_box[0].reserved_until,
-                )
-                _transition(
+                return _retry_or_fail(
                     claim,
+                    now=now,
                     phase="applying",
                     result="odoo_failure",
                     detail=_event_detail(
@@ -4317,17 +4532,16 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                         employee_odoo_id=operation.employee_odoo_id,
                         reason_code="recoverable_odoo_failure",
                     ),
-                    last_error=str(error),
-                    retry_at=retry_at,
+                    error=str(error),
+                    retry_at=max(
+                        _retry_at(claim.attempt_count, now),
+                        reservation_box[0].reserved_until,
+                    ),
                 )
-                return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
             except Exception as error:  # noqa: BLE001 - source reads can fail too
-                retry_at = max(
-                    _retry_at(claim.attempt_count, now),
-                    reservation_box[0].reserved_until,
-                )
-                _transition(
+                return _retry_or_fail(
                     claim,
+                    now=now,
                     phase="applying",
                     result="odoo_failure",
                     detail=_event_detail(
@@ -4337,10 +4551,12 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                         employee_odoo_id=operation.employee_odoo_id,
                         reason_code="odoo_read_unavailable",
                     ),
-                    last_error=str(error),
-                    retry_at=retry_at,
+                    error=str(error),
+                    retry_at=max(
+                        _retry_at(claim.attempt_count, now),
+                        reservation_box[0].reserved_until,
+                    ),
                 )
-                return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
             if not _complete_reserved_operation(
                 claim,
                 reservation_box[0],
@@ -4397,19 +4613,17 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             )
             return _result(claim, "failed", error=str(error))
         except Exception as error:  # noqa: BLE001 - verification read is retryable
-            retry_at = _retry_at(claim.attempt_count, now)
-            _transition(
+            return _retry_or_fail(
                 claim,
+                now=now,
                 phase="verifying",
                 result="odoo_failure",
                 detail=_event_detail(
                     job_id=claim.job_id,
                     reason_code="verification_read_unavailable",
                 ),
-                last_error=str(error),
-                retry_at=retry_at,
+                error=str(error),
             )
-            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
         if not _transition(
             claim,
             status="recalculating",
@@ -4453,19 +4667,17 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             )
             return _result(claim, "failed", error=str(error))
         except Exception as error:  # noqa: BLE001 - verification read is retryable
-            retry_at = _retry_at(claim.attempt_count, now)
-            _transition(
+            return _retry_or_fail(
                 claim,
+                now=now,
                 phase="verifying",
                 result="odoo_failure",
                 detail=_event_detail(
                     job_id=claim.job_id,
                     reason_code="verification_read_unavailable",
                 ),
-                last_error=str(error),
-                retry_at=retry_at,
+                error=str(error),
             )
-            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
 
     stages = {str(item["stage"]) for item in completed if isinstance(item.get("stage"), str)}
     # ``days`` came from the pre-I/O durable horizon above. Later claims wait
@@ -4481,16 +4693,14 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                 completed_at=now,
             )
         except Exception as error:  # noqa: BLE001 - retry downstream only
-            retry_at = _retry_at(claim.attempt_count, now)
-            _transition(
+            return _retry_or_fail(
                 claim,
+                now=now,
                 phase="mirror",
                 result="failed",
                 detail=_event_detail(job_id=claim.job_id, reason_code="mirror_refresh_failed"),
-                last_error=str(error),
-                retry_at=retry_at,
+                error=str(error),
             )
-            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
         if not mirror_complete:
             return _result(claim, "superseded")
         marker = {"stage": "mirror_complete"}
@@ -4506,19 +4716,17 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
                 requested_at=now,
             )
         except Exception as error:  # noqa: BLE001 - durable enqueue is retryable
-            retry_at = _retry_at(claim.attempt_count, now)
-            _transition(
+            return _retry_or_fail(
                 claim,
+                now=now,
                 phase="recalculation",
                 result="failed",
                 detail=_event_detail(
                     job_id=claim.job_id,
                     reason_code="recalculation_enqueue_failed",
                 ),
-                last_error=str(error),
-                retry_at=retry_at,
+                error=str(error),
             )
-            return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
         if not enqueued:
             return _result(claim, "superseded")
         marker = {
@@ -4536,19 +4744,17 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
     else:
         recalc_error = "targeted recalculation is still pending"
     if not recalculated:
-        retry_at = _retry_at(claim.attempt_count, now)
-        _transition(
+        return _retry_or_fail(
             claim,
+            now=now,
             phase="recalculation",
             result="failed",
             detail=_event_detail(
                 job_id=claim.job_id,
                 reason_code="recalculation_pending",
             ),
-            last_error=recalc_error,
-            retry_at=retry_at,
+            error=recalc_error,
         )
-        return _result(claim, "recoverable", error=recalc_error, retry_at=retry_at)
     if "recalc_complete" not in stages:
         marker = {"stage": "recalc_complete"}
         if not _complete_record(
@@ -4592,16 +4798,14 @@ def _process_claim(claim: _JobClaim, *, now_utc: datetime) -> CorrectionJobResul
             completed_at=now,
         )
     except Exception as error:  # audit failure keeps durable job incomplete
-        retry_at = _retry_at(claim.attempt_count, now)
-        _transition(
+        return _retry_or_fail(
             claim,
+            now=now,
             phase="audit",
             result="failed",
             detail=_event_detail(job_id=claim.job_id, reason_code="audit_write_failed"),
-            last_error=str(error),
-            retry_at=retry_at,
+            error=str(error),
         )
-        return _result(claim, "recoverable", error=str(error), retry_at=retry_at)
     if not complete:
         return _result(claim, "superseded")
     return _result(claim, "complete")
