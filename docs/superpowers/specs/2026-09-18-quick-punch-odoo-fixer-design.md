@@ -103,13 +103,22 @@ validates exactly as today.
   interval now run after deletes, and updates that leave a row open already
   run last. This applies to every job. For manager jobs it replaces an order
   that could never succeed when Odoo rejects overlaps.
-- **Attempt cap for fixer jobs:** jobs whose `item_key` starts with
-  `quick-punch:` stop retrying after 6 recoverable failures (about 8 minutes
-  of backoff) while Odoo is still being changed or checked. They are marked
-  `failed` with an event, and an Exception Inbox alert is raised. Once Odoo is
-  verified, the later steps (mirror update, recalculation, audit) never touch
-  Odoo, so they keep retrying without a cap, as manager jobs do. Manager jobs
-  keep today's behavior.
+- **Attempt cap for fixer jobs:** a fixer job is a job whose `item_key`
+  starts with `quick-punch:` and whose actor is `system:quick-punch`.
+  - **The cap:** it stops after 6 recoverable failures, but only while no
+    Odoo write has been confirmed and the job isn't verified yet. It is then
+    marked `failed` with an event, and an Exception Inbox alert is raised.
+  - **Timing:** this takes about 8 minutes when Odoo can't be read. When Odoo
+    refuses the write itself, it takes about 75 minutes, because each
+    operation reservation lasts 15 minutes and protects against a late write
+    being applied twice.
+  - **After a confirmed write, or after verification:** fixer jobs keep
+    retrying without a cap until they converge, like manager jobs. Stopping
+    halfway would leave missing time. An active fixer job that has written to
+    Odoo but keeps retrying gets its own "Odoo partly changed" alert.
+  - **Readiness:** fixer failures are left out of the attendance readiness
+    blockers, because the fixer's alert covers them.
+  - **Manager jobs** keep today's behavior.
 
 ## The Fixer
 

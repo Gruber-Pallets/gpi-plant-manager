@@ -740,6 +740,11 @@ Note one case explicitly in the docstring or tests. For a first pick whose short
    - Each row has a "Mark checked" action that records `inbox_events` action `quick_punch_failure_ack` with the real actor. Acknowledged failures leave the section.
    - Hide the section when it is empty, like the other inbox categories.
    - Follow how `auto_lunch_guard` publishes its alert (`auto_lunch_guard._alert_for` / `current_snapshot`, wired at `exception_inbox.py` ~48-59, ~648, section ~907-917).
+3b. **Also alert on stuck partial fixes** (from the Task 2 re-review). List active fixer jobs that have at least one completed Odoo write and are either at or past `QUICK_PUNCH_MAX_ATTEMPTS` attempts or older than 30 minutes. Label them "Odoo partly changed, still retrying". These jobs retry without a cap, so without this row they would be invisible.
+3c. **Engine touch-ups** in `attendance_corrections.py`:
+   - `_fixer_progress` catches `Exception`, not only `TypeError`/`ValueError`/`KeyError`. It is diagnostic only and must never stop a job from reaching `failed`.
+   - It flags an operation that is reserved but not confirmed completed as `uncertain_operation: true` in the failure detail, and the alert words that as "Odoo may have been changed".
+   - Test both: a landed-but-unconfirmed write followed by the cap or a `source_changed` failure.
 4. **Don't break auto-resolve logic:** `inbox_log.has_human_event_since` treats any action other than `auto_resolved`/`undo` as human. Fixer events use their own `item_key` namespace (`quick-punch:`), so they can't collide with real inbox items. Add a test proving `has_human_event_since` for an unrelated real item is unaffected.
 
 **Tests:**
