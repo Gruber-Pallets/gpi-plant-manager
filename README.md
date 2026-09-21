@@ -134,18 +134,25 @@ suggestions. Day-to-day manager workflow:
    context like primary operator, training pair, or least-recent center. Green
    names do not get a redundant badge. Manual assignments and saved default
    people are locked and survive rebuilds.
-5. **Manage training protocols.** On Staffing, use the **Training** panel under
-   day Notes on the right rail. Click **+ Start training** to choose the
-   trainee, a level 3 trainer, the exact work center, start date, and number of
-   attended days. Active and paused protocols show progress (attended of
-   planned) with options to edit, pause, complete early, or end without
-   promoting. The scheduler places the pair at that work center automatically
-   on day one. On later attended days, add the trainer manually beside the
-   trainee when continued pairing is needed.
-6. **Confirm completion.** A full-day absence does not consume a training day,
-   so the protocol extends automatically. After the final attended day, the
-   trainee is promoted from level 0 to level 1 in every protocol skill — verify
-   it landed on the People Matrix.
+5. **Start training.** On Staffing, use **Training** below Notes. Choose the
+   trainee, a level 3 trainer, the exact work center, start date, and attended
+   days. The trainee can already have some required skills as long as at least
+   one is missing. The trainer needs level 3 in every skill being taught. Both
+   people must already hold any required certificates.
+6. **Schedule and follow progress.** Turn on Auto for the selected work center.
+   On day one (the first attended day), the scheduler reserves the trainee and
+   trainer together. Later days reserve the trainee. Add the trainer manually when continued pairing
+   is needed. If scheduling fails, the saved plan stays visible. Correct the
+   schedule warning and click **Retry scheduling**, rather than starting again.
+   Missed, conflicting, and paused days do not consume attended days. Use
+   **Edit**, **Pause**, and **Resume** on the card as needed. Once days have
+   been earned, start a new plan to change the work center or start date.
+7. **Finish and verify.** The plan finishes after its last attended day, or you
+   can click **Complete** early. Only missing skills rise to level 1; higher
+   skills and certificates stay unchanged. Check the **Skills Matrix** afterward.
+   **End** stops the plan without raising skills. If saving to Odoo fails, the
+   plan stays open with a retry message. The explicit **Posted** view is read-only;
+   use **Draft** to manage training.
 
 ### Automatic Repair and Dismantle skill levels
 

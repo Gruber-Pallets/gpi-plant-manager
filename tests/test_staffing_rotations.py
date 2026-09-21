@@ -367,6 +367,7 @@ def test_current_view_validation_uses_the_visible_safe_trim_saw_crew(monkeypatch
 
 
 def test_current_view_validation_requires_green_partner_for_visible_active_trainee(monkeypatch):
+    monkeypatch.setattr("zira_dashboard.rotation_store.certification_skill_names", lambda: set())
     from zira_dashboard import rotation_store
     from zira_dashboard.routes import staffing as staffing_route
 
@@ -583,12 +584,13 @@ def test_preference_endpoint_invalid_preference_422(monkeypatch):
 def _training_block_query(monkeypatch, rotations, *, trainee_level: int, trainer_level: int):
     """Wire db.query so the endpoint resolves ids and rotation_store.create_block
     reads the given skill levels."""
+    monkeypatch.setattr(rotations.rotation_store.work_centers_store, "required_skills", staffing.required_skills_for)
 
     def fake_query(sql, params=None):
         if "FROM people" in sql:
             name = params[0]
             return [{"id": 100 + len(name)}]  # deterministic, positive
-        if "SELECT id, name FROM skills" in sql:
+        if "SELECT id, name, skill_type FROM skills" in sql:
             return [{"id": 9, "name": "Repair"}]
         if "FROM skills WHERE id" in sql:
             return [{"name": "Repair"}]
@@ -4380,7 +4382,7 @@ def test_staffing_has_rotation_mode_controls_without_automated_person_notes():
     assert "tr.work-center-off .wc-note-cell > * { display: none; }" in css
     assert "tr.work-center-off .dept," not in css
     assert ".day-context .rotation-controls {" in css
-    assert "position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 20;" in css
+    assert ".day-context .rotation-controls {\n    position: static;" in css
     assert "box-shadow: 0 16px 36px rgba(31, 41, 55, 0.18);" in css
     assert (
         "background: linear-gradient(135deg, var(--panel), color-mix(in srgb, var(--accent-dim) 32%, var(--panel)));"

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import date
 
-from . import db, staffing
+from . import db, staffing, work_centers_store
+from .plant_day import today as plant_today
 
 
 ROTATION_GROUPS = ("Dismantler", "Repair", "Trim Saw")
 PREFERENCES = ("primary", "regular", "occasional", "never")
 _BLOCK_STATUSES = ("active", "paused", "completing", "completed", "ended")
-_BLOCK_DAY_STATUSES = ("attended", "absent", "conflict")
+_BLOCK_DAY_STATUSES = ("attended", "absent", "conflict", "paused")
 
 
 class InvalidRotationPreference(ValueError):
@@ -44,6 +46,8 @@ class TrainingBlock:
     skill_id: int = 0
     work_center: str | None = None
     skill_ids: tuple[int, ...] = ()
+    day_statuses: dict[date, str] = field(default_factory=dict)
+    paused_on: date | None = None
 
 
 @dataclass(frozen=True)
@@ -119,13 +123,13 @@ def validate_block(*, level: int, trainer_level: int, workdays: int) -> None:
         raise InvalidTrainingBlock("Training block must contain at least one attended workday.")
 
 
-def _skill_ids_for(required_skills: tuple[str, ...]) -> tuple[int, ...]:
+def _protocol_requirements(required_skills: tuple[str, ...]):
     """Resolve each configured protocol skill while preserving its order."""
     required_skills = tuple(
         staffing.skill_name_for_scheduling_group(skill) for skill in required_skills
     )
     rows = db.query(
-        "SELECT id, name FROM skills WHERE name = ANY(%s)",
+        "SELECT id, name, skill_type FROM skills WHERE name = ANY(%s)",
         (list(required_skills),),
     )
     ids_by_name = {row["name"]: int(row["id"]) for row in rows}
@@ -134,7 +138,53 @@ def _skill_ids_for(required_skills: tuple[str, ...]) -> tuple[int, ...]:
         raise InvalidTrainingBlock(
             f"Could not resolve configured training skill: {missing[0]}."
         )
-    return tuple(ids_by_name[skill] for skill in required_skills)
+    certifications = {row["name"] for row in rows if row.get("skill_type") == "Certifications"}
+    skill_ids = tuple(dict.fromkeys(ids_by_name[skill] for skill in required_skills if skill not in certifications))
+    certificate_ids = {ids_by_name[name]: name for name in certifications}
+    return skill_ids, certificate_ids
+
+
+def certification_skill_names() -> set[str]:
+    return {row["name"] for row in db.query(
+        "SELECT name FROM skills WHERE skill_type = %s", ("Certifications",),
+    )}
+
+
+def _validated_protocol_skills(*, trainee_id: int, trainer_id: int,
+                               location, workdays: int) -> tuple[int, ...]:
+    if trainee_id == trainer_id:
+        raise InvalidTrainingBlock("Choose a different person as the trainer.")
+    if not isinstance(workdays, int) or isinstance(workdays, bool) or not 1 <= workdays <= 366:
+        raise InvalidTrainingBlock("Choose between 1 and 366 attended workdays.")
+    skill_ids, certificate_ids = _protocol_requirements(tuple(work_centers_store.required_skills(location)))
+    if not skill_ids:
+        raise InvalidTrainingBlock(f"{location.name} has no trainable skills.")
+    has_gap = False
+    for skill_id in (*skill_ids, *certificate_ids):
+        levels = db.query(
+            "SELECT "
+            "  COALESCE((SELECT level FROM person_skills WHERE person_id = %s AND skill_id = %s), 0) "
+            "    AS trainee_level, "
+            "  COALESCE((SELECT level FROM person_skills WHERE person_id = %s AND skill_id = %s), 0) "
+            "    AS trainer_level",
+            (trainee_id, skill_id, trainer_id, skill_id),
+        )
+        if not levels:
+            raise InvalidTrainingBlock("Could not determine training skill levels.")
+        if skill_id in certificate_ids:
+            if int(levels[0]["trainee_level"]) < 1 or int(levels[0]["trainer_level"]) < 1:
+                raise InvalidTrainingBlock(
+                    f"Both people need {certificate_ids[skill_id]} before training at {location.name}."
+                )
+            continue
+        has_gap = has_gap or int(levels[0]["trainee_level"]) == 0
+        if int(levels[0]["trainer_level"]) != 3:
+            raise InvalidTrainingBlock("Day-one trainer must be level 3 for the target skill.")
+    if not has_gap:
+        people = db.query("SELECT name FROM people WHERE id = %s", (trainee_id,))
+        name = people[0]["name"] if people else "This person"
+        raise InvalidTrainingBlock(f"{name} already has the skills required for {location.name}.")
+    return skill_ids
 
 
 def _block_from_row(row: dict) -> TrainingBlock:
@@ -153,6 +203,8 @@ def _block_from_row(row: dict) -> TrainingBlock:
         skill_id=int(row.get("skill_id") or 0),
         work_center=row.get("work_center"),
         skill_ids=tuple(row.get("skill_ids") or (int(row.get("skill_id") or 0),)),
+        day_statuses={date.fromisoformat(day): status for day, status in (row.get("day_statuses") or {}).items()},
+        paused_on=row.get("paused_on"),
     )
 
 
@@ -168,23 +220,10 @@ def create_block(
     location = staffing.location_by_name(work_center)
     if location is None:
         raise InvalidTrainingBlock(f"Unknown work center: {work_center!r}.")
-    skill_ids = _skill_ids_for(staffing.required_skills_for(location))
-    for skill_id in skill_ids:
-        levels = db.query(
-            "SELECT "
-            "  COALESCE((SELECT level FROM person_skills WHERE person_id = %s AND skill_id = %s), 0) "
-            "    AS trainee_level, "
-            "  COALESCE((SELECT level FROM person_skills WHERE person_id = %s AND skill_id = %s), 0) "
-            "    AS trainer_level",
-            (trainee_id, skill_id, trainer_id, skill_id),
-        )
-        if not levels:
-            raise InvalidTrainingBlock("Could not determine training skill levels.")
-        validate_block(
-            level=int(levels[0]["trainee_level"]),
-            trainer_level=int(levels[0]["trainer_level"]),
-            workdays=planned_attended_days,
-        )
+    skill_ids = _validated_protocol_skills(
+        trainee_id=trainee_id, trainer_id=trainer_id, location=location,
+        workdays=planned_attended_days,
+    )
     rows = db.query(
         "WITH inserted AS ("
         "  INSERT INTO rotation_training_blocks "
@@ -209,7 +248,9 @@ def active_blocks_for_day(day: date) -> list[TrainingBlock]:
     """Return blocks that are active on or after their configured start day."""
     rows = db.query(
         "SELECT b.id, trainee.name AS trainee_name, trainer.name AS trainer_name, skill.name AS skill, "
-        "  b.start_day, b.planned_attended_days, b.status, b.trainee_id, b.skill_id, b.work_center, b.skill_ids "
+        "  b.start_day, b.planned_attended_days, b.status, b.trainee_id, b.skill_id, b.work_center, b.skill_ids, b.paused_on, "
+        "  (SELECT COALESCE(jsonb_object_agg(d.day::text, d.status), '{}'::jsonb) "
+        "   FROM rotation_training_block_days d WHERE d.block_id = b.id) AS day_statuses "
         "FROM rotation_training_blocks b "
         "JOIN people trainee ON trainee.id = b.trainee_id "
         "JOIN people trainer ON trainer.id = b.trainer_id "
@@ -225,7 +266,9 @@ def _block_rows_query(*, where_sql: str, params: tuple = ()) -> list[dict]:
     """Load joined training-block rows for a caller-supplied filter."""
     rows = db.query(
         "SELECT b.id, trainee.name AS trainee_name, trainer.name AS trainer_name, skill.name AS skill, "
-        "  b.start_day, b.planned_attended_days, b.status, b.trainee_id, b.skill_id, b.work_center, b.skill_ids "
+        "  b.start_day, b.planned_attended_days, b.status, b.trainee_id, b.skill_id, b.work_center, b.skill_ids, b.paused_on, "
+        "  (SELECT COALESCE(jsonb_object_agg(d.day::text, d.status), '{}'::jsonb) "
+        "   FROM rotation_training_block_days d WHERE d.block_id = b.id) AS day_statuses "
         "FROM rotation_training_blocks b "
         "JOIN people trainee ON trainee.id = b.trainee_id "
         "JOIN people trainer ON trainer.id = b.trainer_id "
@@ -250,11 +293,27 @@ def attended_day_count(block_id: int) -> int:
 
 def manageable_blocks() -> list[TrainingBlock]:
     """Return every active or paused block for sidebar management."""
-    rows = _block_rows_query(where_sql="b.status IN ('active', 'paused')")
+    rows = _block_rows_query(where_sql="b.status IN ('active', 'paused', 'completing')")
     return [_block_from_row(row) for row in rows]
 
 
 def update_block(
+    block_id: int,
+    *,
+    trainer_id: int,
+    work_center: str,
+    start_day: date,
+    planned_attended_days: int,
+) -> TrainingBlock:
+    """Serialize editing with attendance, pause, and skill completion."""
+    with completion_guard(block_id) as acquired:
+        if not acquired:
+            raise InvalidTrainingBlock("Training is being updated. Please try again.")
+        return _update_block(block_id, trainer_id=trainer_id, work_center=work_center,
+                             start_day=start_day, planned_attended_days=planned_attended_days)
+
+
+def _update_block(
     block_id: int,
     *,
     trainer_id: int,
@@ -271,26 +330,17 @@ def update_block(
         raise InvalidTrainingBlock(
             f"Planned days cannot be below attended days ({attended})."
         )
+    if attended and (work_center != block.work_center or start_day != block.start_day):
+        raise InvalidTrainingBlock("Days have already been attended. End this plan and start new training to change the work center or start date.")
     location = staffing.location_by_name(work_center)
     if location is None:
         raise InvalidTrainingBlock(f"Unknown work center: {work_center!r}.")
-    skill_ids = _skill_ids_for(staffing.required_skills_for(location))
-    for skill_id in skill_ids:
-        levels = db.query(
-            "SELECT "
-            "  COALESCE((SELECT level FROM person_skills WHERE person_id = %s AND skill_id = %s), 0) "
-            "    AS trainee_level, "
-            "  COALESCE((SELECT level FROM person_skills WHERE person_id = %s AND skill_id = %s), 0) "
-            "    AS trainer_level",
-            (block.trainee_id, skill_id, trainer_id, skill_id),
-        )
-        if not levels:
-            raise InvalidTrainingBlock("Could not determine training skill levels.")
-        validate_block(
-            level=int(levels[0]["trainee_level"]),
-            trainer_level=int(levels[0]["trainer_level"]),
-            workdays=planned_attended_days,
-        )
+    skill_ids = _validated_protocol_skills(
+        trainee_id=block.trainee_id, trainer_id=trainer_id, location=location,
+        workdays=planned_attended_days,
+    )
+    if attended and tuple(skill_ids) != tuple(block.skill_ids):
+        raise InvalidTrainingBlock("Required skills changed. End this plan and start new training for the new skills.")
     rows = db.query(
         "WITH updated AS ("
         "  UPDATE rotation_training_blocks "
@@ -356,7 +406,9 @@ def _blocks_with_status(status: str) -> list[TrainingBlock]:
     """Return every block in ``status``, regardless of start day."""
     rows = db.query(
         "SELECT b.id, trainee.name AS trainee_name, trainer.name AS trainer_name, skill.name AS skill, "
-        "  b.start_day, b.planned_attended_days, b.status, b.trainee_id, b.skill_id, b.work_center, b.skill_ids "
+        "  b.start_day, b.planned_attended_days, b.status, b.trainee_id, b.skill_id, b.work_center, b.skill_ids, b.paused_on, "
+        "  (SELECT COALESCE(jsonb_object_agg(d.day::text, d.status), '{}'::jsonb) "
+        "   FROM rotation_training_block_days d WHERE d.block_id = b.id) AS day_statuses "
         "FROM rotation_training_blocks b "
         "JOIN people trainee ON trainee.id = b.trainee_id "
         "JOIN people trainer ON trainer.id = b.trainer_id "
@@ -374,7 +426,7 @@ def active_blocks() -> list[TrainingBlock]:
 
 
 def completing_blocks() -> list[TrainingBlock]:
-    """Return claims whose promotion succeeded but finalization must retry."""
+    """Return interrupted claims whose skill writes or finalization must retry."""
     return _blocks_with_status("completing")
 
 
@@ -428,36 +480,60 @@ def release_completion_claim(block_id: int) -> None:
     )
 
 
-def pause_block(block_id: int) -> None:
-    """Pause an active block; a no-op unless it is currently active.
+@contextmanager
+def completion_guard(block_id: int):
+    """Serialize lifecycle operations across web requests and worker processes."""
+    with db.cursor() as cur:
+        cur.execute("SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0)) AS acquired",
+                    (f"training-block:{block_id}",))
+        yield bool(cur.fetchone()["acquired"])
 
-    A paused block is excluded from ``active_blocks``/``active_blocks_for_day``,
-    so it stops driving scheduling and reconciliation without being completed.
-    """
-    db.execute(
-        "UPDATE rotation_training_blocks SET status = 'paused' "
-        "WHERE id = %s AND status = 'active'",
-        (block_id,),
-    )
+
+def _require_lifecycle_block(block_id: int, statuses: tuple[str, ...]) -> TrainingBlock:
+    block = get_block(block_id)
+    if block is None or block.status not in statuses:
+        raise InvalidTrainingBlock("Training changed or is no longer open. Refresh the page.")
+    return block
+
+
+def pause_block(block_id: int) -> None:
+    from . import rotation_training
+    with completion_guard(block_id) as acquired:
+        if not acquired:
+            raise InvalidTrainingBlock("Training is being updated. Please try again.")
+        block = _require_lifecycle_block(block_id, ("active",))
+        today = plant_today()
+        rotation_training._record_elapsed_day_outcomes(block, today)
+        db.execute("UPDATE rotation_training_blocks SET status = 'paused', paused_on = %s "
+                   "WHERE id = %s AND status = 'active'", (today, block_id))
 
 
 def resume_block(block_id: int) -> None:
-    """Resume a paused block back to active; a no-op unless it is paused."""
-    db.execute(
-        "UPDATE rotation_training_blocks SET status = 'active' "
-        "WHERE id = %s AND status = 'paused'",
-        (block_id,),
-    )
+    with completion_guard(block_id) as acquired:
+        if not acquired:
+            raise InvalidTrainingBlock("Training is being updated. Please try again.")
+        block = _require_lifecycle_block(block_id, ("paused",))
+        # Old paused rows have no timestamp. Exclude all unresolved past days
+        # rather than guess that pre-generated assignments were attended.
+        paused_on = block.paused_on or block.start_day
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO rotation_training_block_days (block_id, day, status) "
+                "SELECT %s, day::date, 'paused' FROM generate_series(%s::date, %s::date - 1, interval '1 day') day "
+                "ON CONFLICT (block_id, day) DO NOTHING",
+                (block_id, max(paused_on, block.start_day), plant_today()),
+            )
+            cur.execute("UPDATE rotation_training_blocks SET status = 'active', paused_on = NULL "
+                        "WHERE id = %s AND status = 'paused'", (block_id,))
 
 
 def end_block(block_id: int) -> None:
-    """End a block without completing it; a no-op once it is neither active
-    nor paused. Ending never promotes the target skill (unlike completion)."""
-    db.execute(
-        "UPDATE rotation_training_blocks SET status = 'ended' "
-        "WHERE id = %s AND status IN ('active', 'paused')",
-        (block_id,),
-    )
+    with completion_guard(block_id) as acquired:
+        if not acquired:
+            raise InvalidTrainingBlock("Training is being updated. Please try again.")
+        _require_lifecycle_block(block_id, ("active", "paused"))
+        db.execute("UPDATE rotation_training_blocks SET status = 'ended' "
+                   "WHERE id = %s AND status IN ('active', 'paused')", (block_id,))
 
 
 def record_attended_day(block_id: int, day: date, status: str = "attended") -> None:

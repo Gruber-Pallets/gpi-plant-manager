@@ -26,7 +26,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from . import rotation_store, scheduler_time_off, shift_config, skill_levels, staffing
+from . import db, rotation_store, scheduler_time_off, shift_config, skill_levels, staffing
 
 log = logging.getLogger(__name__)
 
@@ -61,12 +61,14 @@ def planned_block_days(
     are gathered. Absent days do not count, so the block naturally extends.
     """
     out: list[date] = []
+    outcomes = getattr(block, "day_statuses", {})
     cursor = block.start_day
     limit = block.start_day + timedelta(days=block.planned_attended_days + _MAX_SCAN_DAYS)
     while len(out) < block.planned_attended_days and cursor <= limit:
-        if shift_config.is_workday(cursor) and block.trainee_name not in absence_by_day.get(
-            cursor, set()
-        ):
+        if cursor in outcomes:
+            if outcomes[cursor] == "attended":
+                out.append(cursor)
+        elif shift_config.is_workday(cursor) and block.trainee_name not in absence_by_day.get(cursor, set()):
             out.append(cursor)
         cursor += timedelta(days=1)
     return out
@@ -86,6 +88,8 @@ def effect_for_day(
     A manual conflicting assignment for the trainee or trainer produces a
     warning and does not displace the manual choice.
     """
+    if getattr(block, "status", "active") != "active":
+        return _EMPTY_EFFECT
     absence_by_day = absence_by_day or {}
     manual = set(manual_assignees or ())
 
@@ -183,14 +187,17 @@ def _record_elapsed_day_outcomes(block, as_of: date) -> None:
         return
 
     existing = {record.day: record for record in rotation_store.resolved_days(block.id)}
-    attended = sum(1 for record in existing.values() if _is_attended(record))
+    attended = 0
     cursor = start_day
     first_day: date | None = None
     while cursor < as_of and attended < block.planned_attended_days:
         if shift_config.is_workday(cursor):
             record = existing.get(cursor)
             if record is not None:
-                attended += int(_is_attended(record))
+                if _is_attended(record):
+                    attended += 1
+                    if first_day is None:
+                        first_day = cursor
             else:
                 try:
                     absent_names = scheduler_time_off.full_day_off_names(cursor)
@@ -203,16 +210,37 @@ def _record_elapsed_day_outcomes(block, as_of: date) -> None:
                     # Match ``planned_block_days``: the day-one pair moves to
                     # the first non-absent workday, while a conflicting
                     # attempted reservation remains that day's conflict.
-                    if first_day is None:
-                        first_day = cursor
                     status = (
                         "attended"
-                        if _reservation_was_applied(block, cursor, first_day)
+                        if _reservation_was_applied(block, cursor, first_day or cursor)
                         else "conflict"
                     )
+                    if status == "attended" and first_day is None:
+                        first_day = cursor
                 rotation_store.record_attended_day(block.id, cursor, status)
                 attended += int(status == "attended")
         cursor += timedelta(days=1)
+
+
+def _promotion_skill_rows(block) -> list[dict]:
+    skill_ids = tuple(getattr(block, "skill_ids", ()) or (block.skill_id,))
+    rows = db.query(
+        "SELECT s.id, s.skill_type, COALESCE(ps.level, 0) AS level "
+        "FROM skills s LEFT JOIN person_skills ps "
+        "ON ps.skill_id = s.id AND ps.person_id = %s WHERE s.id = ANY(%s)",
+        (block.trainee_id, list(skill_ids)),
+    )
+    if {int(row["id"]) for row in rows} != set(skill_ids):
+        raise rotation_store.InvalidTrainingBlock("A training skill is missing. Review this training plan.")
+    return rows
+
+
+def _promote_protocol_skills(block) -> None:
+    # A manager or another training plan may have already raised a skill. Never
+    # lower it, and never use a training plan to award a certification.
+    for row in _promotion_skill_rows(block):
+        if row["skill_type"] != "Certifications" and int(row["level"]) == 0:
+            skill_levels.promote_untrained_person_skill(block.trainee_id, int(row["id"]))
 
 
 def reconcile_blocks(as_of: date) -> list[int]:
@@ -230,44 +258,51 @@ def reconcile_blocks(as_of: date) -> list[int]:
     no longer returns it, so a block is never promoted twice.
     """
     promoted: list[int] = []
-    # A promotion already succeeded for these durable claims. Retrying only
-    # the final DB write avoids repeating the external skill-level mutation.
     for block in rotation_store.completing_blocks():
-        try:
-            rotation_store.mark_completed(block.id)
-        except Exception:  # noqa: BLE001 - retain completing for the next retry
-            log.exception("Training block %s finalization failed; leaving completing to retry", block.id)
-            continue
-        promoted.append(block.id)
+        with rotation_store.completion_guard(block.id) as acquired:
+            if not acquired:
+                continue
+            current = rotation_store.get_block(block.id)
+            if current is None or current.status != "completing":
+                continue
+            try:
+                _promote_protocol_skills(current)
+                rotation_store.mark_completed(current.id)
+            except Exception:
+                log.exception("Training block %s completion will retry", block.id)
+                continue
+            promoted.append(block.id)
 
-    for block in rotation_store.active_blocks():
-        if getattr(block, "status", "active") != "active":
-            continue
-        _record_elapsed_day_outcomes(block, as_of)
-        attended = sum(1 for d in rotation_store.resolved_days(block.id) if _is_attended(d))
-        if attended < block.planned_attended_days:
-            continue
-        if not rotation_store.claim_completion(block.id):
-            continue
-        skill_ids = tuple(getattr(block, "skill_ids", ()) or (block.skill_id,))
-        try:
-            for skill_id in skill_ids:
-                skill_levels.set_person_skill_level(block.trainee_id, skill_id, 1)
-        except Exception:  # noqa: BLE001 - one block's failure must not abort the pass
-            # Leave the block active (do NOT mark completed) so the next
-            # reconciliation retries the promotion, and keep going.
-            log.exception(
-                "Training block %s promotion failed; leaving active to retry",
-                getattr(block, "id", "?"),
-            )
-            rotation_store.release_completion_claim(block.id)
-            continue
-        try:
-            rotation_store.mark_completed(block.id)
-        except Exception:  # noqa: BLE001 - promotion happened; retry finalization only
-            log.exception("Training block %s finalization failed; leaving completing to retry", block.id)
-            continue
-        promoted.append(block.id)
+    for candidate in rotation_store.active_blocks():
+        with rotation_store.completion_guard(candidate.id) as acquired:
+            if not acquired:
+                continue
+            block = rotation_store.get_block(candidate.id)
+            if block is None or getattr(block, "status", "active") != "active":
+                continue
+            _record_elapsed_day_outcomes(block, as_of)
+            attended = sum(1 for d in rotation_store.resolved_days(block.id) if _is_attended(d))
+            if attended < block.planned_attended_days:
+                continue
+            if not rotation_store.claim_completion(block.id):
+                continue
+            try:
+                _promote_protocol_skills(block)
+            except Exception:  # noqa: BLE001 - one block's failure must not abort the pass
+                # Leave the block active (do NOT mark completed) so the next
+                # reconciliation retries the promotion, and keep going.
+                log.exception(
+                    "Training block %s promotion failed; leaving active to retry",
+                    getattr(block, "id", "?"),
+                )
+                rotation_store.release_completion_claim(block.id)
+                continue
+            try:
+                rotation_store.mark_completed(block.id)
+            except Exception:  # noqa: BLE001 - promotion happened; retry finalization only
+                log.exception("Training block %s finalization failed; leaving completing to retry", block.id)
+                continue
+            promoted.append(block.id)
     return promoted
 
 
@@ -280,19 +315,19 @@ def complete_block_now(block_id: int) -> None:
     If finalization fails after a successful promotion, leave ``completing``
     for a later reconcile/retry (same durable-claim contract as reconcile).
     """
-    block = rotation_store.get_block(block_id)
-    if block is None:
-        raise rotation_store.InvalidTrainingBlock("Unknown training block.")
-    prior = rotation_store.claim_early_completion(block_id)
-    if prior is None:
-        raise rotation_store.InvalidTrainingBlock("Training cannot be completed.")
-    skill_ids = tuple(block.skill_ids or (block.skill_id,))
-    try:
-        for skill_id in skill_ids:
-            skill_levels.set_person_skill_level(block.trainee_id, skill_id, 1)
-    except Exception:
-        rotation_store.release_early_completion_claim(block_id, prior)
-        raise
-    # Promotion succeeded; finalize. If mark_completed fails, leave status
-    # ``completing`` so a later reconcile/retry can finish without re-promoting.
-    rotation_store.mark_completed(block_id)
+    with rotation_store.completion_guard(block_id) as acquired:
+        if not acquired:
+            raise rotation_store.InvalidTrainingBlock("Training is being updated. Please try again.")
+        block = rotation_store.get_block(block_id)
+        if block is None:
+            raise rotation_store.InvalidTrainingBlock("Unknown training block.")
+        prior = ("completing" if block.status == "completing"
+                 else rotation_store.claim_early_completion(block_id))
+        if prior is None:
+            raise rotation_store.InvalidTrainingBlock("Training cannot be completed. Refresh the page.")
+        try:
+            _promote_protocol_skills(block)
+        except Exception:
+            rotation_store.release_early_completion_claim(block_id, prior)
+            raise
+        rotation_store.mark_completed(block_id)

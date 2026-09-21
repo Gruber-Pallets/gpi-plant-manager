@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import date
 from threading import Barrier, Lock, Thread
 from types import SimpleNamespace
@@ -12,6 +13,8 @@ def _default_work_week(monkeypatch):
     """Stub the global-schedule lookup so the pure day math never touches
     Postgres. Defaults to a Mon-Fri working week."""
     from zira_dashboard import rotation_training
+    monkeypatch.setattr(rotation_training.skill_levels, "promote_untrained_person_skill",
+                        lambda pid, sid: rotation_training.skill_levels.set_person_skill_level(pid, sid, 1))
 
     monkeypatch.setattr(
         rotation_training.shift_config,
@@ -24,6 +27,15 @@ def _default_work_week(monkeypatch):
     monkeypatch.setattr(rotation_training.rotation_store, "claim_completion", lambda _id: True)
     monkeypatch.setattr(rotation_training.rotation_store, "release_completion_claim", lambda _id: None)
     monkeypatch.setattr(rotation_training.rotation_store, "completing_blocks", lambda: [])
+    monkeypatch.setattr(rotation_training.rotation_store, "completion_guard", lambda _: nullcontext(True))
+    monkeypatch.setattr(rotation_training.rotation_store, "get_block", lambda bid: next(
+        (block for block in rotation_training.rotation_store.active_blocks()
+         + rotation_training.rotation_store.completing_blocks() if block.id == bid), None
+    ))
+    monkeypatch.setattr(rotation_training, "_promotion_skill_rows", lambda block: [
+        {"id": sid, "level": 0, "skill_type": "Production Skills"}
+        for sid in (getattr(block, "skill_ids", ()) or (block.skill_id,))
+    ])
 
 
 def _block(
@@ -612,7 +624,9 @@ def test_reconcile_retries_completing_finalization_without_repromoting(monkeypat
     """A failed final status write remains completing and is safely retried."""
     from zira_dashboard import rotation_training
 
-    block = SimpleNamespace(id=42, status="completing")
+    block = SimpleNamespace(id=42, status="completing", trainee_id=17, skill_id=9)
+    monkeypatch.setattr(rotation_training.rotation_store, "get_block", lambda _: block)
+    monkeypatch.setattr(rotation_training, "_promotion_skill_rows", lambda _: [{"id": 9, "level": 1, "skill_type": "Production Skills"}])
     attempts = []
     state = {"failed": False}
 

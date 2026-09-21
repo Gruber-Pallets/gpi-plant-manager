@@ -1402,7 +1402,8 @@
       return inFlight;
     }
 
-    function onEdit() {
+    function onEdit(event) {
+      if (event?.target?.closest?.('#training-sidebar')) return;
       if (__viewingPosted) { return; }
       setState('dirty');
       if (inFlight) {
@@ -1935,6 +1936,11 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
           renderPlacementFailure(data);
           return false;
         }
+        if (options.trainingProtocol) {
+          const training = options.trainingProtocol;
+          const placed = (data.assignments || {})[training.work_center] || [];
+          if (!placed.includes(training.trainee)) return false;
+        }
         if (window.SCHEDULE_PUBLISHED) {
           window.location.reload();
           return true;
@@ -1956,7 +1962,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       }
     }
 
-    window.rebuildRotationForTraining = targetDay => rebuild(currentMode(), { day: targetDay });
+    window.rebuildRotationForTraining = (targetDay, protocol) => rebuild(currentMode(), { day: targetDay, trainingProtocol: protocol });
 
     const resetScheduleBtn = document.getElementById('reset-schedule-btn');
     if (resetScheduleBtn) {
@@ -2074,7 +2080,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
     }
 
     function statusLabel(status) {
-      return status === 'paused' ? 'Paused' : 'Active';
+      return status === 'completing' ? 'Finishing — retry if needed' : status === 'paused' ? 'Paused' : 'Active';
     }
 
     function progressCounts(protocol) {
@@ -2098,10 +2104,15 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       button.type = 'button';
       button.className = 'training-protocol-lifecycle' + (action === 'end' ? ' danger' : '');
       button.textContent = label;
+      button.title = action === 'complete' ? 'Finish training and raise missing skills to level 1' : action === 'end' ? 'Stop training without changing skills' : label + ' training';
       button.addEventListener('click', async () => {
+        if (action === 'complete' && !confirm('Complete training for ' + protocol.trainee + '? Missing training skills will be raised to level 1.')) return;
+        if (action === 'end' && !confirm('End training for ' + protocol.trainee + ' without changing their skills?')) return;
         errorEl.textContent = '';
-        button.disabled = true;
+        const card = button.closest('.training-card');
+        card.querySelectorAll('button').forEach(control => { control.disabled = true; });
         try {
+          if (window.flushAutosave) await window.flushAutosave();
           const path = action === 'complete'
             ? '/api/rotations/training-blocks/' + protocol.id + '/complete'
             : '/api/rotations/training-blocks/' + protocol.id + '/' + action;
@@ -2114,9 +2125,11 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
             protocol.status = data.status;
           }
           renderTrainingProtocols();
+          if (window.showToast) showToast(action === 'complete' ? 'Training completed. Skills updated.' : 'Training updated.');
+          window.location.reload();
         } catch (error) {
           errorEl.textContent = error.message || 'Could not update training.';
-          button.disabled = false;
+          card.querySelectorAll('button').forEach(control => { control.disabled = false; });
         }
       });
       return button;
@@ -2157,10 +2170,12 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       daysInput.type = 'number';
       daysInput.min = String(Math.max(1, Number(protocol.attended_days) || 1));
       daysInput.step = '1';
+      daysInput.max = '366';
       daysInput.value = String(protocol.planned_attended_days || 1);
       daysField.appendChild(daysInput);
 
       fields.append(trainerField, wcField, startField, daysField);
+      if (panelEl.hidden) fields.querySelectorAll('input, select').forEach(field => { field.disabled = true; });
 
       const actions = document.createElement('div');
       actions.className = 'training-protocol-actions';
@@ -2266,13 +2281,34 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
             editingId = editingId === protocol.id ? null : protocol.id;
             renderTrainingProtocols();
           });
-          actions.appendChild(editBtn);
+          if (protocol.status !== 'completing') actions.appendChild(editBtn);
+          if (protocol.status === 'active') {
+            const retryBtn = document.createElement('button');
+            retryBtn.type = 'button';
+            retryBtn.className = 'training-protocol-retry';
+            retryBtn.textContent = 'Retry scheduling';
+            retryBtn.addEventListener('click', async () => {
+              retryBtn.disabled = true;
+              errorEl.textContent = '';
+              try {
+                if (window.flushAutosave) await window.flushAutosave();
+                const targetDay = protocol.start_day > window.SCHEDULE_DAY ? protocol.start_day : window.SCHEDULE_DAY;
+                const scheduled = await window.rebuildRotationForTraining(targetDay, protocol);
+                if (!scheduled) throw new Error('Training is saved. Turn on Auto for ' + protocol.work_center + ' and check the schedule warnings, then retry.');
+                window.location.href = '/staffing?day=' + encodeURIComponent(targetDay);
+              } catch (error) {
+                errorEl.textContent = error.message || 'Could not update the schedule. Your training is saved.';
+                retryBtn.disabled = false;
+              }
+            });
+            actions.appendChild(retryBtn);
+          }
           if (protocol.status === 'active') actions.appendChild(lifecycleButton(protocol, 'pause', 'Pause'));
           if (protocol.status === 'paused') actions.appendChild(lifecycleButton(protocol, 'resume', 'Resume'));
-          actions.appendChild(lifecycleButton(protocol, 'complete', 'Complete'));
-          actions.appendChild(lifecycleButton(protocol, 'end', 'End'));
+          actions.appendChild(lifecycleButton(protocol, 'complete', protocol.status === 'completing' ? 'Retry completion' : 'Complete'));
+          if (protocol.status !== 'completing') actions.appendChild(lifecycleButton(protocol, 'end', 'End'));
           item.appendChild(actions);
-          item.appendChild(buildEditPanel(protocol));
+          if (protocol.status !== 'completing') item.appendChild(buildEditPanel(protocol));
         }
 
         list.appendChild(item);
@@ -2285,6 +2321,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       addOptions(workCenterSelect, workCenters, 'Select work center');
     }
     renderTrainingProtocols();
+    if (createPanel) createPanel.querySelectorAll('input, select').forEach(field => { field.disabled = createPanel.hidden; });
 
     // Create/edit inputs live inside #staffing-form; Enter would submit Publish
     // (the sole type="submit"). Route Enter to the visible Start/Save action instead.
@@ -2308,6 +2345,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       startToggle.addEventListener('click', () => {
         const open = createPanel.hidden;
         createPanel.hidden = !open;
+        createPanel.querySelectorAll('input, select').forEach(field => { field.disabled = !open; });
         startToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
         if (open) traineeSelect.focus();
       });
@@ -2318,6 +2356,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
         ])) return;
         submitBtn.disabled = true;
         try {
+          if (window.flushAutosave) await window.flushAutosave();
           const protocolDay = startInput.value;
           const { resp, data } = await postJSON('/api/rotations/training-blocks', {
             trainee: traineeSelect.value,
@@ -2327,14 +2366,19 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
             workdays: Number(workdaysInput.value),
           });
           if (!resp.ok || !data.ok) throw new Error(data.error || 'Could not start training.');
-          const scheduled = await window.rebuildRotationForTraining(startInput.value);
-          if (!scheduled) {
-            throw new Error('Training was saved, but the schedule could not be updated.');
-          }
           protocols.push(data.block);
           renderTrainingProtocols();
           createPanel.hidden = true;
+          createPanel.querySelectorAll('input, select').forEach(field => { field.disabled = true; });
           startToggle.setAttribute('aria-expanded', 'false');
+          traineeSelect.value = '';
+          trainerSelect.value = '';
+          const scheduled = await window.rebuildRotationForTraining(protocolDay, data.block);
+          if (!scheduled) {
+            errorEl.textContent = 'Training saved. Turn on Auto for ' + data.block.work_center +
+              ', check the schedule warnings, then use Retry scheduling on this card. Do not start it again.';
+            return;
+          }
           if (protocolDay && protocolDay !== window.SCHEDULE_DAY) {
             window.location.href = '/staffing?day=' + encodeURIComponent(protocolDay);
             return;

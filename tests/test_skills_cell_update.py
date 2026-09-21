@@ -1,9 +1,16 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
+from contextlib import nullcontext
 
 from zira_dashboard import odoo_client
 from zira_dashboard.routes.skills import router
+
+
+@pytest.fixture(autouse=True)
+def _unit_skill_write_lock(monkeypatch):
+    from zira_dashboard import skill_levels
+    monkeypatch.setattr(skill_levels, "_skill_write_guard", lambda *a: nullcontext())
 
 
 def _client():

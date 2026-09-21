@@ -12,6 +12,17 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-21
 
+### Training is easier to start and finish
+
+#### Fixes
+
+- **Train people who already know part of the job.** Training now checks all the skills needed at that work center.
+- **Missed and paused days no longer cut training short.** Progress counts each attended day once.
+- **A saved training plan stays on screen if scheduling fails.** Use Retry scheduling to try again without starting over.
+- **Finishing training keeps skills people already have.** It raises only missing skills and never gives someone a certificate.
+- **Training buttons are easier to reach on small screens.** Schedule controls no longer cover the training form.
+- **Failed saves tell you what to do next.** Complete and End also explain what will happen before you confirm.
+
 ### Keep the shared timeclock open
 
 - **Shared accounts can now use Timeclock only.** Workers can clock in and out, request time off, and send feedback. This does not give the shared account access to HR pages or app settings.

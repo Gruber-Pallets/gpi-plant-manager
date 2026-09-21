@@ -434,6 +434,7 @@ CREATE TABLE IF NOT EXISTS rotation_training_blocks (
 
 ALTER TABLE rotation_training_blocks ADD COLUMN IF NOT EXISTS work_center TEXT;
 ALTER TABLE rotation_training_blocks ADD COLUMN IF NOT EXISTS skill_ids INTEGER[];
+ALTER TABLE rotation_training_blocks ADD COLUMN IF NOT EXISTS paused_on DATE;
 UPDATE rotation_training_blocks SET skill_ids = ARRAY[skill_id] WHERE skill_ids IS NULL;
 -- A durable completion claim prevents concurrent reconciliation requests from
 -- both sending the external level-promotion write. Rebuild the original
@@ -450,6 +451,11 @@ CREATE TABLE IF NOT EXISTS rotation_training_block_days (
   status TEXT NOT NULL CHECK (status IN ('attended', 'absent', 'conflict')),
   PRIMARY KEY (block_id, day)
 );
+ALTER TABLE rotation_training_block_days
+  DROP CONSTRAINT IF EXISTS rotation_training_block_days_status_check;
+ALTER TABLE rotation_training_block_days
+  ADD CONSTRAINT rotation_training_block_days_status_check
+  CHECK (status IN ('attended', 'absent', 'conflict', 'paused'));
 
 -- Retro time-windowed WC attributions: when a metered WC produced units but
 -- had no one scheduled there, the user can attribute the production to the

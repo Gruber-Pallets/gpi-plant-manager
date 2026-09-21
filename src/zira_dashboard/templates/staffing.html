@@ -369,16 +369,18 @@
       <label class="notes-label" for="notes-textarea">Notes for the day <span class="hint">— shown with the published schedule</span></label>
       <textarea id="notes-textarea" name="notes" rows="6" placeholder=" "{% if viewing_posted %} readonly{% endif %}>{{ notes }}</textarea>
     </div>
+    {% set training_readonly = viewing_posted or (published and view_mode == 'posted') %}
     <section id="training-sidebar" class="training-sidebar" aria-labelledby="training-sidebar-title"
-             data-readonly="{{ '1' if viewing_posted else '0' }}">
+             data-readonly="{{ '1' if training_readonly else '0' }}">
       <div class="training-sidebar-head">
         <h3 id="training-sidebar-title">Training</h3>
         <span id="training-sidebar-count" class="hint"></span>
       </div>
+      <p class="hint">Choose someone with skills to learn and a level 3 trainer. Missed days do not count. Complete raises missing skills to level 1; End leaves skills unchanged.</p>
       <p id="training-sidebar-error" class="training-protocol-error" role="alert" aria-live="assertive"></p>
       <p id="training-sidebar-empty" class="training-protocol-empty">No active training protocols.</p>
       <ul id="training-sidebar-list" class="training-sidebar-list"></ul>
-      {% if not viewing_posted %}
+      {% if not training_readonly %}
       <button type="button" id="training-sidebar-start-toggle" class="training-start-toggle">+ Start training</button>
       <div id="training-sidebar-create" class="training-sidebar-create" hidden>
         <div class="training-protocol-fields">
@@ -395,7 +397,7 @@
             <input id="training-sidebar-start-day" type="date" value="{{ day }}">
           </label>
           <label>Attended workdays
-            <input id="training-sidebar-workdays" type="number" min="1" step="1" value="5">
+            <input id="training-sidebar-workdays" type="number" min="1" max="366" step="1" value="5">
           </label>
         </div>
         <div class="training-protocol-actions">

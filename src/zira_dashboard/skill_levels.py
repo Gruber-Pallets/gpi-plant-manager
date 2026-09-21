@@ -14,6 +14,7 @@ stays in the endpoint; this module only knows how to persist a level.
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack, contextmanager
 
 from . import _http_cache, db, odoo_client, staffing
 
@@ -65,7 +66,44 @@ def _mirror_local(person_id: int, skill_id: int, level: int) -> None:
         )
 
 
+@contextmanager
+def _skill_write_guard(person_id: int, skill_id: int):
+    # Matrix edits and training share this lock, including the external write.
+    # Only failures before yielding mean Odoo has definitely not been changed.
+    with ExitStack() as stack:
+        try:
+            cur = stack.enter_context(db.cursor())
+            cur.execute("SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0)) AS acquired",
+                        (f"person-skill:{person_id}:{skill_id}",))
+            if not cur.fetchone()["acquired"]:
+                raise SkillSyncError("This skill is being updated. Please retry.")
+        except SkillSyncError:
+            raise
+        except Exception as exc:
+            raise SkillSyncError("Could not reserve this skill update. Please retry.") from exc
+        yield
+
+
 def set_person_skill_level(person_id: int, skill_id: int, level: int) -> None:
+    with _skill_write_guard(person_id, skill_id):
+        _write_person_skill_level(person_id, skill_id, level)
+
+
+def promote_untrained_person_skill(person_id: int, skill_id: int) -> None:
+    """Raise only a still-missing production skill, without racing Matrix edits."""
+    with _skill_write_guard(person_id, skill_id):
+        rows = db.query(
+            "SELECT s.skill_type, COALESCE(ps.level, 0) AS level FROM skills s "
+            "LEFT JOIN person_skills ps ON ps.skill_id=s.id AND ps.person_id=%s "
+            "WHERE s.id=%s", (person_id, skill_id),
+        )
+        if not rows:
+            raise SkillSyncError("The training skill could not be found.")
+        if rows[0]["skill_type"] != "Certifications" and int(rows[0]["level"]) == 0:
+            _write_person_skill_level(person_id, skill_id, 1)
+
+
+def _write_person_skill_level(person_id: int, skill_id: int, level: int) -> None:
     """Set a person's skill level in Odoo and mirror it locally.
 
     ``person_id`` and ``skill_id`` are local ``people.id`` / ``skills.id``.

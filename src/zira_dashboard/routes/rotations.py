@@ -31,6 +31,7 @@ from .. import (
     optional_workday,
     rotation_store,
     rotation_training,
+    skill_levels,
     saturday_recruiting_store,
     schedule_solver,
     scheduler_time_off,
@@ -368,12 +369,15 @@ def _parse_current_validation_snapshot(
     return day, assignments, enabled, expected_workers
 
 
-def _validate_current_validation_capacities(assignments: Mapping[str, Sequence[str]]) -> None:
+def _validate_current_validation_capacities(assignments: Mapping[str, Sequence[str]], day: date | None = None) -> None:
     """Check snapshot capacities in the endpoint's blocking worker."""
     capacities = staffing_route._configured_center_capacities(
         assignments.keys(),
         strict=True,
     )
+    if day is not None and any(maximum is not None and len(assignments.get(center, ())) > maximum
+                               for center, maximum in capacities.items()):
+        capacities = staffing_route._training_adjusted_capacities(day, assignments, capacities)
     for center, names in assignments.items():
         maximum = capacities.get(center)
         if maximum is not None and len(names) > maximum:
@@ -392,7 +396,7 @@ async def validate_current_rotation_view(request: Request):
 
     def _work():
         try:
-            _validate_current_validation_capacities(assignments)
+            _validate_current_validation_capacities(assignments, day)
             issues = staffing_route.current_view_validation_for_day(
                 day=day,
                 assignments=assignments,
@@ -584,6 +588,12 @@ async def complete_training_block(block_id: int):
             rotation_training.complete_block_now(block_id)
         except rotation_store.InvalidTrainingBlock as exc:
             return _error(str(exc))
+        except skill_levels.SkillSyncError:
+            log.exception("Training skill update failed for block %s", block_id)
+            return _error("Skills could not be saved to Odoo. Training is still open. Please retry Complete.", 503)
+        except Exception:
+            log.exception("Training completion failed for block %s", block_id)
+            return _error("Training could not finish. Refresh the page and retry Complete.", 503)
         _http_cache.invalidate_today_cache()
         _http_cache.invalidate_stable_cache()
         return JSONResponse({"ok": True, "id": block_id, "status": "completed"})
@@ -602,7 +612,10 @@ async def _lifecycle(block_id: int, store_fn_name: str, status: str) -> JSONResp
         return _error("block_id must be a positive integer.")
 
     def _work():
-        getattr(rotation_store, store_fn_name)(block_id)
+        try:
+            getattr(rotation_store, store_fn_name)(block_id)
+        except rotation_store.InvalidTrainingBlock as exc:
+            return _error(str(exc), 409)
         _http_cache.invalidate_today_cache()
         _http_cache.invalidate_stable_cache()
         return JSONResponse({"ok": True, "id": block_id, "status": status})

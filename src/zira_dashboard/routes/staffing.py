@@ -750,33 +750,37 @@ def _training_picker_reservations_for_day(d: date, time_off_entries) -> dict[str
     return reservations
 
 
-def _current_training_trainees_by_center(day: date, assignments) -> dict[str, tuple[str, ...]]:
-    """Project today's active training blocks without changing their lifecycle.
-
-    The validator needs only the trainees whose active blocks reserve an exact
-    work center today. Other on-screen assignments remain manual picks for the
-    effect, while the trainee stays visible to the safety projection even when
-    they are already assigned at their training center. This path never
-    reconciles a block.
-    """
-    manual_assignees = {
-        str(name).strip()
-        for names in (assignments or {}).values()
-        for name in (names or ())
-        if str(name or "").strip()
-    }
-    trainees_by_center: dict[str, set[str]] = {}
+def _training_validation_context(day: date, assignments):
+    """Project saved protocol reservations, including the day-one extra seat."""
+    assigned = {str(name) for names in (assignments or {}).values() for name in names}
+    trainees, partners, extras = {}, {}, {}
     for block in rotation_store.active_blocks_for_day(day):
         effect = rotation_training.effect_for_day(
-            block,
-            day,
-            absence_by_day=_absence_by_day_for_block(block, day),
-            manual_assignees=manual_assignees - {block.trainee_name},
+            block, day, absence_by_day=_absence_by_day_for_block(block, day),
+            manual_assignees=assigned - {block.trainee_name, block.trainer_name},
         )
         for center, names in effect.locked_work_centers.items():
-            trainees_by_center.setdefault(center, set()).update(names)
+            trainees.setdefault(center, set()).update(names)
+            trainer_names = effect.temporary_extra_work_centers.get(center, ())
+            if trainer_names:
+                partners.setdefault(center, set()).update(names)
+                if set(names).issubset(set(assignments.get(center, ()))):
+                    extras.setdefault(center, set()).update(
+                        set(trainer_names) & set(assignments.get(center, ()))
+                    )
+    return trainees, partners, extras
+
+
+def _current_training_trainees_by_center(day: date, assignments) -> dict[str, tuple[str, ...]]:
+    trainees, _, _ = _training_validation_context(day, assignments)
+    return {center: tuple(sorted(names, key=str.lower)) for center, names in trainees.items()}
+
+
+def _training_adjusted_capacities(day, assignments, capacities):
+    _, _, extras = _training_validation_context(day, assignments)
     return {
-        center: tuple(sorted(names, key=str.lower)) for center, names in trainees_by_center.items()
+        center: None if maximum is None else maximum + len(extras.get(center, ()))
+        for center, maximum in capacities.items()
     }
 
 
@@ -794,6 +798,10 @@ def current_view_validation_for_day(
         for group, centers in group_locations.items()
         for center in centers
     }
+    trainees, partners, extras = _training_validation_context(day, assignments)
+    capacities = _configured_center_capacities(enabled, strict=True)
+    capacities = {center: None if maximum is None else maximum + len(extras.get(center, ()))
+                  for center, maximum in capacities.items()}
     issues = current_schedule_validation.validate_current_assignments(
         roster=roster,
         assignments=assignments,
@@ -802,11 +810,13 @@ def current_view_validation_for_day(
         minimums={
             loc.name: _effective_minimum(loc) for loc in staffing.LOCATIONS if loc.name in enabled
         },
-        capacities=_configured_center_capacities(enabled, strict=True),
+        capacities=capacities,
         required_skills=required_skills,
         full_day_off_names=rotation_suggestions._full_day_time_off_names(time_off_entries),
         trim_saw_centers=set(group_locations.get(rotation_suggestions.TRIM_SAW_SKILL, ())),
-        training_trainees_by_center=_current_training_trainees_by_center(day, assignments),
+        training_trainees_by_center=trainees,
+        training_requires_partner_by_center=partners,
+        certification_skills=rotation_store.certification_skill_names() if trainees else (),
         exact_defaults=exact_defaults,
         group_defaults=group_defaults,
         user_group_centers=user_group_centers,

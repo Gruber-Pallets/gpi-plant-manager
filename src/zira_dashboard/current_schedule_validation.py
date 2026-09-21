@@ -33,6 +33,8 @@ def validate_current_assignments(
     group_defaults: Mapping[str, Sequence[str]],
     user_group_centers: Mapping[str, Sequence[str]],
     expected_working_names: Collection[str] | None = None,
+    training_requires_partner_by_center: Mapping[str, Collection[str]] | None = None,
+    certification_skills: Collection[str] = (),
 ) -> tuple[schedule_solver.PlacementIssue, ...]:
     locations_by_name = {location.name: location for location in locations}
     enabled = tuple(
@@ -89,13 +91,15 @@ def validate_current_assignments(
             )
 
         trainees = set(training_trainees_by_center.get(center, ()))
+        partner_required = (trainees if training_requires_partner_by_center is None
+                            else set(training_requires_partner_by_center.get(center, ())))
         green_present = any(
             (person := by_name.get(name)) is not None
             and person.active
             and not person.reserve
             and name not in off
             and name not in trainees
-            and all(person.level(skill) >= 3 for skill in required)
+            and all(person.level(skill) >= (1 if skill in certification_skills else 3) for skill in required)
             for name in names
         )
         safe_names = set()
@@ -112,7 +116,16 @@ def validate_current_assignments(
                 )
                 continue
             if name in trainees:
-                if green_present:
+                missing_certificates = [skill for skill in required
+                                        if skill in certification_skills and person.level(skill) < 1]
+                if missing_certificates:
+                    issues.append(_issue(
+                        "assignment_unqualified",
+                        f"{name} needs {', '.join(missing_certificates)} before training at {center}.",
+                        person=name, centers=(center,),
+                    ))
+                    continue
+                if name not in partner_required or green_present:
                     safe_names.add(name)
                 continue
             if not all(person.level(skill) >= 1 for skill in required):
@@ -128,8 +141,8 @@ def validate_current_assignments(
             safe_names.add(name)
 
         missing_trainees = trainees - set(names)
-        if missing_trainees or (trainees & set(names) and not green_present):
-            details = sorted(missing_trainees or trainees & set(names), key=str.lower)
+        if missing_trainees or (partner_required & set(names) and not green_present):
+            details = sorted(missing_trainees or partner_required & set(names), key=str.lower)
             issues.append(
                 _issue(
                     "training_partner_missing",

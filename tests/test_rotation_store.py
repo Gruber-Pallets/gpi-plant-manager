@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date
 
 import pytest
@@ -88,6 +88,14 @@ def test_training_block_rejects_non_green_trainer():
 
     with pytest.raises(rotation_store.InvalidTrainingBlock, match="level 3"):
         rotation_store.validate_block(level=0, trainer_level=2, workdays=5)
+
+
+@pytest.fixture(autouse=True)
+def _configured_training_skills(monkeypatch):
+    from zira_dashboard import staffing, work_centers_store
+    monkeypatch.setattr(work_centers_store, "required_skills", staffing.required_skills_for)
+    from zira_dashboard import rotation_store
+    monkeypatch.setattr(rotation_store, "completion_guard", lambda _: nullcontext(True))
 
 
 def fake_valid_protocol_query(sql, params=None):
