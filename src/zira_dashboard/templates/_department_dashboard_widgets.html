@@ -106,7 +106,7 @@
               <span class="name-secondary">{{ b.name }}</span>
             {% else %}
               <span class="name-primary">{{ b.name }}</span>
-              {% if assignments_todo_by_wc and b.name in assignments_todo_by_wc %}
+              {% if (can_operate is not defined or can_operate()) and assignments_todo_by_wc and b.name in assignments_todo_by_wc %}
                 {% set _todo = assignments_todo_by_wc[b.name] %}
                 <button type="button" class="no-assign-btn" data-wc="{{ b.name }}" data-day="{{ today }}" data-start="{{ _todo.first_iso }}" data-end="{{ _todo.last_iso }}" title="Assign person to this WC's work">↪ assign</button>
               {% else %}
@@ -155,7 +155,7 @@
             <span class="name-secondary">{{ b.name }}</span>
           {% else %}
             <span class="name-primary">{{ b.name }}</span>
-            {% if assignments_todo_by_wc and b.name in assignments_todo_by_wc %}
+            {% if (can_operate is not defined or can_operate()) and assignments_todo_by_wc and b.name in assignments_todo_by_wc %}
               {% set _todo = assignments_todo_by_wc[b.name] %}
               <button type="button" class="no-assign-btn" data-wc="{{ b.name }}" data-day="{{ today }}" data-start="{{ _todo.first_iso }}" data-end="{{ _todo.last_iso }}" title="Assign person to this WC's work">↪ assign</button>
             {% else %}

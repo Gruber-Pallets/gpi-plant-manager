@@ -21,6 +21,7 @@ from zira_probe.client import ZiraClient
 
 from .leaderboard import StationTotal
 from . import feedback_types
+from . import permissions
 from .plant_day import parse_day as _parse_plant_day
 from .stations import STATIONS
 
@@ -42,6 +43,11 @@ templates.env.globals["td"] = timeclock_i18n.td
 templates.env.globals["feedback_types_for_chooser"] = (
     feedback_types.feedback_types_for_chooser
 )
+templates.env.globals.update(
+    can_hr=permissions.can_hr,
+    can_admin=permissions.can_admin,
+    can_operate=permissions.can_operate,
+)
 
 
 # Top-nav Inbox count: templates call {{ nav_inbox_summary() }} to server-render
@@ -49,9 +55,7 @@ templates.env.globals["feedback_types_for_chooser"] = (
 # navigation). Lazily imports exception_inbox to keep deps' import graph acyclic;
 # build_summary() is cheap (in-process cache / local Postgres, no Odoo calls).
 def _nav_inbox_summary() -> dict:
-    from . import exception_inbox
-
-    return exception_inbox.build_summary()
+    return permissions.inbox_summary()
 
 
 templates.env.globals["nav_inbox_summary"] = _nav_inbox_summary

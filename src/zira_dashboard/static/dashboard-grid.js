@@ -25,7 +25,7 @@
     margin: tvMode ? tvMargin : 8,
     float: false,
     handle: '.grid-stack-item-content > h3, .grid-stack-item-content > .label',
-    staticGrid: tvMode,
+    staticGrid: tvMode || !!(window.gpiAccess && !window.gpiAccess.admin),
   });
 
   if (tvMode) {
@@ -68,6 +68,20 @@
     return; // TVs are read-only — none of the editor wiring below applies.
   }
 
+  // WC picker (operator dashboard only): navigate to the chosen WC.
+  const picker = document.getElementById('wc-picker');
+  if (picker) {
+    picker.addEventListener('change', (e) => {
+      const params = new URLSearchParams(window.location.search);
+      const day = params.get('day');
+      const next = new URL('/wc/' + e.target.value, window.location.origin);
+      if (day) next.searchParams.set('day', day);
+      window.location.href = next.pathname + next.search;
+    });
+  }
+
+  if (window.gpiAccess && !window.gpiAccess.admin) return;
+
   const indicator = document.getElementById('save-indicator');
   let saveTimer = null;
 
@@ -104,18 +118,6 @@
       body: JSON.stringify([]),
     }).then(() => location.reload());
   });
-
-  // WC picker (operator dashboard only): navigate to the chosen WC.
-  const picker = document.getElementById('wc-picker');
-  if (picker) {
-    picker.addEventListener('change', (e) => {
-      const params = new URLSearchParams(window.location.search);
-      const day = params.get('day');
-      const next = new URL('/wc/' + e.target.value, window.location.origin);
-      if (day) next.searchParams.set('day', day);
-      window.location.href = next.pathname + next.search;
-    });
-  }
 
   // Per-widget edit controls — attached to window because
   // _widget_edit_controls.html wires them via inline onclick= handlers.

@@ -152,6 +152,7 @@
   <div class="stat"><div class="lab">Days Late</div><div class="v">{{ total_late_days }}</div></div>
 </div>
 
+{% if (can_hr is not defined or can_hr()) %}
 <section id="acknowledgement-history"
          class="pc-ack-history"
          hx-get="/staffing/people/{{ name|urlencode }}/acknowledgements"
@@ -160,6 +161,7 @@
   <h3>Acknowledgement history</h3>
   <p class="hint">Loading acknowledgement history…</p>
 </section>
+{% endif %}
 
 {% if group_avgs %}
 <div class="pc-group-avgs">

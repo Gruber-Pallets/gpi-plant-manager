@@ -2,7 +2,9 @@
 <div class="sub-nav">
   <a href="/staffing"            class="{% if active == 'plant'     %}active{% endif %}">Plant Scheduler</a>
   <a href="/staffing/people" class="{% if active == 'employee' %}active{% endif %}">Employee</a>
+  {% if (can_hr is not defined or can_hr()) %}
   <a href="/staffing/hours"      class="{% if active == 'hours'     %}active{% endif %}">Hours</a>
   <a href="/staffing/time-off"   class="{% if active == 'time_off'  %}active{% endif %}">Time Off</a>
+  {% endif %}
   <a href="/staffing/skills"     class="{% if active == 'skills'    %}active{% endif %}">Skills Matrix</a>
 </div>

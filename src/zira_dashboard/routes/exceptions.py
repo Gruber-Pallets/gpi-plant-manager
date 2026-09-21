@@ -25,6 +25,7 @@ from .. import (
     missing_wc,
     plant_day,
     time_off_audit,
+    permissions,
 )
 from ..deps import templates
 
@@ -36,9 +37,11 @@ _log = logging.getLogger(__name__)
 def exceptions_page(request: Request):
     # The nav Inbox-count bootstrap is rendered by _topnav.html (via
     # nav_inbox_summary()), so this route no longer needs to pass it.
-    snapshot = exception_inbox.build_snapshot()
+    snapshot = permissions.inbox_snapshot(
+        exception_inbox.build_snapshot(), role=permissions.role_for(request)
+    )
     try:
-        correction_people = _active_correction_people()
+        correction_people = _active_correction_people() if permissions.can_hr(request) else []
     except Exception:  # noqa: BLE001 - keep the inbox readable during roster outages
         _log.exception("attendance correction people could not load for inbox")
         correction_people = []
@@ -61,12 +64,14 @@ def exceptions_page(request: Request):
 
 @router.get("/api/exceptions")
 def exceptions_json():
-    return JSONResponse(jsonable_encoder(exception_inbox.build_snapshot()))
+    return JSONResponse(jsonable_encoder(permissions.inbox_snapshot(
+        exception_inbox.build_snapshot(), role=permissions.current_role.get()
+    )))
 
 
 @router.get("/api/exceptions/summary")
 def exceptions_summary_json():
-    return JSONResponse(exception_inbox.build_summary())
+    return JSONResponse(permissions.inbox_summary())
 
 
 def _dismiss_test_work_center_sync(body: Mapping[str, Any], actor_upn=None, actor_name=None):

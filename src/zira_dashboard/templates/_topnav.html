@@ -24,6 +24,7 @@
   </a>
   <nav>
     <a href="/recycling"{% if active_nav == 'performance' %} class="active"{% endif %}>Performance</a>
+    {% if (can_operate is not defined or can_operate()) %}
     <a href="/staffing"{% if active_nav == 'staffing' %} class="active"{% endif %}>Staffing</a>
     <a href="/exceptions"
        class="inbox-nav-link
@@ -35,9 +36,14 @@
       <span class="inbox-nav-label">Inbox</span>
       <span class="inbox-nav-count"{% if nav_inbox_total <= 0 and not nav_inbox_degraded %} hidden{% endif %}>{% if nav_inbox_degraded and nav_inbox_total <= 0 %}!{% elif nav_inbox_total > 99 %}99+{% else %}{{ nav_inbox_total }}{% endif %}</span>
     </a>
+    {% endif %}
+    {% if (can_admin is not defined or can_admin()) %}
     <a href="/settings"{% if active_nav == 'settings' %} class="active"{% endif %}>Settings</a>
+    <a href="/admin/users"{% if active_nav == 'users' %} class="active"{% endif %}>Users &amp; Access</a>
+    {% endif %}
   </nav>
 </div>
+<script>window.gpiAccess = {{ {"operate": (can_operate is not defined or can_operate()), "hr": (can_hr is not defined or can_hr()), "admin": (can_admin is not defined or can_admin())} | tojson }};</script>
 {# Bootstrap blob read by footer.js (startInboxSummary): lets it adopt the
    server value instantly on load instead of the 650ms delayed fetch. #}
 <script id="gpi-inbox-summary-bootstrap" type="application/json">{{ {"total": nav_inbox_total, "urgent_total": nav_inbox_urgent, "source_errors": nav_inbox.source_errors} | tojson }}</script>

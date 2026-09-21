@@ -47,6 +47,7 @@ def range_includes_today(end_d: date, today: date) -> bool:
 
 from starlette.responses import HTMLResponse, Response
 from ._cache import TTLCache
+from .permissions import current_role
 
 # Server-side response cache. Keyed by route + query state.
 # 60s, not 15s: the staffing page-warmer re-renders today's hot pages
@@ -80,7 +81,7 @@ def get_cached_response(cache_key, *, includes_today: bool, stable: bool = False
     (`includes_today` still drives the browser Cache-Control headers).
     """
     cache = _bucket_for(includes_today=includes_today, stable=stable)
-    cached = cache.peek(cache_key)
+    cached = cache.peek((current_role.get(), cache_key))
     if cached is None:
         return None
     body, content_type = cached
@@ -125,4 +126,4 @@ def store_cached_response(cache_key, *, includes_today: bool, response: Response
     body = response.body if hasattr(response, "body") else b""
     if isinstance(body, memoryview):
         body = bytes(body)
-    cache.set(cache_key, (body, response.media_type or "text/html; charset=utf-8"))
+    cache.set((current_role.get(), cache_key), (body, response.media_type or "text/html; charset=utf-8"))

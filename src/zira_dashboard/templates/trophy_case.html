@@ -56,14 +56,14 @@
       <div class="head">
         <span class="icon">🐐</span>
         <span class="name">{{ g.group }}</span>
-        <button class="tc-edit" style="margin-left:auto"
+        {% if can_admin is not defined or can_admin() %}<button class="tc-edit" style="margin-left:auto"
                 aria-label="Edit {{ g.group }} GOAT award"
                 data-scope="award_goat" data-group="{{ g.group }}"
-                data-position="1">✏️</button>
+                data-position="1">✏️</button>{% endif %}
       </div>
       {% if g.winner %}
       <div class="meta">
-        <a class="tc-name-link" href="/staffing/people/{{ g.winner.name|urlencode }}"><strong>{{ g.winner.name }}</strong></a> — {{ '{:,.0f}'.format(g.winner.units) }} units
+        {% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link" href="/staffing/people/{{ g.winner.name|urlencode }}"><strong>{{ g.winner.name }}</strong></a>{% else %}<span class="tc-name-link"><strong>{{ g.winner.name }}</strong></span>{% endif %} — {{ '{:,.0f}'.format(g.winner.units) }} units
         on {{ g.winner.day }} ({{ '{:,.1f}'.format(g.winner.pph) }} pph)
       </div>
       {% else %}
@@ -93,12 +93,12 @@
     {% for s in blk.top_days %}
     <div class="tc-row">
       <span class="icon tc-trophy-{% if s.position == 1 %}gold{% elif s.position == 2 %}silver{% else %}bronze{% endif %}">🏆</span>
-      <a class="tc-name-link name" href="/staffing/people/{{ s.name|urlencode }}">{{ s.name }}</a>
+      {% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link name" href="/staffing/people/{{ s.name|urlencode }}">{{ s.name }}</a>{% else %}<span class="tc-name-link name">{{ s.name }}</span>{% endif %}
       <span class="meta">{{ '{:,.0f}'.format(s.units) }} units · {{ s.day }}</span>
-      <button class="tc-edit"
+      {% if can_admin is not defined or can_admin() %}<button class="tc-edit"
               aria-label="Edit top-day award for {{ s.name }}"
               data-scope="trophy_top_day" data-group="{{ blk.group }}"
-              data-year="{{ year }}" data-position="{{ s.position }}">✏️</button>
+              data-year="{{ year }}" data-position="{{ s.position }}">✏️</button>{% endif %}
     </div>
     {% endfor %}
     {% else %}
@@ -109,11 +109,11 @@
     <div class="tc-row" style="margin-top:0.4rem">
       <span class="icon">🏆</span>
       <span class="name">Best {{ blk.group }} {{ year }}</span>
-      <span class="meta"><a class="tc-name-link" href="/staffing/people/{{ blk.best_avg.name|urlencode }}">{{ blk.best_avg.name }}</a> — {{ '{:,.1f}'.format(blk.best_avg.pph) }} pph ({{ blk.best_avg.days }} days)</span>
-      <button class="tc-edit"
+      <span class="meta">{% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link" href="/staffing/people/{{ blk.best_avg.name|urlencode }}">{{ blk.best_avg.name }}</a>{% else %}<span class="tc-name-link">{{ blk.best_avg.name }}</span>{% endif %} — {{ '{:,.1f}'.format(blk.best_avg.pph) }} pph ({{ blk.best_avg.days }} days)</span>
+      {% if can_admin is not defined or can_admin() %}<button class="tc-edit"
               aria-label="Edit best {{ blk.group }} award"
               data-scope="trophy_best_avg_group" data-group="{{ blk.group }}"
-              data-year="{{ year }}" data-position="1">✏️</button>
+              data-year="{{ year }}" data-position="1">✏️</button>{% endif %}
     </div>
     {% endif %}
 
@@ -123,11 +123,11 @@
     <div class="tc-row">
       <span class="icon">🏆</span>
       <span class="name">{{ w.wc }}</span>
-      <span class="meta"><a class="tc-name-link" href="/staffing/people/{{ w.winner.name|urlencode }}">{{ w.winner.name }}</a> — {{ '{:,.1f}'.format(w.winner.pph) }} pph ({{ w.winner.days }} days)</span>
-      <button class="tc-edit"
+      <span class="meta">{% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link" href="/staffing/people/{{ w.winner.name|urlencode }}">{{ w.winner.name }}</a>{% else %}<span class="tc-name-link">{{ w.winner.name }}</span>{% endif %} — {{ '{:,.1f}'.format(w.winner.pph) }} pph ({{ w.winner.days }} days)</span>
+      {% if can_admin is not defined or can_admin() %}<button class="tc-edit"
               aria-label="Edit best {{ w.wc }} award"
               data-scope="trophy_best_avg_wc" data-wc="{{ w.wc }}"
-              data-year="{{ year }}" data-position="1">✏️</button>
+              data-year="{{ year }}" data-position="1">✏️</button>{% endif %}
     </div>
     {% endfor %}
     {% endif %}
@@ -155,13 +155,13 @@
     {% for s in blk.badges %}
     <div class="tc-row">
       <span class="icon">{% if s.position == 1 %}🥇{% elif s.position == 2 %}🥈{% else %}🥉{% endif %}</span>
-      <a class="tc-name-link name" href="/staffing/people/{{ s.name|urlencode }}">{{ s.name }}</a>
+      {% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link name" href="/staffing/people/{{ s.name|urlencode }}">{{ s.name }}</a>{% else %}<span class="tc-name-link name">{{ s.name }}</span>{% endif %}
       <span class="meta">{{ '{:,.0f}'.format(s.units) }} units · {{ s.day }}</span>
-      <button class="tc-edit"
+      {% if can_admin is not defined or can_admin() %}<button class="tc-edit"
               aria-label="Edit monthly ribbon for {{ s.name }}"
               data-scope="badge" data-group="{{ blk.group }}"
               data-year="{{ year }}" data-month="{{ month }}"
-              data-position="{{ s.position }}">✏️</button>
+              data-position="{{ s.position }}">✏️</button>{% endif %}
     </div>
     {% endfor %}
     {% else %}
@@ -182,13 +182,13 @@
       <div class="head">
         <span class="icon">🐐</span>
         <span class="name">Forklift GOAT</span>
-        <button class="tc-edit" style="margin-left:auto"
+        {% if can_admin is not defined or can_admin() %}<button class="tc-edit" style="margin-left:auto"
                 aria-label="Edit Forklift GOAT award"
-                data-scope="forklift_goat" data-position="1">✏️</button>
+                data-scope="forklift_goat" data-position="1">✏️</button>{% endif %}
       </div>
       {% if forklift.goat %}
       <div class="meta">
-        <a class="tc-name-link" href="/staffing/people/{{ forklift.goat.name|urlencode }}"><strong>{{ forklift.goat.name }}</strong></a>
+        {% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link" href="/staffing/people/{{ forklift.goat.name|urlencode }}"><strong>{{ forklift.goat.name }}</strong></a>{% else %}<span class="tc-name-link"><strong>{{ forklift.goat.name }}</strong></span>{% endif %}
         — score {{ '%.0f'|format(forklift.goat.score) }}{% if forklift.goat.day %} on {{ forklift.goat.day }}{% endif %}
       </div>
       {% if forklift.goat_components %}
@@ -213,12 +213,12 @@
       {% for s in forklift.top_days %}
       <div class="tc-row">
         <span class="icon tc-trophy-{% if s.position == 1 %}gold{% elif s.position == 2 %}silver{% else %}bronze{% endif %}">🏆</span>
-        <a class="tc-name-link name" href="/staffing/people/{{ s.name|urlencode }}">{{ s.name }}</a>
+        {% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link name" href="/staffing/people/{{ s.name|urlencode }}">{{ s.name }}</a>{% else %}<span class="tc-name-link name">{{ s.name }}</span>{% endif %}
         <span class="meta">score {{ '%.0f'|format(s.score) }} · {{ s.day }}</span>
-        <button class="tc-edit"
+        {% if can_admin is not defined or can_admin() %}<button class="tc-edit"
                 aria-label="Edit forklift top-day award for {{ s.name }}"
                 data-scope="forklift_top_day" data-year="{{ year }}"
-                data-position="{{ s.position }}">✏️</button>
+                data-position="{{ s.position }}">✏️</button>{% endif %}
       </div>
       {% endfor %}
       {% else %}
@@ -229,11 +229,11 @@
       <div class="tc-row" style="margin-top:0.4rem">
         <span class="icon">⏱️</span>
         <span class="name">Best on-time</span>
-        <span class="meta"><a class="tc-name-link" href="/staffing/people/{{ forklift.best_ontime.name|urlencode }}">{{ forklift.best_ontime.name }}</a> — {{ '%.1f'|format(forklift.best_ontime.ontime_pct) }}%</span>
-        <button class="tc-edit"
+        <span class="meta">{% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link" href="/staffing/people/{{ forklift.best_ontime.name|urlencode }}">{{ forklift.best_ontime.name }}</a>{% else %}<span class="tc-name-link">{{ forklift.best_ontime.name }}</span>{% endif %} — {{ '%.1f'|format(forklift.best_ontime.ontime_pct) }}%</span>
+        {% if can_admin is not defined or can_admin() %}<button class="tc-edit"
                 aria-label="Edit forklift best on-time award"
                 data-scope="forklift_best_ontime" data-year="{{ year }}"
-                data-position="1">✏️</button>
+                data-position="1">✏️</button>{% endif %}
       </div>
       {% endif %}
 
@@ -241,11 +241,11 @@
       <div class="tc-row">
         <span class="icon">⚡</span>
         <span class="name">Fastest</span>
-        <span class="meta"><a class="tc-name-link" href="/staffing/people/{{ forklift.fastest.name|urlencode }}">{{ forklift.fastest.name }}</a> — {{ '%.1f'|format((forklift.fastest.avg_ms or 0) / 1000.0) }}s</span>
-        <button class="tc-edit"
+        <span class="meta">{% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link" href="/staffing/people/{{ forklift.fastest.name|urlencode }}">{{ forklift.fastest.name }}</a>{% else %}<span class="tc-name-link">{{ forklift.fastest.name }}</span>{% endif %} — {{ '%.1f'|format((forklift.fastest.avg_ms or 0) / 1000.0) }}s</span>
+        {% if can_admin is not defined or can_admin() %}<button class="tc-edit"
                 aria-label="Edit forklift fastest award"
                 data-scope="forklift_fastest" data-year="{{ year }}"
-                data-position="1">✏️</button>
+                data-position="1">✏️</button>{% endif %}
       </div>
       {% endif %}
     </div>
@@ -257,12 +257,12 @@
       {% for s in forklift.badges %}
       <div class="tc-row">
         <span class="icon">{% if s.position == 1 %}🥇{% elif s.position == 2 %}🥈{% else %}🥉{% endif %}</span>
-        <a class="tc-name-link name" href="/staffing/people/{{ s.name|urlencode }}">{{ s.name }}</a>
+        {% if tv_mode or can_operate is not defined or can_operate() %}<a class="tc-name-link name" href="/staffing/people/{{ s.name|urlencode }}">{{ s.name }}</a>{% else %}<span class="tc-name-link name">{{ s.name }}</span>{% endif %}
         <span class="meta">score {{ '%.0f'|format(s.score) }} · {{ s.day }}</span>
-        <button class="tc-edit"
+        {% if can_admin is not defined or can_admin() %}<button class="tc-edit"
                 aria-label="Edit forklift monthly ribbon for {{ s.name }}"
                 data-scope="forklift_badge" data-year="{{ year }}"
-                data-month="{{ month }}" data-position="{{ s.position }}">✏️</button>
+                data-month="{{ month }}" data-position="{{ s.position }}">✏️</button>{% endif %}
       </div>
       {% endfor %}
       {% else %}
@@ -273,6 +273,7 @@
 </section>
 {% endif %}
 
+{% if can_admin is not defined or can_admin() %}
 <!-- Override modal -->
 <div class="tc-modal-backdrop" id="tc-modal-bd">
   <div class="tc-modal" role="dialog" aria-modal="true" aria-labelledby="tc-modal-title">
@@ -296,8 +297,10 @@
   </div>
 </div>
 
+{% endif %}
 <script>
 (function () {
+  {% if can_admin is not defined or can_admin() %}
   var bd = document.getElementById('tc-modal-bd');
   var current = null;
   var opener = null;
@@ -376,6 +379,7 @@
     });
   });
 
+  {% endif %}
   // Year + month pickers reload with new query string.
   var yp = document.getElementById('year-picker');
   if (yp) yp.addEventListener('change', function () {

@@ -12,6 +12,10 @@ def _enforce_auth_for_this_module(monkeypatch):
     doesn't have to mint sessions. This module *is* the auth-gate test,
     so unset it for every test here unless a specific test re-sets it."""
     monkeypatch.delenv("AUTH_DISABLED", raising=False)
+    from zira_dashboard import user_access
+    monkeypatch.setattr(user_access, "lookup_active", lambda email: {
+        "email": email, "role": "admin", "active": True,
+    } if email == "dale@gruberpallets.com" else None)
 
 
 @pytest.fixture

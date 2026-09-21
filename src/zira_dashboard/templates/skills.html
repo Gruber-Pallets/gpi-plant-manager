@@ -75,7 +75,7 @@
             <th data-skill="{{ s }}" data-type="{{ type_by_skill.get(s, '') }}" class="skill-col{% if s in hidden_skills %} col-hidden{% endif %}" aria-sort="none">
               <span class="matrix-header-controls">
                 <button type="button" class="matrix-sort-trigger" aria-label="Sort by {{ s }}">{{ s }}</button>
-                {% if automation_groups is defined and s in automation_groups %}
+                {% if (can_admin is not defined or can_admin()) and automation_groups is defined and s in automation_groups %}
                   <button type="button" class="automation-settings-trigger" data-automation-skill="{{ s }}"
                           aria-label="Configure automatic {{ s }} skills" aria-haspopup="dialog"
                           aria-controls="automation-modal-backdrop">⚙</button>
@@ -177,6 +177,7 @@
    gear beside the Repair or Dismantle header. JS fills the threshold inputs and
    the live L30 unit-target preview from window.AUTOMATION_GROUPS. Kept outside
    #skills-form so its inputs never join the roster autosave. #}
+{% if can_admin is not defined or can_admin() %}
 <div class="automation-modal-backdrop" id="automation-modal-backdrop" hidden>
   <div class="automation-modal" role="dialog" aria-modal="true" aria-labelledby="automation-modal-title">
     <header class="automation-modal-head">
@@ -196,6 +197,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -213,7 +215,7 @@
   window.ROTATION_PREFERENCES = {{ rotation_preferences | tojson if rotation_preferences is defined else '{}' }};
   window.ROTATION_PREFERENCE_TARGETS_BY_PERSON = {{ rotation_preference_targets_by_person | tojson if rotation_preference_targets_by_person is defined else '{}' }};
   // Automatic Repair/Dismantle skill settings (thresholds + last run + work-center goals).
-  window.AUTOMATION_GROUPS = {{ automation_groups | tojson if automation_groups is defined else '{}' }};
+  window.AUTOMATION_GROUPS = {{ automation_groups | tojson if (can_admin is not defined or can_admin()) and automation_groups is defined else '{}' }};
 </script>
 <script src="/static/skills-page.js?v={{ static_v('skills-page.js') }}"></script>
 {% endblock %}

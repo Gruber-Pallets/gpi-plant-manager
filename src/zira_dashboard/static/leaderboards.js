@@ -106,6 +106,7 @@ document.addEventListener('keydown', e => {
   }
 
   function bindDrag(sec) {
+    if (window.gpiAccess && !window.gpiAccess.operate) return;
     sec.addEventListener('dragstart', () => {
       dragged = sec;
       sec.classList.add('dragging');

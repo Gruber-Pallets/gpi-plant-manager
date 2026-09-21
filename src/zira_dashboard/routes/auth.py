@@ -111,6 +111,16 @@ async def auth_callback(request: Request):
             status_code=403,
         )
 
+    import asyncio
+    from .. import user_access
+    try:
+        access = await asyncio.to_thread(user_access.lookup_active, upn)
+    except Exception:
+        _log.error("Personal access lookup unavailable during sign-in")
+        return auth.access_denied_response(unavailable=True)
+    if access is None:
+        return auth.access_denied_response()
+
     # Recover the original ?next= from the signed cookie.
     nxt = "/"
     raw = request.cookies.get(_NEXT_COOKIE)
@@ -121,6 +131,9 @@ async def auth_callback(request: Request):
             nxt = "/"
 
     session_jwt = auth.mint_session(sub=sub, upn=upn, name=name)
+    from .. import permissions
+    if not permissions.allowed(access["role"], "GET", nxt.split("?", 1)[0]):
+        nxt = "/recycling"
     response = RedirectResponse(url=nxt, status_code=302)
     response.set_cookie(
         auth.SESSION_COOKIE_NAME, session_jwt,

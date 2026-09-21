@@ -21,15 +21,15 @@
 
 {% macro lb_section_header(s, is_group, inactive) %}
           <div class="lb-section-header">
-            <span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>
+            {% if can_operate is not defined or can_operate() %}<span class="lb-drag-handle" title="Drag to reorder">&#9776;</span>{% endif %}
             <h3>{{ s.loc_name }}{% if is_group %} <span class="lb-section-tag">group</span>{% endif %}</h3>
-            {% if not inactive %}
+            {% if (can_admin is not defined or can_admin()) and not inactive %}
               <button type="button" class="lb-hide-btn" title="Mark inactive" aria-busy="false"
                       aria-label="Mark {{ s.loc_name }} {{ 'group' if is_group else 'work center' }} leaderboard inactive">&#10005;</button>
-            {% elif s.is_manually_inactive %}
+            {% elif (can_admin is not defined or can_admin()) and s.is_manually_inactive %}
               <button type="button" class="lb-show-btn" title="Mark active" aria-busy="false"
                       aria-label="Mark {{ s.loc_name }} {{ 'group' if is_group else 'work center' }} leaderboard active">&#8634;</button>
-            {% else %}
+            {% elif inactive and not s.is_manually_inactive %}
               <span class="lb-auto-empty" title="No data in this range — auto-hidden">auto-empty</span>
             {% endif %}
           </div>
@@ -37,7 +37,7 @@
 
 {% macro lb_days_section(s, kind, inactive=false) %}
         {% set is_group = kind == 'group' %}
-        <div class="lb-section{% if inactive %} lb-section-inactive{% endif %}" data-kind="{{ kind }}" data-wc="{{ s.loc_name }}" draggable="true">
+        <div class="lb-section{% if inactive %} lb-section-inactive{% endif %}" data-kind="{{ kind }}" data-wc="{{ s.loc_name }}" draggable="{{ 'true' if (can_operate is not defined or can_operate()) else 'false' }}">
           {{ lb_section_header(s, is_group, inactive) }}
           {% if s.rows %}
             <table class="lb-table">
@@ -79,7 +79,7 @@
 
 {% macro lb_avg_section(s, kind, inactive=false) %}
         {% set is_group = kind == 'group-avg' %}
-        <div class="lb-section{% if inactive %} lb-section-inactive{% endif %}" data-kind="{{ kind }}" data-wc="{{ s.loc_name }}" draggable="true">
+        <div class="lb-section{% if inactive %} lb-section-inactive{% endif %}" data-kind="{{ kind }}" data-wc="{{ s.loc_name }}" draggable="{{ 'true' if (can_operate is not defined or can_operate()) else 'false' }}">
           {{ lb_section_header(s, is_group, inactive) }}
           {% if s.rows %}
             {% set top5 = s.rows[:5] %}

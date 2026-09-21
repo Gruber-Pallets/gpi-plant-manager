@@ -86,10 +86,12 @@
         {% endif %}
       </span>
     </div>
+    {% if can_admin is not defined or can_admin() %}
     <div class="operator-strip-right">
       <span class="save-indicator" id="save-indicator">Drag / resize — layout auto-saves</span>
       <button type="button" id="reset-layout">Reset Layout</button>
     </div>
+    {% endif %}
   </div>
 {% endif %}
 
@@ -295,7 +297,7 @@
           {% for r in ribbons.entries %}
             <li>
               <span class="medal">{% if r.position == 1 %}🥇{% elif r.position == 2 %}🥈{% else %}🥉{% endif %}</span>
-              <span class="name"><a href="/staffing/people/{{ r.name|urlencode }}">{{ r.name }}</a></span>
+              <span class="name">{% if tv_mode or can_operate is not defined or can_operate() %}<a href="/staffing/people/{{ r.name|urlencode }}">{{ r.name }}</a>{% else %}<span>{{ r.name }}</span>{% endif %}</span>
               <span class="date">{{ r.day.strftime('%b') }} {{ r.day.day }}</span>
               <span class="units">{{ r.units|round(0)|int }}</span>
             </li>

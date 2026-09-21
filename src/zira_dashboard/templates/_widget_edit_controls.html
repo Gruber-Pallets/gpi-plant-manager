@@ -5,6 +5,7 @@
                   align?, show_target?, show_legend?}
 #}
 {%- macro edit_controls(id, default_title, kind='kpi') -%}
+  {% if (can_admin is not defined or can_admin()) %}
   {%- set c = customs.get(id, {}) -%}
   {%- set cur_title = c.get('title', default_title) -%}
   {%- set cur_color = c.get('color', '') -%}
@@ -68,4 +69,5 @@
       <button type="button" class="primary" onclick="saveWidget(this, '{{ id }}')">Save</button>
     </div>
   </div>
+  {% endif %}
 {%- endmacro %}

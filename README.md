@@ -53,6 +53,34 @@ zira-dashboard                      # console script
 
 Set `AUTH_DISABLED=1` to bypass login during local development.
 
+### Users and access
+
+Personal sign-in requires an active invitation as well as a
+`@gruberpallets.com` Microsoft account. On the first database migration,
+`dale@gruberpallets.com` becomes Owner/Admin. Other domain accounts receive
+no automatic access. Existing TV displays keep their current access.
+
+Open **Users & Access** in the main menu to grant access to an exact email,
+choose its role, or revoke access. Copy the sign-in link shown there and
+share it with the person; granting access does not send an email.
+
+| Role | Access |
+| --- | --- |
+| Owner/Admin | All pages and actions, including users and system settings |
+| HR | Operations and sensitive employee information, including HR edits |
+| Manager | Operations and scheduling edits, without payroll, leave details, or employee notice history |
+| Visitor | Read-only operational dashboards |
+
+Role changes and revocation take effect on the next request. The last active
+admin cannot be removed or demoted. Restarts never restore revoked access.
+Keep `AUTH_DISABLED` unset in production: it is a development bypass of all
+personal sign-in and permissions. `SUPER_ADMIN_UPNS` no longer grants access
+or controls roles for authenticated users; the database role is authoritative.
+
+The bearer-authenticated object API retains its separate credentials. Only
+admins can manage those credentials. New personal endpoints must be listed
+in `permissions.py`; non-admin access is denied until explicitly classified.
+
 ## Tests
 
 ```bash

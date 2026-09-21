@@ -62,10 +62,13 @@ def is_super_admin_upn(upn: str | None) -> bool:
 
 def request_is_super_admin(request) -> bool:
     """True for a signed-in configured super admin."""
+    role = getattr(request.state, "user_role", None)
+    if role is not None:
+        return role == "admin"
     return is_super_admin_upn(getattr(request.state, "user_upn", None))
 
 
-def mint_session(*, sub: str, upn: str, name: str) -> str:
+def mint_session(*, sub: str, upn: str, name: str, sid: str | None = None) -> str:
     """Sign a 7-day JWT with the user's Microsoft OID + UPN + display name."""
     now = int(time.time())
     payload = {
@@ -75,6 +78,8 @@ def mint_session(*, sub: str, upn: str, name: str) -> str:
         "iat": now,
         "exp": now + int(SESSION_TTL.total_seconds()),
     }
+    import secrets
+    payload["sid"] = sid or secrets.token_urlsafe(32)
     return jwt.encode({"alg": _JWT_ALG}, payload, _jwt_key(_session_secret()))
 
 
@@ -171,6 +176,26 @@ def reset_oauth_client_for_tests() -> None:
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import RedirectResponse
+
+
+def access_denied_response(*, unavailable: bool = False):
+    """Safe standalone response, also usable when application data is down."""
+    from starlette.responses import HTMLResponse
+    title = "Access temporarily unavailable" if unavailable else "Access not granted"
+    message = (
+        "We could not check your access. Please try again shortly."
+        if unavailable else
+        "Your company account needs an active invitation and permission for this page. "
+        "Please contact an app administrator."
+    )
+    return HTMLResponse(
+        f'<!doctype html><html lang="en"><meta name="viewport" content="width=device-width">'
+        f'<title>{title}</title><main><h1>{title}</h1><p>{message}</p>'
+        '<a href="/recycling">Back to dashboards</a> · '
+        '<a href="/auth/login">Sign in with another account</a></main></html>',
+        status_code=503 if unavailable else 403,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 # Paths (or prefixes) that bypass auth entirely. Keep this list tight —
 # every entry is a potential bypass for an attacker probing for an
@@ -302,12 +327,38 @@ class RequireAuthMiddleware(BaseHTTPMiddleware):
         cookie = request.cookies.get(SESSION_COOKIE_NAME)
         payload = verify_session(cookie)
         if payload is not None:
+            import asyncio
+            from . import permissions, user_access
+
+            upn = payload.get("upn")
+            if not isinstance(upn, str) or not domain_ok(upn):
+                return access_denied_response()
+            try:
+                access = await asyncio.to_thread(user_access.lookup_active, upn)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).error("Personal access lookup unavailable")
+                return access_denied_response(unavailable=True)
+            if access is None or not permissions.allowed(access["role"], request.method, path):
+                return access_denied_response()
             request.state.user_upn = payload.get("upn")
             request.state.user_name = payload.get("name")
-            response = await call_next(request)
+            request.state.user_role = access["role"]
+            role_token = permissions.current_role.set(access["role"])
+            try:
+                response = await call_next(request)
+            finally:
+                permissions.current_role.reset(role_token)
+            # Every navigation must recheck durable access, including after a
+            # role downgrade. Internal render caches are separately role keyed.
+            response.headers["Cache-Control"] = "private, no-store"
             # Sliding-window refresh: if cookie is close to expiry, re-issue.
             if needs_refresh(payload):
-                fresh = mint_session(sub=payload["sub"], upn=payload["upn"], name=payload["name"])
+                import hashlib
+                fresh = mint_session(
+                    sub=payload["sub"], upn=payload["upn"], name=payload["name"],
+                    sid=payload.get("sid") or hashlib.sha256(cookie.encode()).hexdigest(),
+                )
                 response.set_cookie(
                     SESSION_COOKIE_NAME, fresh,
                     max_age=int(SESSION_TTL.total_seconds()),

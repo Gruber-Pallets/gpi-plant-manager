@@ -244,6 +244,7 @@
     </div>
   </div>
 
+  {% if (can_hr is not defined or can_hr()) %}
   <div class="archive" data-archive>
     <button type="button" class="archive-toggle" data-archive-toggle aria-expanded="false">
       <span class="archive-caret" aria-hidden="true">▸</span>
@@ -355,6 +356,7 @@
       </div>
     </form>
   </dialog>
+  {% endif %}
 {% endblock %}
 {% block scripts %}
 <script src="/static/exceptions.js?v={{ static_v('exceptions.js') }}"></script>

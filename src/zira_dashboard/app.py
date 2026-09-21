@@ -28,6 +28,7 @@ from .routes import (
     absence_pto_admin,
     api_layout,
     auth as auth_routes,
+    user_access as user_access_routes,
     auto_salaried_admin,
     changelog,
     dashboard,
@@ -763,6 +764,7 @@ if auth_disabled():
 
 # Mount each feature router. URL paths are owned by the routers themselves.
 app.include_router(auth_routes.router)
+app.include_router(user_access_routes.router)
 app.include_router(absence_pto_admin.router)
 app.include_router(dashboard.router)
 app.include_router(exceptions.router)

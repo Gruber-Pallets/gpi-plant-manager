@@ -54,10 +54,12 @@
       <button type="submit" class="rc-chip rc-custom-apply">Apply</button>
     </div>
   </details>
+{% if can_admin is not defined or can_admin() %}
   <div class="edit-bar">
     <span class="save-indicator" id="save-indicator">Drag / resize — layout auto-saves</span>
     <button type="button" id="reset-layout">Reset Layout</button>
   </div>
+{% endif %}
 </form>
 {# TV mode seats the banner in the header center (tv_header {% call %}
    above); screen mode keeps it here below the edit bar. #}
@@ -163,7 +165,7 @@
 <script src="/static/dashboard-grid.js?v={{ static_v('dashboard-grid.js') }}"></script>
 <script src="/static/worker-stint-popover.js?v={{ static_v('worker-stint-popover.js') }}"></script>
 
-{% if not tv_mode %}
+{% if not tv_mode and (can_operate is not defined or can_operate()) %}
 {# Inline-assign popover for "(no assignment)" bars. TV mode hides the
    .no-assign-btn triggers (tv-mode.css), so don't ship the script or the
    roster JSON to the TVs. #}

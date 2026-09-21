@@ -65,6 +65,10 @@ def _authenticated_client(upn: str, name: str = "User"):
 
 
 def _stub_settings_page_context(monkeypatch):
+    from zira_dashboard import user_access
+    monkeypatch.setattr(user_access, "lookup_active", lambda email: {
+        "email": email, "active": True, "role": "admin",
+    } if email == "dale@gruberpallets.com" else None)
     from zira_dashboard import (
         auto_lunch_settings,
         db,

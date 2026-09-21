@@ -2896,3 +2896,39 @@ CREATE INDEX IF NOT EXISTS absence_pto_requests_resolution_due_idx
 """
 
 SCHEMA_DDL += TIME_OFF_EMAIL_DDL
+
+# The durable migration marker prevents bootstrap from restoring a revoked owner.
+USER_ACCESS_DDL = """
+CREATE TABLE IF NOT EXISTS app_users (
+    email TEXT PRIMARY KEY,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'hr', 'manager', 'visitor')),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS app_user_access_audit (
+    id BIGSERIAL PRIMARY KEY,
+    email TEXT NOT NULL,
+    previous_role TEXT,
+    previous_active BOOLEAN,
+    role TEXT NOT NULL,
+    active BOOLEAN NOT NULL,
+    actor TEXT NOT NULL,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS app_access_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+WITH first_seed AS (
+    INSERT INTO app_access_migrations (name) VALUES ('initial-owner-v1')
+    ON CONFLICT DO NOTHING RETURNING name
+), seeded AS (
+    INSERT INTO app_users (email, role, active, updated_by)
+    SELECT 'dale@gruberpallets.com', 'admin', TRUE, 'initial-owner-seed'
+    FROM first_seed ON CONFLICT DO NOTHING RETURNING email, role, active
+)
+INSERT INTO app_user_access_audit (email, role, active, actor)
+SELECT email, role, active, 'initial-owner-seed' FROM seeded;
+"""
+SCHEMA_DDL += USER_ACCESS_DDL

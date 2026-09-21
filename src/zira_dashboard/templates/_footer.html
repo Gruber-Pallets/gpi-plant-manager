@@ -1,3 +1,3 @@
-{% include '_feedback.html' %}
+{% if (can_operate is not defined or can_operate()) %}{% include '_feedback.html' %}{% endif %}
 <link rel="stylesheet" href="/static/footer.css?v={{ static_v('footer.css') }}">
 <script src="/static/footer.js?v={{ static_v('footer.js') }}"></script>

@@ -2239,6 +2239,13 @@ def staffing_page(
         log.exception("Could not load schedule revision for %s", d)
         display_schedule_revision = None
 
+    from .. import permissions
+    bay_model = {
+        **bay_model,
+        "time_off_entries": permissions.staffing_entries(
+            bay_model.get("time_off_entries", []), role=permissions.role_for(request)
+        ),
+    }
     with _Phase(phases, "render"):
         response = templates.TemplateResponse(
             request,

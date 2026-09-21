@@ -252,6 +252,9 @@
   }
 
   function ensureInboxLink() {
+    if (window.gpiAccess && !window.gpiAccess.operate) return;
+    var allowedExisting = document.querySelector('header nav a[href="/exceptions"]');
+    if (allowedExisting) return allowedExisting;
     var anchor = settingsLink();
     if (!anchor || !anchor.parentNode) return;
     var existing = anchor.parentNode.querySelector('a[href="/exceptions"]');
