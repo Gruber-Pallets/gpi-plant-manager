@@ -267,3 +267,50 @@ def test_admin_form_survives_legacy_session_refresh(monkeypatch):
     }, follow_redirects=False)
     assert response.status_code == 303
     assert calls == [('new@gruberpallets.com', 'manager', True, 'dale@gruberpallets.com')]
+
+
+@pytest.mark.parametrize('method,path', [
+    ('GET', '/timeclock'), ('GET', '/timeclock/start/1'),
+    ('GET', '/timeclock/dashboard/token'), ('POST', '/timeclock/clock-in/token'),
+    ('POST', '/timeclock/clock-out/token'), ('POST', '/timeclock/transfer/token'),
+    ('GET', '/timeclock/time-off/token'), ('POST', '/timeclock/feedback'),
+    ('GET', '/api/feedback/submitters'), ('GET', '/api/feedback/mine'),
+])
+def test_timeclock_role_can_use_kiosk(method, path):
+    assert permissions.allowed('timeclock', method, path)
+
+
+def test_timeclock_role_cannot_use_any_desktop_route():
+    for entries in permissions.ROUTES.values():
+        for method, path in entries:
+            if path.startswith('/timeclock') or path in {'/api/feedback/submitters', '/api/feedback/mine'}:
+                continue
+            assert not permissions.allowed('timeclock', method, path), (method, path)
+    assert not permissions.allowed('timeclock', 'GET', '/timeclock/future-sensitive-page')
+    assert not permissions.allowed('timeclock', 'DELETE', '/timeclock')
+
+
+def test_timeclock_invitation_is_rechecked(personal_client):
+    client, access = personal_client
+    client.app.add_api_route('/timeclock', lambda: PlainTextResponse('kiosk'))
+    access['role'] = 'timeclock'
+    assert client.get('/timeclock').status_code == 200
+    assert client.get('/settings').status_code == 403
+    assert client.get('/staffing').status_code == 403
+    access['active'] = False
+    assert client.get('/timeclock').status_code == 403
+
+
+def test_timeclock_login_lands_on_kiosk(monkeypatch):
+    from types import SimpleNamespace
+    from zira_dashboard import user_access
+    from zira_dashboard.routes import auth as routes
+    async def exchange(request):
+        return {'userinfo': {'sub': '1', 'preferred_username': 'info@gruberpallets.com'}}
+    monkeypatch.setattr(auth, 'oauth_client', lambda: SimpleNamespace(azure=SimpleNamespace(authorize_access_token=exchange)))
+    monkeypatch.setattr(user_access, 'lookup_active', lambda email: {'role': 'timeclock'})
+    app = FastAPI()
+    app.include_router(routes.router)
+    response = TestClient(app).get('/auth/callback', follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers['location'] == '/timeclock'

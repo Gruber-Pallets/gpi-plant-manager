@@ -2932,3 +2932,11 @@ INSERT INTO app_user_access_audit (email, role, active, actor)
 SELECT email, role, active, 'initial-owner-seed' FROM seeded;
 """
 SCHEMA_DDL += USER_ACCESS_DDL
+
+# Upgrade existing installations as well as fresh databases.
+TIMECLOCK_ACCESS_DDL = """
+ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_role_check;
+ALTER TABLE app_users ADD CONSTRAINT app_users_role_check
+    CHECK (role IN ('admin', 'hr', 'manager', 'visitor', 'timeclock'));
+"""
+SCHEMA_DDL += TIMECLOCK_ACCESS_DDL

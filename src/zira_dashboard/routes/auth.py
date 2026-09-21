@@ -133,7 +133,7 @@ async def auth_callback(request: Request):
     session_jwt = auth.mint_session(sub=sub, upn=upn, name=name)
     from .. import permissions
     if not permissions.allowed(access["role"], "GET", nxt.split("?", 1)[0]):
-        nxt = "/recycling"
+        nxt = "/timeclock" if access["role"] == "timeclock" else "/recycling"
     response = RedirectResponse(url=nxt, status_code=302)
     response.set_cookie(
         auth.SESSION_COOKIE_NAME, session_jwt,

@@ -13,7 +13,7 @@ from .. import auth, user_access
 from ..deps import templates
 
 router = APIRouter()
-ROLE_LABELS = {'admin': 'Owner/Admin', 'hr': 'HR', 'manager': 'Manager', 'visitor': 'Visitor'}
+ROLE_LABELS = {'admin': 'Owner/Admin', 'hr': 'HR', 'manager': 'Manager', 'visitor': 'Visitor', 'timeclock': 'Timeclock only'}
 
 
 def _admin(request: Request) -> str:

@@ -5,7 +5,7 @@ import re
 
 from . import db
 
-ROLES = ('admin', 'hr', 'manager', 'visitor')
+ROLES = ('admin', 'hr', 'manager', 'visitor', 'timeclock')
 _ACCESS_LOCK = 741903221
 
 

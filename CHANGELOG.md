@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-21
 
+### Keep the shared timeclock open
+
+- **Shared accounts can now use Timeclock only.** Workers can clock in and out, request time off, and send feedback. This does not give the shared account access to HR pages or app settings.
+
 ### Choose who can use the app
 
 #### Features

@@ -218,6 +218,49 @@ ROUTES = {
         ('POST', '/admin/users'),
     ),
 }
+# Independent kiosk grant: no desktop role inheritance and no prefix bypass.
+TIMECLOCK_ROUTES = (
+    ('GET', '/timeclock'),
+    ('GET', '/timeclock/start/{person_id}'),
+    ('GET', '/timeclock/dashboard/{token}'),
+    ('GET', '/timeclock/notifications/{token}'),
+    ('POST', '/timeclock/notifications/ack/{token}'),
+    ('GET', '/timeclock/celebration/{token}'),
+    ('POST', '/timeclock/celebration/ack/{token}'),
+    ('GET', '/timeclock/pick-wc/{token}'),
+    ('POST', '/timeclock/clock-in/{token}'),
+    ('POST', '/timeclock/clock-in/confirm/{token}'),
+    ('POST', '/timeclock/clock-out/{token}'),
+    ('POST', '/timeclock/transfer/{token}'),
+    ('GET', '/timeclock/time-off/past-absence/{token}'),
+    ('POST', '/timeclock/time-off/past-absence/{token}/{day}'),
+    ('GET', '/timeclock/time-off/past-absence/{token}/requests/{request_id}'),
+    ('GET', '/timeclock/saturday/{token}'),
+    ('GET', '/timeclock/saturday/partial/{token}'),
+    ('POST', '/timeclock/saturday/partial/{token}'),
+    ('POST', '/timeclock/saturday/confirm/{token}'),
+    ('POST', '/timeclock/saturday/commit/{token}'),
+    ('POST', '/timeclock/saturday/decline/{token}'),
+    ('POST', '/timeclock/saturday/later/{token}'),
+    ('POST', '/timeclock/saturday/cancel/{token}'),
+    ('GET', '/timeclock/time-off/{token}'),
+    ('GET', '/timeclock/time-off/request/{token}'),
+    ('GET', '/timeclock/time-off/request/{token}/details'),
+    ('POST', '/timeclock/time-off/request/{token}/submit'),
+    ('GET', '/timeclock/time-off/mine/{token}'),
+    ('GET', '/timeclock/time-off/mine/{token}/{rid}'),
+    ('POST', '/timeclock/time-off/mine/{token}/{rid}/cancel'),
+    ('GET', '/timeclock/time-off/mine/{token}/{rid}/edit'),
+    ('POST', '/timeclock/time-off/mine/{token}/{rid}/edit'),
+    ('GET', '/timeclock/time-off/calendar/{token}'),
+    ('GET', '/timeclock/whos-out'),
+    ('POST', '/timeclock/feedback'),
+    ('GET', '/api/feedback/submitters'),
+    ('GET', '/api/feedback/mine'),
+)
+_TIMECLOCK_COMPILED = tuple(
+    (method, compile_path(path)[0]) for method, path in TIMECLOCK_ROUTES
+)
 _COMPILED = tuple(
     (method, compile_path(path)[0], ROLE_LEVEL[role])
     for role, entries in ROUTES.items() for method, path in entries
@@ -225,7 +268,7 @@ _COMPILED = tuple(
 
 
 def allowed(role: str, method: str, path: str) -> bool:
-    if role not in ROLE_LEVEL:
+    if role not in ROLE_LEVEL and role != "timeclock":
         return False
     # Never interpret alternative spellings as a broader route grant.
     if "\\" in path or any(segment in {".", ".."} for segment in path.split("/")):
@@ -233,6 +276,8 @@ def allowed(role: str, method: str, path: str) -> bool:
     if role == "admin":
         return True
     method = "GET" if method == "HEAD" else method
+    if role == "timeclock":
+        return any(verb == method and regex.fullmatch(path) for verb, regex in _TIMECLOCK_COMPILED)
     matches = [level for verb, regex, level in _COMPILED if verb == method and regex.fullmatch(path)]
     return bool(matches) and ROLE_LEVEL[role] >= max(matches)
 

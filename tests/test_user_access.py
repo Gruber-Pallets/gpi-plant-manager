@@ -202,3 +202,39 @@ def test_postgres_seed_concurrency_and_atomic_audit(monkeypatch):
         with admin.cursor() as cur:
             cur.execute(f'DROP SCHEMA {schema} CASCADE')
         admin.close()
+
+
+def test_timeclock_grant_is_audited(monkeypatch):
+    cur = database(monkeypatch, [{'role': 'admin', 'active': True}, None])
+    user_access.save_user('info@gruberpallets.com', 'timeclock', True, 'dale@gruberpallets.com')
+    assert cur.calls[-1][1] == ('info@gruberpallets.com', None, None, 'timeclock', True, 'dale@gruberpallets.com')
+
+
+def test_timeclock_role_database_upgrade():
+    import os
+    from uuid import uuid4
+    import psycopg2
+    from zira_dashboard._schema import USER_ACCESS_DDL, TIMECLOCK_ACCESS_DDL
+    dsn = os.environ.get('USER_ACCESS_TEST_DSN') or os.environ.get('DATABASE_URL')
+    if not dsn:
+        pytest.skip('Requires isolated test PostgreSQL')
+    schema = 'test_timeclock_access_' + uuid4().hex
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA {schema}')
+            cur.execute(f'SET LOCAL search_path TO {schema}')
+            cur.execute(USER_ACCESS_DDL)
+            cur.execute(TIMECLOCK_ACCESS_DDL)
+            cur.execute("INSERT INTO app_users (email,role,updated_by) VALUES (%s,'timeclock','test')", ('info@gruberpallets.com',))
+            # Repeated bootstrap preserves the granted role.
+            cur.execute(USER_ACCESS_DDL + TIMECLOCK_ACCESS_DDL)
+            cur.execute('SELECT role FROM app_users WHERE email=%s', ('info@gruberpallets.com',))
+            assert cur.fetchone() == ('timeclock',)
+            cur.execute('SAVEPOINT invalid_role')
+            with pytest.raises(psycopg2.IntegrityError):
+                cur.execute("UPDATE app_users SET role='unknown'")
+            cur.execute('ROLLBACK TO SAVEPOINT invalid_role')
+    finally:
+        conn.rollback()
+        conn.close()
