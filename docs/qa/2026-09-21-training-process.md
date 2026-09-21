@@ -108,3 +108,23 @@ workers were disabled locally; the actual shared skill writer and local mirror
 ran with only the external Odoo call simulated. A real training completion and Odoo readback remain outstanding because no
 real employee training was started or completed solely for QA. This report does
 not claim that live write was tested.
+
+## Deployment and remote CI readback
+
+Implementation commit `0ad3250eb00b8d56c8bf7c20fb5075b2b5290dd6` was pushed to
+`origin/main`. Railway deployment `f12f2c1b-3afb-4984-8b82-58070dd5f9ba` returned
+`SUCCESS`. The authenticated live scheduler then displayed the new training
+help text and opened the updated form successfully.
+
+[Remote CI for the implementation](https://github.com/Gruber-Pallets/gpi-plant-manager/actions/runs/35656375496)
+finished with **7,230 passed, 33 skipped, 2 failures**. Both failures also appear
+in [CI for the preceding commit](https://github.com/Gruber-Pallets/gpi-plant-manager/actions/runs/35652086125):
+
+- The quick-punch inbox reconciliation mapping test described above.
+- `test_skills_cache.py::test_skills_save_invalidates_cache`: its assertion checks
+  the old unscoped cache key; the preceding access-control implementation now
+  scopes keys by user role. This is an existing test assertion mismatch, not a
+  training save failure. The real Matrix save/reload browser check passed.
+
+No new CI failures were introduced by the training changes. The temporary QA
+server and local database container were stopped after validation.
