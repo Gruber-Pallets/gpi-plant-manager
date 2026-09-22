@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-22
 
+### Timeclock light bulb works again
+
+- The light bulb now opens on shared timeclocks. You can send feedback, check your reports, and read what’s new.
+
 ### Easier scheduling on every screen
 
 #### Features

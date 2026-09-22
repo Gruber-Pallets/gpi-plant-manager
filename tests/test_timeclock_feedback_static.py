@@ -46,3 +46,17 @@ def test_timeclock_feedback_asks_for_and_posts_one_employee_id():
     assert "window.gpiFetch('/api/feedback/submitters')" in feedback_js
     assert "isTimeclockPath() ? '/timeclock/feedback' : '/feedback'" in feedback_js
     assert "form.append('submitter_employee_id', submitter.value)" in feedback_js
+
+
+def test_shared_timeclock_account_renders_lightbulb_panel():
+    from zira_dashboard import permissions
+    from zira_dashboard.deps import templates
+
+    token = permissions.current_role.set('timeclock')
+    try:
+        html = templates.env.get_template('_footer.html').render(static_v=lambda name: 'test')
+        assert 'id="lightbulb-modal"' in html
+        assert '/static/feedback.js' in html
+        assert not permissions.can_operate()
+    finally:
+        permissions.current_role.reset(token)

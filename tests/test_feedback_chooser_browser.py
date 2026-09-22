@@ -711,3 +711,30 @@ def test_repair_link_closes_modal_resumes_idle_and_never_posts_feedback():
             assert page.evaluate("window.feedbackPosts") == []
         finally:
             browser.close()
+
+
+def test_shared_timeclock_lightbulb_opens_all_panels(monkeypatch):
+    from zira_dashboard import permissions
+    from zira_dashboard.deps import templates
+
+    token = permissions.current_role.set('timeclock')
+    try:
+        html = templates.env.get_template('_footer.html').render(static_v=lambda name: 'test')
+    finally:
+        permissions.current_role.reset(token)
+    monkeypatch.setitem(globals(), '_render_enabled_chooser', lambda: html)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            _page_with_changelog(page)
+            page.locator('.whatsnew-btn').click()
+            assert page.locator('#lightbulb-panel-send').is_visible()
+            page.locator('#lightbulb-tab-mine').click()
+            page.get_by_text("You haven't sent any feedback yet.").wait_for()
+            page.locator('#lightbulb-tab-news').click()
+            page.get_by_text('Floor ideas now use one shared review task').wait_for()
+            page.locator('#lightbulb-close').click()
+            assert page.locator('#lightbulb-modal').is_hidden()
+        finally:
+            browser.close()

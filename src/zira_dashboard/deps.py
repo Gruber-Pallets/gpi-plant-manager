@@ -47,6 +47,7 @@ templates.env.globals.update(
     can_hr=permissions.can_hr,
     can_admin=permissions.can_admin,
     can_operate=permissions.can_operate,
+    can_feedback=permissions.can_feedback,
 )
 
 

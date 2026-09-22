@@ -283,7 +283,7 @@ def test_timeclock_role_can_use_kiosk(method, path):
 def test_timeclock_role_cannot_use_any_desktop_route():
     for entries in permissions.ROUTES.values():
         for method, path in entries:
-            if path.startswith('/timeclock') or path in {'/api/feedback/submitters', '/api/feedback/mine'}:
+            if path.startswith('/timeclock') or path in {'/api/feedback/submitters', '/api/feedback/mine', '/changelog', '/changelog/latest'}:
                 continue
             assert not permissions.allowed('timeclock', method, path), (method, path)
     assert not permissions.allowed('timeclock', 'GET', '/timeclock/future-sensitive-page')
@@ -314,3 +314,12 @@ def test_timeclock_login_lands_on_kiosk(monkeypatch):
     response = TestClient(app).get('/auth/callback', follow_redirects=False)
     assert response.status_code == 302
     assert response.headers['location'] == '/timeclock'
+
+
+@pytest.mark.parametrize('path', ['/changelog', '/changelog/latest'])
+def test_timeclock_lightbulb_can_read_news(personal_client, path):
+    client, access = personal_client
+    client.app.add_api_route(path, lambda: PlainTextResponse('news'))
+    access['role'] = 'timeclock'
+    assert client.get(path).status_code == 200
+    assert client.post(path).status_code == 403

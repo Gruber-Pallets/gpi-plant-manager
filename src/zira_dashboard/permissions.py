@@ -220,6 +220,8 @@ ROUTES = {
 }
 # Independent kiosk grant: no desktop role inheritance and no prefix bypass.
 TIMECLOCK_ROUTES = (
+    ('GET', '/changelog'),
+    ('GET', '/changelog/latest'),
     ('GET', '/timeclock'),
     ('GET', '/timeclock/start/{person_id}'),
     ('GET', '/timeclock/dashboard/{token}'),
@@ -292,6 +294,10 @@ def can_hr(request=None) -> bool:
 
 def can_admin(request=None) -> bool:
     return role_for(request) in {"admin", "system"}
+
+
+def can_feedback(request=None) -> bool:
+    return role_for(request) in {"admin", "hr", "manager", "timeclock", "system"}
 
 
 def can_operate(request=None) -> bool:
