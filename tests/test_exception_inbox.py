@@ -16,6 +16,7 @@ from zira_dashboard import (
     machine_breakdown,
     missing_wc,
     missed_punch_out,
+    quick_punch_inbox,
     saturday_recruiting_store,
     shift_config,
     staffing,
@@ -76,6 +77,18 @@ def _exception_row_controls(html):
     parser = _ExceptionRowControlsParser()
     parser.feed(html)
     return parser.rows
+
+
+@pytest.fixture(autouse=True)
+def _quiet_quick_punch_inbox(monkeypatch):
+    """No fixer rows by default; reading them needs a database.
+
+    Without this, a local run with no DATABASE_URL reports the source as
+    degraded and every alert-source assertion in this file gains a stray
+    "Quick-punch fixer" entry. Fixer rows have their own tests in
+    tests/test_quick_punch_inbox.py.
+    """
+    monkeypatch.setattr(quick_punch_inbox, "current_rows", lambda: [])
 
 
 @pytest.fixture(autouse=True)
