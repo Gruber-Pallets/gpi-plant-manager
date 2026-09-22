@@ -185,7 +185,8 @@ def current_rows(*, now_utc: datetime | None = None) -> list[dict[str, object]]:
     except Exception as exc:
         if "DATABASE_URL" not in str(exc):
             log.warning("quick-punch inbox could not read fixer jobs", exc_info=True)
-        return []
+        # The snapshot records source failures and prevents false auto-resolutions.
+        raise
 
 
 def acknowledge(

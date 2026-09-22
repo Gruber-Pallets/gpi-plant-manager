@@ -832,3 +832,42 @@ def test_run_once_auto_resolves_departed_breakdown_row(monkeypatch):
     assert deleted == ["breakdown:Dismantler 2:x"]
     assert logged[0]["item_kind"] == "breakdown"
     assert logged[0]["action"] == "auto_resolved"
+
+
+@pytest.mark.parametrize('kind', ['quick_punch_fix', 'quick_punch'])
+@pytest.mark.parametrize('state', ['healthy', 'errored', 'truncated'])
+def test_quick_punch_departures_require_a_complete_source(kind, state):
+    snapshot = {
+        'source_errors': [{'source': 'Quick-punch fixer'}] if state == 'errored' else [],
+        'sections': [{'id': 'quick_punch', 'count': int(state == 'truncated'), 'rows': []}],
+    }
+    previous = {'quick-punch-alert:44': {'item_kind': kind}}
+    result = inbox_reconcile.plan_reconcile({}, previous, inbox_reconcile._complete_kinds(snapshot))
+    assert result['departed'] == (['quick-punch-alert:44'] if state == 'healthy' else [])
+
+
+def test_quick_punch_arrivals_use_the_audit_kind():
+    from zira_dashboard.attendance_corrections import QUICK_PUNCH_ITEM_KIND
+
+    snapshot = {'queue': [{'section_id': 'quick_punch', 'item_key': 'quick-punch-alert:44'}]}
+    assert inbox_reconcile._open_now_from_snapshot(snapshot)['quick-punch-alert:44']['item_kind'] == QUICK_PUNCH_ITEM_KIND
+
+
+@pytest.mark.parametrize('failing_stage', ['_job_rows', '_failure_events', '_acked_keys'])
+def test_quick_punch_read_failure_is_not_a_successful_empty_source(monkeypatch, failing_stage):
+    from zira_dashboard import exception_inbox, quick_punch_inbox
+
+    monkeypatch.setattr(quick_punch_inbox, '_job_rows', lambda *a: ([], []))
+    monkeypatch.setattr(quick_punch_inbox, '_failure_events', lambda *a: {})
+    monkeypatch.setattr(quick_punch_inbox, '_acked_keys', lambda *a: set())
+
+    def fail(*args):
+        raise RuntimeError('test source unavailable')
+
+    monkeypatch.setattr(quick_punch_inbox, failing_stage, fail)
+    errors = []
+    rows = exception_inbox._capture(errors, 'Quick-punch fixer', quick_punch_inbox.current_rows, [])
+    assert rows == []
+    assert errors == [{'source': 'Quick-punch fixer'}]
+    snapshot = {'source_errors': errors, 'sections': [{'id': 'quick_punch', 'count': 0, 'rows': rows}]}
+    assert not {'quick_punch', 'quick_punch_fix'} & inbox_reconcile._complete_kinds(snapshot)

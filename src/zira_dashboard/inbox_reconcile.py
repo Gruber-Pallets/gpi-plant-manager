@@ -27,6 +27,7 @@ _AUTO_RESOLVE_GRACE_SECONDS = 90
 _SECTION_KIND = {
     "odoo_roster_sync": "odoo_roster_sync",
     "auto_lunch": "auto_lunch",
+    "quick_punch": "quick_punch_fix",
     "assignments": "assignment",
     "plant_schedule": "plant_schedule",
     "saturday_recruiting": "saturday_recruiting",
@@ -50,6 +51,8 @@ _SECTION_KIND = {
 _SECTION_KINDS = {
     **{section: (kind,) for section, kind in _SECTION_KIND.items()},
     "time_off": ("time_off", "absence_pto"),
+    # Older mirror rows used the raw section ID before this section was wired.
+    "quick_punch": ("quick_punch_fix", "quick_punch"),
 }
 
 # item_kind -> the build_snapshot source label (matches _capture(...) names),
@@ -57,6 +60,8 @@ _SECTION_KINDS = {
 _KIND_SOURCE = {
     "odoo_roster_sync": "Timeclock Roster",
     "auto_lunch": "Auto-Lunch",
+    "quick_punch_fix": "Quick-punch fixer",
+    "quick_punch": "Quick-punch fixer",
     "assignment": "Assignments To Do",
     "plant_schedule": "Plant Schedule",
     "saturday_recruiting": "Saturday Recruiting",

@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-22
 
+### Keep the inbox up to date
+
+#### Fixes
+
+- **Keep time-clock alerts up to date.** Old alerts for punch fixes now get marked as resolved once they no longer need attention. A failed data check will not mark them as resolved.
+
 ### Timeclock light bulb works again
 
 - The light bulb now opens on shared timeclocks. You can send feedback, check your reports, and read what’s new.

@@ -11,11 +11,15 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def client():
-    from zira_dashboard import db
+    from zira_dashboard import db, _http_cache
+    _http_cache.invalidate_stable_cache()
     db.init_pool()
     db.bootstrap_schema()
     from zira_dashboard.app import app
-    return TestClient(app)
+    try:
+        yield TestClient(app)
+    finally:
+        _http_cache.invalidate_stable_cache()
 
 
 def test_skills_matrix_serves_from_cache(client, monkeypatch):
@@ -37,13 +41,23 @@ def test_skills_matrix_serves_from_cache(client, monkeypatch):
 
 
 def test_skills_save_invalidates_cache(client):
-    from zira_dashboard import _http_cache
+    from zira_dashboard import _http_cache, permissions
 
-    client.get("/staffing/skills")  # populate cache
-    # The skills matrix lives in the long-TTL stable bucket (600s), not the
-    # 60s today bucket — writes invalidate it directly.
-    assert _http_cache._RESPONSE_CACHE_STABLE.peek(("staffing_skills",)) is not None
-    # A roster save must clear it so edits show immediately. Don't follow
-    # the 303 redirect — the redirected GET would just repopulate the cache.
-    client.post("/staffing/skills", data={}, follow_redirects=False)
-    assert _http_cache._RESPONSE_CACHE_STABLE.peek(("staffing_skills",)) is None
+    key = ("staffing_skills",)
+    roles = ("admin", "manager", "system")
+    token = permissions.current_role.set("system")
+    try:
+        for role in roles:
+            permissions.current_role.set(role)
+            response = client.get("/staffing/skills")
+            assert response.status_code == 200
+            assert _http_cache.get_cached_response(key, includes_today=True, stable=True) is not None
+        permissions.current_role.set("system")
+        # Do not follow the redirect: it would repopulate one role's cache.
+        response = client.post("/staffing/skills", data={}, follow_redirects=False)
+        assert response.status_code == 303
+        for role in roles:
+            permissions.current_role.set(role)
+            assert _http_cache.get_cached_response(key, includes_today=True, stable=True) is None
+    finally:
+        permissions.current_role.reset(token)
