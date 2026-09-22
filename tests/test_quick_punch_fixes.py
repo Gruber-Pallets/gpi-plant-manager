@@ -219,17 +219,19 @@ def test_a_relief_at_the_station_during_the_gap_means_no_fix():
 
 
 def test_a_relief_right_after_sign_in_is_not_rebuilt_by_a_chain_of_first_picks():
-    # The relief stops the came-back merge, but D3 (2:10, idle) -> D2 (idle) is
-    # a chain of wrong first picks that smoothing folds into D3 07:00-now all
-    # the same. In Odoo that would split Ana's 07:03:30 pallet with Christian.
+    # The relief stops the came-back merge, and smoothing's first-pick fold
+    # now also refuses to rebuild D3 07:00-now over Ana, who took over D3 at
+    # 07:03 (it would split her 07:03:30 pallet with Christian). All that is
+    # left is the D3 tap folded into D2, which never settles: he left D2
+    # within 5 minutes. Odoo is left alone.
     now = ct(7, 7)
     relief = ana(7001, "Dismantler 3", ct(7, 3), now, is_open=True)
     production = dict(IDLE, **{"Dismantler 3": (ct(7, 3, 30),)})
     result = scan((*christian(now), relief), now, production_times_by_wc=production)
     assert result.fixes == ()
     (skip,) = result.skipped
-    assert (skip.employee_odoo_id, skip.reason) == (8, "relief")
-    assert [s.attendance_ids for s in skip.before] == [(6190,), (6207,), (6208,)]
+    assert (skip.employee_odoo_id, skip.reason) == (8, "first_pick_not_settled")
+    assert [s.attendance_ids for s in skip.before] == [(6190,), (6207,)]
 
 
 def test_a_partner_there_across_the_whole_gap_is_not_a_relief():
@@ -409,3 +411,25 @@ def test_unmetered_production_sign_out_gap_is_never_a_fix():
     )
     result = scan(spans, now)
     assert result.fixes == ()
+
+
+def test_fixer_relief_check_still_guards_odoo_on_its_own():
+    # Smoothing now refuses these merges itself, so no scan reaches the
+    # fixer's own relief skip. Keep that defense in depth tested directly.
+    from zira_dashboard.assignment_windows import WorkSegment
+    from zira_dashboard.quick_punch_fixes import SourceStint, _was_relieved
+
+    def stint(att_id, wc, start, end):
+        return SourceStint(wc, start, end, False, (att_id,))
+
+    absorbed = (
+        stint(6190, "Dismantler 3", ct(7), ct(7, 2, 10)),
+        stint(6207, "Dismantler 2", ct(7, 2, 10), ct(7, 4, 27)),
+        stint(6208, "Dismantler 3", ct(7, 4, 27), ct(9)),
+    )
+    relief = WorkSegment("Dismantler 3", "Ana M.", ct(7, 3), ct(9), "odoo", 5)
+    partner = WorkSegment("Dismantler 3", "Ana M.", ct(6, 55), ct(9), "odoo", 5)
+
+    assert _was_relieved("Dismantler 3", absorbed, (relief,)) is True
+    assert _was_relieved("Dismantler 3", absorbed, (partner,)) is False
+    assert _was_relieved("Dismantler 3", absorbed, ()) is False

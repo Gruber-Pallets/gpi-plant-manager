@@ -163,7 +163,12 @@ def smooth_quick_punches(
             limit,
         )
         ordered = _apply_wrong_first_pick(
-            ordered, blocked, production_times_by_wc, metered_wc_names, limit
+            ordered,
+            blocked,
+            production_times_by_wc,
+            segments_by_wc,
+            metered_wc_names,
+            limit,
         )
         placed.extend(ordered)
     return tuple(segment for _index, segment in sorted(placed, key=lambda item: item[0]))
@@ -239,6 +244,32 @@ def _was_relieved(
         and other.end_utc > gap_start
         and not (other.start_utc < gap_start and other.end_utc > gap_end)
         for other in segments_by_wc.get(current.wc_name, ())
+        if person_key(other) != key
+    )
+
+
+def _first_pick_takes_over_someone(
+    current: WorkSegment,
+    following: WorkSegment,
+    segments_by_wc: Mapping[str, Sequence[WorkSegment]],
+) -> bool:
+    """Whether folding a first pick forward would claim another person's time.
+
+    The fold gives ``following``'s station the window from ``current.start_utc``
+    to ``following.start_utc``. Another person's input segment there that
+    overlaps the window without covering all of it -- arriving during it, or
+    leaving before this person got there -- was running that station, so the
+    fold would split their pallets. Unlike came-back's gap, this window starts
+    at sign-in, when most people clock in together: someone there from the
+    window's start through after it is a partner and does not block.
+    """
+    window_start, window_end = current.start_utc, following.start_utc
+    key = person_key(current)
+    return any(
+        other.start_utc < window_end
+        and other.end_utc > window_start
+        and not (other.start_utc <= window_start and other.end_utc > window_end)
+        for other in segments_by_wc.get(following.wc_name, ())
         if person_key(other) != key
     )
 
@@ -335,6 +366,7 @@ def _is_wrong_first_pick(
     k: int,
     blocked: Sequence[Window],
     production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
+    segments_by_wc: Mapping[str, Sequence[WorkSegment]],
     metered_wc_names: Collection[str] | None,
     limit: timedelta,
 ) -> bool:
@@ -351,6 +383,7 @@ def _is_wrong_first_pick(
         and _in_metered_scope(following.wc_name, metered_wc_names)
         and not _crosses_blocked(current.end_utc, following.start_utc, blocked)
         and _station_was_idle(current, production_times_by_wc)
+        and not _first_pick_takes_over_someone(current, following, segments_by_wc)
     )
 
 
@@ -358,6 +391,7 @@ def _apply_wrong_first_pick(
     stints: Sequence[_Stint],
     blocked: Sequence[Window],
     production_times_by_wc: Mapping[str, Sequence[datetime]] | None,
+    segments_by_wc: Mapping[str, Sequence[WorkSegment]],
     metered_wc_names: Collection[str] | None,
     limit: timedelta,
 ) -> list[_Stint]:
@@ -365,7 +399,13 @@ def _apply_wrong_first_pick(
     k = 0
     while k < len(stints) - 1:
         if not _is_wrong_first_pick(
-            stints, k, blocked, production_times_by_wc, metered_wc_names, limit
+            stints,
+            k,
+            blocked,
+            production_times_by_wc,
+            segments_by_wc,
+            metered_wc_names,
+            limit,
         ):
             k += 1
             continue

@@ -707,3 +707,55 @@ def test_wrong_first_pick_into_maintenance_is_not_smoothed():
     )
 
     assert smooth(segments, metered_wc_names=METERED) == segments
+
+
+def _christians(result):
+    return [row for row in shape(result) if row[0] == "Christian C."]
+
+
+def test_first_pick_chain_never_slides_over_a_relief_at_the_final_station():
+    # Christian taps D3, D2, back to D3 right after sign-in while Ana takes
+    # over D3 at 07:03. Came-back is blocked by Ana's relief; the first-pick
+    # chain must not rebuild Christian at D3 over Ana's time either.
+    ana = seg("Dismantler 3", ct(7, 3), ct(9), person="Ana M.", odoo_id=5)
+    jose = seg("Dismantler 2", ct(7), ct(9), person="Jose C.", odoo_id=24)
+    segments = (
+        seg("Dismantler 3", ct(7), ct(7, 2, 10)),
+        seg("Dismantler 2", ct(7, 2, 10), ct(7, 4, 27)),
+        seg("Dismantler 3", ct(7, 4, 27), ct(9)),
+        ana,
+        jose,
+    )
+
+    result = smooth(segments)
+
+    assert not any(
+        wc == "Dismantler 3" and start < ct(7, 4, 27) and end > ct(7, 3)
+        for _name, wc, start, end in _christians(result)
+    )
+    assert ana in result and jose in result
+
+
+def test_first_pick_still_joins_a_station_a_partner_clocked_into_at_the_same_time():
+    partner = seg("Dismantler 4", ct(7), ct(11), person="Ana M.", odoo_id=5)
+    segments = (
+        seg("Dismantler 1", ct(7), ct(7, 3)),
+        seg("Dismantler 4", ct(7, 3), ct(11)),
+        partner,
+    )
+
+    assert _christians(smooth(segments)) == [
+        ("Christian C.", "Dismantler 4", ct(7), ct(11)),
+    ]
+
+
+def test_first_pick_does_not_take_over_a_hand_off():
+    # Ana ran D4 until Christian arrived: that time is hers, not a wrong tap.
+    hand_off = seg("Dismantler 4", ct(7), ct(7, 3), person="Ana M.", odoo_id=5)
+    segments = (
+        seg("Dismantler 1", ct(7), ct(7, 3)),
+        seg("Dismantler 4", ct(7, 3), ct(11)),
+        hand_off,
+    )
+
+    assert smooth(segments) == segments

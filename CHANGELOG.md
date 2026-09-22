@@ -12,6 +12,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-22
 
+### Fair credit when someone covers a station
+
+#### Fixes
+
+- **A helper's pallets stay theirs.** If someone taps the wrong station right after signing in, and a co-worker is already running the station they end up at, the dashboard no longer counts that co-worker's pallets as shared. The co-worker keeps full credit for the work they did.
+
 ### Keep the inbox up to date
 
 #### Fixes
