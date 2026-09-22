@@ -37,4 +37,10 @@ No production schedule, employee, training, or integration records were changed 
 
 ## Delivery
 
-Implementation push and read-only deployment verification are pending.
+Implementation `f7a5513a` was pushed to `origin/main`. Railway deployment `e5b0f9fd-be49-466a-b523-ad8d38d2c5ba` reached SUCCESS for that exact commit.
+
+Read-only production checks confirmed Saved draft status, a Review Repair 3 button that opens its existing picker, no console errors, and cards/table switching. At a 375 px viewport the page width remained 375 px. The temporary viewport was reset and the QA tab closed.
+
+[Implementation CI run](https://github.com/Gruber-Pallets/gpi-plant-manager/actions/runs/35741329396): **7,263 passed, 33 skipped, 2 failed**. The only failures are the same baseline exception-inbox mirror and skills-cache tests listed above. CI lint and attendance transaction checks passed. The 12 additional opt-in training transaction tests passed in the local database-backed run.
+
+All four selected items are implemented, pushed, deployed, and verified within the stated test limits. Temporary local servers and the disposable QA database container were stopped.

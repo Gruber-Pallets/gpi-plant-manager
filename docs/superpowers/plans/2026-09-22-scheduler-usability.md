@@ -46,4 +46,4 @@ Files: new `static/staffing-layout.js` and CSS, small additions to `templates/st
 - [x] Use baseline evidence to select a bounded optimization. Prefer eliminating repeated validation requests or repeated DOM scans while retaining fresh validation after meaningful edits and external changes.
 - [x] Add regression coverage showing equivalent assignment/validation results and reduced work for the measured case. Avoid speculative caching of authoritative roster or skill data.
 - [x] Run relevant Python/Node tests, browser workflows with save/network failure injection, full tests, lint, and independent review. Fix introduced failures.
-- [ ] Add plain-language What's New notes, record results and limits, commit and push implementation to origin/main, verify deployment and read-only live screens. Keep the task active if any scoped work remains incomplete.
+- [x] Add plain-language What's New notes, record results and limits, commit and push implementation to origin/main, verify deployment and read-only live screens. Keep the task active if any scoped work remains incomplete.
