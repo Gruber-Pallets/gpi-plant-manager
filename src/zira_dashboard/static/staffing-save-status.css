@@ -1,0 +1,9 @@
+.scheduler-save-status { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .45rem .75rem; padding: .5rem .65rem; border: 1px solid #d1d5db; border-radius: .4rem; background: #f8fafc; color: #334155; max-width: 100%; }
+.scheduler-save-status-copy { display: flex; flex-direction: column; gap: .15rem; }
+#scheduler-save-status-text { font-size: .85rem; }
+#scheduler-save-status-detail { font-size: .75rem; }
+.scheduler-save-status.dirty, .scheduler-save-status.saving { border-color: #c49b36; background: #fffbeb; color: #713f12; }
+.scheduler-save-status.failed { border-color: #dc2626; background: #fef2f2; color: #991b1b; }
+#scheduler-save-retry { padding: .4rem .65rem; cursor: pointer; }
+#scheduler-save-retry[hidden] { display: none; }
+@media print { .scheduler-save-status { display: none !important; } }

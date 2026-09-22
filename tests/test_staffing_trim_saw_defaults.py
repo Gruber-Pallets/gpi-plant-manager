@@ -23,6 +23,7 @@ def test_staffing_template_exposes_smart_defaults():
         today="2026-07-06",
         view_mode="draft",
         published=False,
+        has_snapshot=False,
         viewing_posted=False,
         posted_version=None,
         schedule_revision="test",

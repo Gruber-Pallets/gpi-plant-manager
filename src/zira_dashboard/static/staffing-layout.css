@@ -1,0 +1,37 @@
+/* Hidden in desktop and print; all layout overrides are screen-only. */
+.scheduler-layout-controls, .scheduler-card-bay { display: none; }
+@media screen and (max-width: 768px) {
+  .sub-nav { flex-wrap: wrap; }
+  .scheduler-layout-controls { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; }
+  .scheduler-layout-controls button {
+    min-height: 44px; padding: .4rem .85rem; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; cursor: pointer;
+  }
+  .scheduler-layout-controls button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-dim); }
+  .scheduler-layout-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .scheduler-table-wrap[data-scheduler-view="table"] { overflow-x: auto; }
+  .scheduler-table-wrap[data-scheduler-view="table"] table.sched { min-width: 720px; }
+  /* In-flow pickers can always be reached by scrolling, including table mode. */
+  .scheduler-table-wrap .multi-dd .dd-list { position: static; min-width: 0; width: 100%; max-height: 45vh; margin-top: .25rem; }
+  .scheduler-table-wrap .multi-dd .dd-item { min-height: 44px; overflow-wrap: anywhere; }
+  [data-scheduler-view="cards"] table.sched,
+  [data-scheduler-view="cards"] table.sched tbody { display: block; width: 100%; }
+  [data-scheduler-view="cards"] table.sched thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  [data-scheduler-view="cards"] table.sched tr[data-loc] {
+    display: grid; grid-template-columns: minmax(0, 1fr); margin-bottom: .7rem;
+    border: 1px solid var(--border); border-radius: 8px; padding: .4rem; background: var(--panel);
+  }
+  [data-scheduler-view="cards"] table.sched td { display: block; width: auto; min-width: 0; border: 0; padding: .3rem .4rem; overflow-wrap: anywhere; }
+  [data-scheduler-view="cards"] table.sched td.bay { text-align: left; border-bottom: 1px solid var(--border); margin-bottom: .25rem; }
+  [data-scheduler-view="cards"] .scheduler-card-bay { display: block; color: var(--muted); font-size: .72rem; margin-bottom: .2rem; }
+  [data-scheduler-view="cards"] table.sched td.station .name { white-space: normal; flex-wrap: wrap; min-height: 44px; }
+  [data-scheduler-view="cards"] td[data-card-label]::before { content: attr(data-card-label); display: block; font-size: .7rem; color: var(--muted); margin-bottom: .2rem; }
+  [data-scheduler-view="cards"] table.sched td.dept { color: var(--muted); font-size: .85rem; }
+  [data-scheduler-view="cards"] table.sched textarea { width: 100%; min-height: 44px; }
+  [data-scheduler-view="cards"] .multi-dd > summary { min-height: 44px; }
+  [data-scheduler-view="cards"] tr.work-center-off td.sched-cell,
+  [data-scheduler-view="cards"] tr.work-center-off td.wc-note-cell { display: none; }
+}
+
+/* Let the original table participate directly in the two-column print grid. */
+@media print { .scheduler-table-wrap { display: contents; } }

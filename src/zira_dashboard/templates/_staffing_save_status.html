@@ -1,0 +1,8 @@
+{% set save_status_posted = viewing_posted or published %}
+<span id="autosave-indicator" class="scheduler-save-status clean" data-state="clean" data-scheduler-presentation>
+  <span class="scheduler-save-status-copy" role="status" aria-live="polite" aria-atomic="true">
+    <strong id="scheduler-save-status-text">{{ 'Posted schedule' if save_status_posted else 'Saved draft' }}</strong>
+    <span id="scheduler-save-status-detail">{% if viewing_posted or (published and view_mode == 'posted') %}You are viewing the posted schedule.{% elif published %}Changes will be saved as a draft.{% elif has_snapshot %}The posted version has not changed.{% else %}Not posted yet.{% endif %}</span>
+  </span>
+  <button id="scheduler-save-retry" type="button" hidden>Retry saving</button>
+</span>

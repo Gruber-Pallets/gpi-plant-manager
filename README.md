@@ -113,6 +113,22 @@ Spanish skill level is 3 see personalized Timeclock screens Spanish-first.
   one-way shared feedback mirror.
 - `docs/superpowers/` — design specs and implementation plans.
 
+## Scheduler saves, warnings, and phone view
+
+The save status above the schedule says whether changes are saved, still saving,
+or need a retry. **Saved draft** does not mean the schedule is posted. If a save
+fails, keep the page open and choose **Retry saving**. Changing days, following
+app links, and publishing wait for pending saves. The explicit **Posted** view
+is read-only; use **Draft** to make changes.
+
+Warnings group related problems. Choose **Review** to jump to the work center
+and open its people picker. Off centers stay off. **Find** jumps to an unassigned
+person, and **Why?** keeps the detailed reasons available.
+
+On a phone, **Cards** gives each work center its own section. Choose **Table**
+for the full grid. The choice is remembered on that browser. Both views use the
+same assignments and notes, and printing keeps the full table.
+
 ## Automatic schedule rotations
 
 The scheduler can auto-build enabled work centers with safe, explainable

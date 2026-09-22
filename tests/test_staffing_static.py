@@ -710,9 +710,7 @@ def test_reset_to_defaults_reconciles_left_rail():
 def test_rotation_warning_supports_structured_coverage_issues():
     html = _template()
     js = _script()
-    renderer = js.split("function renderCoverageIssues(warnings, issues) {", 1)[1].split(
-        "function selectedAutoCenters()", 1
-    )[0]
+    renderer = Path("src/zira_dashboard/static/staffing-warnings.js").read_text()
 
     assert 'id="rotation-warnings" role="alert"' in html
     assert (
@@ -721,22 +719,22 @@ def test_rotation_warning_supports_structured_coverage_issues():
     ) in html
     assert 'class="coverage-why"' in html
     assert "rotation_issues" in html
-    assert "renderCoverageIssues" in js
-    assert "ROTATION_ISSUES" in js
-    assert "list.replaceChildren();" in renderer
+    assert "window.SchedulerWarnings.render(list, window.ROTATION_WARNINGS, window.ROTATION_ISSUES)" in js
+    assert "list.replaceChildren(fragment);" in renderer
     assert "document.createElement('li')" in renderer
-    assert "message.textContent = issue.message" in renderer
-    assert "reason.textContent = `${rejection.person}: ${rejection.detail}`;" in renderer
-    assert "item.textContent = warning;" in renderer
+    assert "text.textContent = issue.message" in renderer
+    assert "li.textContent = `${reason.person}: ${reason.detail}`;" in renderer
+    assert "item.textContent = text;" in renderer
     assert "innerHTML" not in renderer
-    assert "const issueMessages = new Set();" in renderer
-    assert "if (issueMessages.has(warning)) return;" in renderer
-    assert "warnBox.hidden = list.childElementCount === 0;" in renderer
+    assert "const seenMessages = new Set();" in renderer
+    assert "seenMessages.has(text)" in renderer
+    assert "warnBox.hidden = list.childElementCount === 0;" in js
 
 
 def test_holiday_sync_warning_survives_repeated_live_warning_renders():
     html = _template()
     js = _script()
+    warnings_module = Path("src/zira_dashboard/static/staffing-warnings.js").read_text()
     renderer = (
         "function renderCoverageIssues(warnings, issues) {"
         + js.split("function renderCoverageIssues(warnings, issues) {", 1)[1].split(
@@ -763,7 +761,7 @@ def test_holiday_sync_warning_survives_repeated_live_warning_renders():
             this.children.push(...children);
           }}
           replaceChildren(...children) {{
-            this.children = [...children];
+            this.children = children.flatMap(child => child.tagName === '#fragment' ? child.children : [child]);
           }}
           get childElementCount() {{
             return this.children.length;
@@ -784,10 +782,13 @@ def test_holiday_sync_warning_survives_repeated_live_warning_renders():
             if (id === 'rotation-warnings') return warnBox;
             return null;
           }},
+          querySelectorAll() {{ return []; }},
+          createDocumentFragment() {{ return new Element('#fragment'); }},
           createElement(tagName) {{
             return new Element(tagName);
           }},
         }};
+        eval({warnings_module!r});
         const renderCoverageIssues = eval('(' + renderer + ')');
         function itemText(item) {{
           return item.textContent || item.children.map(itemText).join('');
@@ -843,11 +844,12 @@ def test_holiday_sync_warning_survives_repeated_live_warning_renders():
 
     assert result.returncode == 0, result.stderr
     assert 'data-persistent-warning="{{ holiday_sync_warning }}"' in html
-    assert "persistentItem.textContent = persistentWarning;" in renderer
+    assert "plain(persistent);" in warnings_module
 
 
 def test_live_training_warnings_receive_print_marker():
     js = _script()
+    warnings_module = Path("src/zira_dashboard/static/staffing-warnings.js").read_text()
     renderer = (
         "function renderCoverageIssues(warnings, issues) {"
         + js.split("function renderCoverageIssues(warnings, issues) {", 1)[1].split(
@@ -874,7 +876,7 @@ def test_live_training_warnings_receive_print_marker():
             this.children.push(...children);
           }}
           replaceChildren(...children) {{
-            this.children = [...children];
+            this.children = children.flatMap(child => child.tagName === '#fragment' ? child.children : [child]);
           }}
           get childElementCount() {{
             return this.children.length;
@@ -889,10 +891,13 @@ def test_live_training_warnings_receive_print_marker():
             if (id === 'rotation-warnings') return warnBox;
             return null;
           }},
+          querySelectorAll() {{ return []; }},
+          createDocumentFragment() {{ return new Element('#fragment'); }},
           createElement(tagName) {{
             return new Element(tagName);
           }},
         }};
+        eval({warnings_module!r});
         const renderCoverageIssues = eval('(' + renderer + ')');
 
         renderCoverageIssues([
@@ -1194,6 +1199,7 @@ def test_live_validation_ignores_an_out_of_order_stale_response():
         const {{ validateCurrentView }} = eval(validation + '\\n({{ validateCurrentView }})');
 
         const first = validateCurrentView();
+        checked.value = 'Blair';  // A distinct snapshot must supersede the pending request.
         const second = validateCurrentView();
         if (requests.length !== 2) throw new Error('did not start both validation requests');
         requests[1]({{ ok: true, json: async () => ({{

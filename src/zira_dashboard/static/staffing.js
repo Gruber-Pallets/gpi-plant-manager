@@ -1,9 +1,17 @@
   // Day picker: jump to another day on change (no Load button needed).
   const __dayPicker = document.getElementById('day-picker');
   if (__dayPicker) {
-    __dayPicker.addEventListener('change', (e) => {
+    const loadedDay = __dayPicker.value;
+    __dayPicker.addEventListener('change', async (e) => {
       const v = e.target.value;
-      if (v) location.href = '/staffing?day=' + encodeURIComponent(v);
+      __dayPicker.value = loadedDay;
+      if (!v || v === loadedDay) return;
+      __dayPicker.disabled = true;
+      try {
+        await window.navigateSchedulerAfterSave('/staffing?day=' + encodeURIComponent(v));
+      } finally {
+        __dayPicker.disabled = false;
+      }
     });
     // Click anywhere in the input box opens the calendar (not just the icon).
     __dayPicker.addEventListener('click', () => {
@@ -14,7 +22,8 @@
   }
 
   // ---------- Posted schedule lock ----------
-  const __viewingPosted = !!window.SCHEDULE_VIEWING_POSTED;
+  const __viewingPosted = !!window.SCHEDULE_VIEWING_POSTED
+    || (!!window.SCHEDULE_PUBLISHED && window.SCHEDULE_VIEW_MODE === 'posted');
   const __form = document.getElementById('staffing-form');
   if (__viewingPosted) {
     __form.classList.add('locked');
@@ -1335,33 +1344,50 @@
   }
 
   // ---------- Autosave controller ----------
-  // Debounced fetch POST of the scheduler form. Three states reflected
-  // in #autosave-indicator: clean (hidden), dirty (red dot), saving
-  // (spinner). Exposes window.flushAutosave() for the publish/share
-  // flow to await any in-flight save. Callers can force a fresh save when
-  // their next action must use the grid exactly as it is currently displayed.
+  // Keep persistence visible. A saved draft never implies publication.
+  // Flush waits for the complete save chain, including edits made during a POST.
   (function () {
     const form = document.getElementById('staffing-form');
     if (!form) return;
 
     const indicator = document.getElementById('autosave-indicator');
+    const statusText = document.getElementById('scheduler-save-status-text');
+    const statusDetail = document.getElementById('scheduler-save-status-detail');
+    const retryButton = document.getElementById('scheduler-save-retry');
+    const postedView = __viewingPosted || (window.SCHEDULE_PUBLISHED && window.SCHEDULE_VIEW_MODE === 'posted');
     window.schedulerAutosaveBusy = false;
     const DEBOUNCE_MS = 750;
     let debounceTimer = null;
     let inFlight = null;
     let queued = false;
     let lastAutosaveError = null;
+    let edited = false;
+    let navigationDraining = false;
 
     function setState(state) {
       window.schedulerAutosaveBusy = state !== 'clean';
-      if (!indicator) return;
-      indicator.classList.remove('clean', 'dirty', 'saving');
-      indicator.classList.add(state);
-      indicator.dataset.state = state;
+      if (indicator) {
+        indicator.classList.remove('clean', 'dirty', 'saving', 'failed');
+        indicator.classList.add(state);
+        indicator.dataset.state = state;
+      }
+      if (statusText) statusText.textContent = state === 'failed' ? 'Save failed'
+        : state === 'saving' ? 'Saving…'
+        : state === 'dirty' ? 'Changes not saved'
+        : (postedView || (window.SCHEDULE_PUBLISHED && !edited)) ? 'Posted schedule' : 'Saved draft';
+      if (statusDetail) statusDetail.textContent = lastAutosaveError
+        ? 'Your changes are still on this page. Retry saving before leaving.'
+        : postedView ? 'You are viewing the posted schedule.'
+        : (window.SCHEDULE_PUBLISHED && !edited) ? 'Changes will be saved as a draft.'
+        : window.SCHEDULE_HAS_SNAPSHOT ? 'The posted version has not changed.' : 'Not posted yet.';
+      if (retryButton) {
+        retryButton.hidden = !lastAutosaveError;
+        retryButton.disabled = state === 'saving';
+      }
     }
 
     function fireSave() {
-      if (__viewingPosted) { return; }
+      if (postedView) { return; }
       setState('saving');
       const formData = new FormData(form);
       formData.set('action', 'save');
@@ -1379,6 +1405,7 @@
           return r.json();
         })
         .then(data => {
+          if (data.ok === false) throw new Error(data.error || 'The schedule could not be saved.');
           lastAutosaveError = null;
           if (data.revision) window.SCHEDULE_REVISION = data.revision;
           inFlight = null;
@@ -1386,15 +1413,17 @@
             queued = false;
             return fireSave();
           } else if (!data.published && window.SCHEDULE_PUBLISHED) {
-            window.location.reload();
+            if (!navigationDraining) window.location.reload();
+            else setState('clean');
           } else {
             setState('clean');
           }
         })
         .catch(err => {
           inFlight = null;
+          queued = false;
           lastAutosaveError = err;
-          setState('dirty');
+          setState('failed');
           if (window.showToast) {
             showToast('Autosave failed: ' + (err.message || 'unknown'), null, 'error');
           }
@@ -1403,9 +1432,12 @@
     }
 
     function onEdit(event) {
+      if (event?.target?.id === 'day-picker') return;
       if (event?.target?.closest?.('#training-sidebar')) return;
-      if (__viewingPosted) { return; }
-      setState('dirty');
+      if (event?.target?.closest?.('[data-scheduler-presentation]')) return;
+      if (postedView) { return; }
+      edited = true;
+      setState(lastAutosaveError ? 'failed' : 'dirty');
       if (inFlight) {
         queued = true;
         return;
@@ -1420,19 +1452,80 @@
     form.addEventListener('input', onEdit);
     form.addEventListener('change', onEdit);
 
-    window.flushAutosave = async function ({force = false} = {}) {
+    window.flushAutosave = async function ({force = false, retry = false} = {}) {
+      if (postedView) return;
       if (debounceTimer) {
         clearTimeout(debounceTimer);
         debounceTimer = null;
         if (!inFlight) fireSave();
       }
       await (inFlight || Promise.resolve());
-      if (lastAutosaveError) throw lastAutosaveError;
-      if (force) {
+      if (lastAutosaveError && !retry) throw lastAutosaveError;
+      if (force || (retry && lastAutosaveError)) {
         await fireSave();
         if (lastAutosaveError) throw lastAutosaveError;
       }
     };
+    if (retryButton) retryButton.addEventListener('click', async () => {
+      retryButton.disabled = true;
+      try {
+        await window.flushAutosave({retry: true});
+      } catch (_) {
+        // fireSave retains the visible failure and retry action.
+      } finally {
+        retryButton.disabled = false;
+      }
+    });
+    window.navigateSchedulerAfterSave = async function (url) {
+      if (navigationDraining) return false;
+      navigationDraining = true;
+      try {
+        await window.flushAutosave();
+        window.location.assign(url);
+        return true;
+      } catch (_) {
+        // Keep the current day's inputs and visible retry action on screen.
+        return false;
+      } finally {
+        navigationDraining = false;
+      }
+    };
+    document.addEventListener?.('click', event => {
+      if (!debounceTimer && !inFlight && !lastAutosaveError) return;
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = event.target?.closest?.('a[href]');
+      if (!link || link.hasAttribute('download')) return;
+      const target = link.getAttribute('target');
+      if (target && target.toLowerCase() !== '_self') return;
+      const href = link.getAttribute('href');
+      if (!href || href.startsWith('#')) return;
+      let url;
+      try { url = new URL(href, window.location.href); } catch (_) { return; }
+      if (url.origin !== window.location.origin) return;
+      if (url.hash && url.pathname === window.location.pathname && url.search === window.location.search) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void window.navigateSchedulerAfterSave(url.href);
+    }, true);
+    let publishDraining = false;
+    form.addEventListener('submit', async event => {
+      const submitter = event.submitter;
+      if (!submitter || submitter.name !== 'action' || submitter.value !== 'publish') return;
+      if (!debounceTimer && !inFlight && !lastAutosaveError) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (publishDraining) return;
+      publishDraining = true;
+      try {
+        await window.flushAutosave();
+        form.requestSubmit(submitter);
+      } catch (_) {
+        // Keep the form and failure visible. Retry saving before publishing.
+      } finally {
+        publishDraining = false;
+      }
+    }, true);
+    setState('clean');
   })();
 
   // ---------- Publish submit busy state ----------
@@ -1578,51 +1671,7 @@
       const list = document.getElementById('rotation-warning-list');
       if (!warnBox || !list) return;
 
-      const persistentWarning = (list.dataset.persistentWarning || '').trim();
-      list.replaceChildren();
-      if (persistentWarning) {
-        const persistentItem = document.createElement('li');
-        persistentItem.textContent = persistentWarning;
-        list.appendChild(persistentItem);
-      }
-      const isTrainingWarning = warning => {
-        const message = String(warning || '').toLowerCase();
-        return message.includes('training block') || message.includes('day-one pairing');
-      };
-      const issueMessages = new Set();
-      window.ROTATION_ISSUES.forEach(issue => {
-        issueMessages.add(issue.message);
-        const item = document.createElement('li');
-        item.className = 'coverage-issue';
-        item.dataset.issueCode = issue.code || '';
-        const message = document.createElement('span');
-        message.textContent = issue.message || 'A work center needs manual attention.';
-        item.appendChild(message);
-
-        if (Array.isArray(issue.rejections) && issue.rejections.length) {
-          const details = document.createElement('details');
-          details.className = 'coverage-why';
-          const summary = document.createElement('summary');
-          summary.textContent = 'Why?';
-          const reasons = document.createElement('ul');
-          issue.rejections.forEach(rejection => {
-            const reason = document.createElement('li');
-            reason.textContent = `${rejection.person}: ${rejection.detail}`;
-            reasons.appendChild(reason);
-          });
-          details.append(summary, reasons);
-          item.appendChild(details);
-        }
-        list.appendChild(item);
-      });
-
-      window.ROTATION_WARNINGS.forEach(warning => {
-        if (issueMessages.has(warning)) return;
-        const item = document.createElement('li');
-        if (isTrainingWarning(warning)) item.className = 'training-warning';
-        item.textContent = warning;
-        list.appendChild(item);
-      });
+      window.SchedulerWarnings.render(list, window.ROTATION_WARNINGS, window.ROTATION_ISSUES);
       warnBox.hidden = list.childElementCount === 0;
     }
 
@@ -1650,6 +1699,7 @@
       const unplaced = Array.isArray(data && data.unplaced) ? data.unplaced : [];
       return unplaced.map(name => ({
         code: 'person_unplaced',
+        person: name,
         message: `${name} could not be placed in an enabled Auto work center.`,
       }));
     }
@@ -1709,6 +1759,8 @@
     let validationTimer = null;
     let validationRequestId = 0;
     let validationController = null;
+    let validationInFlight = false;
+    let validationPayload = null;
 
     function currentViewSnapshot() {
       const assignments = {};
@@ -1736,15 +1788,20 @@
 
     async function validateCurrentView() {
       if (__viewingPosted || window.SCHEDULE_PUBLISHED) return;
+      const payload = JSON.stringify(currentViewSnapshot());
+      // Share identical work only while it is pending. Later checks stay fresh.
+      if (validationInFlight && validationPayload === payload) return;
       const requestId = ++validationRequestId;
       validationController?.abort();
+      validationInFlight = true;
+      validationPayload = payload;
       validationController = new AbortController();
       try {
         const response = await fetch('/api/rotations/validate-current', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
           signal: validationController.signal,
-          body: JSON.stringify(currentViewSnapshot()),
+          body: payload,
         });
         const data = await response.json().catch(() => ({}));
         if (requestId !== validationRequestId) return;
@@ -1753,6 +1810,8 @@
       } catch (error) {
         if (error.name === 'AbortError' || requestId !== validationRequestId) return;
         renderCoverageIssues([], [validationUnavailableIssue()]);
+      } finally {
+        if (requestId === validationRequestId) validationInFlight = false;
       }
     }
 
@@ -1762,6 +1821,8 @@
       validationRequestId += 1;
       validationController?.abort();
       validationController = null;
+      validationInFlight = false;
+      validationPayload = null;
     }
 
     scheduleCurrentViewValidation = function scheduleCurrentViewValidation() {
@@ -2020,6 +2081,7 @@ function renderSaturdayRecruitingDemand(bundle, enabledCenters) {
       renderMinimumCrewBalanceFromGrid();
     });
     renderMinimumCrewBalanceFromGrid();
+    renderCoverageIssues(window.ROTATION_WARNINGS, window.ROTATION_ISSUES);
     if (!__viewingPosted && !window.SCHEDULE_PUBLISHED) validateCurrentView();
   })();
 

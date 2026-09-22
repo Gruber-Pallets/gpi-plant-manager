@@ -4,6 +4,9 @@
 {% block title %}Plant Scheduler{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="/static/staffing.css?v={{ static_v('staffing.css') }}">
+<link rel="stylesheet" href="/static/staffing-save-status.css?v={{ static_v('staffing-save-status.css') }}">
+<link rel="stylesheet" href="/static/staffing-layout.css?v={{ static_v('staffing-layout.css') }}">
+<link rel="stylesheet" href="/static/staffing-warnings.css?v={{ static_v('staffing-warnings.css') }}">
 <link rel="stylesheet" href="/static/saturday-recruiting.css?v={{ static_v('saturday-recruiting.css') }}">
 <link rel="stylesheet" media="print" href="/static/staffing-print.css?v={{ static_v('staffing-print.css') }}">
 <style>
@@ -178,6 +181,7 @@
         {% endif %}
       </div>
       <div class="title-actions">
+        {% include '_staffing_save_status.html' %}
         {% if published or viewing_posted %}
           <button type="button" class="publish-btn icon-btn print-btn{% if posted_delivery.printed_at %} complete{% endif %}" onclick="printSchedule(this)" title="{{ 'Printed' if posted_delivery.printed_at else 'Print' }}" aria-label="{{ 'Printed' if posted_delivery.printed_at else 'Print' }}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -199,7 +203,6 @@
             </svg>
           </button>
         {% else %}
-          <span id="autosave-indicator" class="autosave clean" aria-live="polite"></span>
           {% if is_optional_workday and not saturday_recruiting %}
             <button type="button" class="publish-btn saturday-recruit-button"
                     data-saturday-action="activate-from-schedule" data-day="{{ day }}"
@@ -236,7 +239,13 @@
           identical, ambiguous "Jesus M.". -#}
       {{- name -}}
     {%- endmacro %}
-    <table class="sched">
+    <div class="scheduler-layout-controls" role="group" aria-label="Schedule layout" data-scheduler-presentation>
+      <span>View:</span>
+      <button type="button" data-scheduler-layout="cards" data-scheduler-presentation aria-pressed="true" aria-controls="scheduler-table">Cards</button>
+      <button type="button" data-scheduler-layout="table" data-scheduler-presentation aria-pressed="false" aria-controls="scheduler-table">Table</button>
+    </div>
+    <div class="scheduler-table-wrap" data-scheduler-view="cards">
+    <table class="sched" id="scheduler-table">
       <thead>
         <tr>
           <th class="n">Bay</th>
@@ -282,6 +291,7 @@
               </td>
             {% endif %}
             <td class="station">
+              <div class="scheduler-card-bay">{{ bay.name }}</div>
               <div class="name work-center-toggle"
                    data-work-center-toggle
                    tabindex="0"
@@ -297,8 +307,8 @@
               </div>
               {% if row.loc.note %}<div class="sub">{{ row.loc.note }}</div>{% endif %}
             </td>
-            <td class="dept">{{ row.loc.department }}</td>
-            <td class="sched-cell">
+            <td class="dept" data-card-label="Department">{{ row.loc.department }}</td>
+            <td class="sched-cell" data-card-label="Scheduled">
               <details class="multi-dd sched-dd"
                        data-loc="{{ row.loc.name }}"
                        data-min="{{ row.min_ops }}"
@@ -344,8 +354,8 @@
                 </div>
               </details>
             </td>
-            <td class="wc-note-cell">
-              <textarea name="wc_note__{{ row.loc.name }}" rows="1" placeholder="—" maxlength="500"{% if viewing_posted %} readonly{% endif %}>{{ row.wc_note }}</textarea>
+            <td class="wc-note-cell" data-card-label="Notes">
+              <textarea name="wc_note__{{ row.loc.name }}" rows="1" placeholder="—" maxlength="500"{% if viewing_posted or (published and view_mode == 'posted') %} readonly{% endif %}>{{ row.wc_note }}</textarea>
               <div class="wc-note-print">{{ row.wc_note }}</div>
             </td>
           </tr>
@@ -353,6 +363,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </main>
 
   <!-- RIGHT: Notes for the day + custom-hours banner -->
@@ -367,7 +378,7 @@
       </div>
       {% endif %}
       <label class="notes-label" for="notes-textarea">Notes for the day <span class="hint">— shown with the published schedule</span></label>
-      <textarea id="notes-textarea" name="notes" rows="6" placeholder=" "{% if viewing_posted %} readonly{% endif %}>{{ notes }}</textarea>
+      <textarea id="notes-textarea" name="notes" rows="6" placeholder=" "{% if viewing_posted or (published and view_mode == 'posted') %} readonly{% endif %}>{{ notes }}</textarea>
     </div>
     {% set training_readonly = viewing_posted or (published and view_mode == 'posted') %}
     <section id="training-sidebar" class="training-sidebar" aria-labelledby="training-sidebar-title"
@@ -514,6 +525,7 @@
   window.SCHEDULE_TODAY = {{ today|tojson }};
   window.SCHEDULE_VIEW_MODE = {{ view_mode|tojson }};
   window.SCHEDULE_PUBLISHED = {{ published|tojson }};
+  window.SCHEDULE_HAS_SNAPSHOT = {{ has_snapshot|tojson }};
   window.SCHEDULE_VIEWING_POSTED = {{ viewing_posted|tojson }};
   window.SCHEDULE_POSTED_VERSION = {{ posted_version|tojson }};
   window.SCHEDULE_REVISION = {{ schedule_revision|tojson }};
@@ -570,6 +582,8 @@
   window.AUTO_SCHEDULE_AVAILABLE_WC_NAMES = {{ auto_schedule_available_wc_names|tojson }};
 </script>
 
+<script src="/static/staffing-layout.js?v={{ static_v('staffing-layout.js') }}"></script>
+<script src="/static/staffing-warnings.js?v={{ static_v('staffing-warnings.js') }}"></script>
 <script src="/static/staffing.js?v={{ static_v('staffing.js') }}"></script>
 <script src="/static/saturday-recruiting.js?v={{ static_v('saturday-recruiting.js') }}"></script>
 {% endblock %}
