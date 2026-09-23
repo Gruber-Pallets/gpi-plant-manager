@@ -18,6 +18,22 @@
   const tvMode = gridEl.dataset.tvMode === '1';
   const fallbackRows = parseInt(gridEl.dataset.fallbackRows || '30', 10);
   const tvMargin = 2;
+  // Phones have a separate Recycling presentation. Never initialize or save
+  // the desktop grid there; crossing the breakpoint starts the correct mode.
+  const recyclingPhone = layoutPage === 'recycling' && !tvMode
+    && document.documentElement.hasAttribute('data-recycling-mobile')
+    ? window.matchMedia('(max-width: 760px)') : null;
+  let switchingPresentation = false;
+  if (recyclingPhone) {
+    let wasPhone = recyclingPhone.matches;
+    recyclingPhone.addEventListener('change', event => {
+      if (event.matches === wasPhone) return;
+      wasPhone = event.matches;
+      switchingPresentation = true;
+      window.location.reload();
+    });
+    if (recyclingPhone.matches) return;
+  }
 
   const grid = GridStack.init({
     column: 12,
@@ -86,6 +102,7 @@
   let saveTimer = null;
 
   function persistLayout() {
+    if (switchingPresentation || (recyclingPhone && recyclingPhone.matches)) return;
     const items = grid.save(false).map(it => ({
       id: it.id,
       x: it.x, y: it.y, w: it.w, h: it.h,

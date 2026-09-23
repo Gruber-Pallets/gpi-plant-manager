@@ -10,6 +10,16 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-09-23
+
+### Recycling is easier to use on a phone
+
+#### Features
+
+- **Check progress at a glance.** Names sit above each bar. The Now line shows the current goal. Green means the goal is met. Red means it is not met yet.
+- **See downtime clearly.** Larger bars show each work center, its operators, and minutes stopped.
+- **Use bigger phone controls.** Switch dates and open details without squeezing a laptop layout onto your phone. Laptop and TV views stay the same.
+
 ## 2026-09-22
 
 ### Fair credit when someone covers a station

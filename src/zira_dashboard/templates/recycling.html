@@ -7,9 +7,10 @@
    department_progress_chart,
    department_downtime_report
    with context %}
-{% block html_attrs %}{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}{% endblock %}
+{% block html_attrs %}{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% else %} data-recycling-mobile{% endif %}{% endblock %}
 {% block title %}{% if tv_mode %}TV · {% endif %}Departments — Recycling{% endblock %}
 {% block head %}
+{% if not tv_mode %}<link rel="stylesheet" href="/static/recycling-mobile.css?v={{ static_v('recycling-mobile.css') }}">{% endif %}
 <link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
 <link rel="stylesheet" href="/static/recycling.css?v={{ static_v('recycling.css') }}">
 <link rel="stylesheet" href="/static/goat_watch.css?v={{ static_v('goat_watch.css') }}">
@@ -32,6 +33,16 @@
 {% block subnav %}
 {% if not tv_mode %}
 {% include "_performance_subnav.html" %}
+<div class="rm-controls">
+  <label for="rm-dashboard">Performance dashboard<select id="rm-dashboard" aria-label="Performance dashboard"></select></label>
+  <label for="rm-range">Range<select id="rm-range">
+    {% if custom_range_active %}<option selected disabled>Custom: {{ start }} – {{ end }}</option>{% endif %}
+    {% for value, label in [('today', 'Today'), ('yesterday', 'Yesterday'), ('week', 'This week'), ('last_week', 'Last week'), ('month', 'This month'), ('last_month', 'Last month')] %}
+    <option value="{{ value }}"{% if window == value and not custom_range_active %} selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select></label>
+  <details><summary>Custom dates</summary><form action="/recycling" method="get"><label>Start<input type="date" name="start" value="{{ start }}" required></label><label>End<input type="date" name="end" value="{{ end }}" required></label><button type="submit">Apply dates</button></form></details>
+</div>
 <form class="rc-toolbar" method="get" action="/recycling">
   <span class="rc-tool-label">Range:</span>
   {% set windows = [
@@ -79,6 +90,7 @@
 {%- endmacro %}
 
 {% block content %}
+  {% if not tv_mode %}{% include '_recycling_mobile.html' %}{% endif %}
   <div class="grid-stack" data-layout-page="recycling" data-tv-mode="{{ '1' if tv_mode else '0' }}" data-fallback-rows="30">
 
     {# kpi-uptime is back as a dedicated KPI; Downtime Report still shows the same percent in its header. #}
@@ -217,6 +229,7 @@
 {% endblock %}
 {% block footer %}{% if not tv_mode %}{% include '_footer.html' %}{% endif %}{% endblock %}
 {% block scripts %}
+{% if not tv_mode %}<script src="/static/recycling-mobile.js?v={{ static_v('recycling-mobile.js') }}"></script>{% endif %}
 <script src="/static/vendor/gridstack-all.js?v={{ static_v('vendor/gridstack-all.js') }}"></script>
 {# Gridstack init / layout persistence / widget edit controls — shared with
    /wc/{slug}; parameterized by the data attributes on .grid-stack above.
