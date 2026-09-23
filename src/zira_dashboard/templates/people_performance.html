@@ -5,7 +5,11 @@
 <style data-pp-asset="people-performance.css">
 {{ static_text("people-performance.css") }}
 </style>
+
+<link rel="stylesheet" href="/static/mobile-people-rankings.css?v={{ static_v('mobile-people-rankings.css') }}">
 {% endblock %}
+{% block main_attrs %} data-mobile-view="people_performance"{% endblock %}
+
 {% block content %}
 <section class="pp-page"
          data-day="{{ day }}"

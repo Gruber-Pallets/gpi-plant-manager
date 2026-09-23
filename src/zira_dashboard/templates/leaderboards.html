@@ -10,6 +10,8 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="/static/leaderboards.css?v={{ static_v('leaderboards.css') }}">
+
+<link rel="stylesheet" href="/static/mobile-people-rankings.css?v={{ static_v('mobile-people-rankings.css') }}">
 {% endblock %}
 
 {# ---- Section macros ----------------------------------------------------
@@ -50,12 +52,12 @@
               <tbody>
                 {% for r in s.rows %}
                   <tr>
-                    <td class="rank">{{ r.rank }}</td>
-                    <td class="op">{{ r.name }}{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count" title="Days worked in this range">({{ r.name_count }})</span></td>
-                    <td>{{ r.day_label }}</td>
-                    {% if is_group %}<td>{{ r.wc }}</td>{% endif %}
-                    <td class="num">{{ r.units|round|int }}</td>
-                    <td class="num pct">{% if r.pct is none %}<span class="lb-no-goal" title="No goal configured for this work center">&mdash;</span>{% else %}{{ '%.0f' % (r.pct * 100) }}%{% endif %}</td>
+                    <td class="rank" data-label="Rank">{{ r.rank }}</td>
+                    <td class="op" data-label="Operator">{{ r.name }}{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count" title="Days worked in this range">({{ r.name_count }})</span></td>
+                    <td data-label="Date">{{ r.day_label }}</td>
+                    {% if is_group %}<td data-label="Work center">{{ r.wc }}</td>{% endif %}
+                    <td class="num" data-label="Units">{{ r.units|round|int }}</td>
+                    <td class="num pct" data-label="% of goal">{% if r.pct is none %}<span class="lb-no-goal" title="No goal configured for this work center">&mdash;</span>{% else %}{{ '%.0f' % (r.pct * 100) }}%{% endif %}</td>
                   </tr>
                 {% endfor %}
               </tbody>
@@ -66,14 +68,14 @@
 
 {% macro lb_avg_row(r, s, is_group, hidden) %}
                   <tr{% if hidden %} class="lb-row-hidden"{% endif %}>
-                    <td class="rank">{{ r.rank }}</td>
-                    <td class="op"><button type="button" class="lb-name-btn"
+                    <td class="rank" data-label="Rank">{{ r.rank }}</td>
+                    <td class="op" data-label="Operator"><button type="button" class="lb-name-btn"
    data-name="{{ r.name }}" {% if is_group %}data-group{% else %}data-wc{% endif %}="{{ s.loc_name }}"
    data-start="{{ start }}" data-end="{{ end }}"
    onclick="openLbPopup(this)">{{ r.name }}</button>{{ cert_badges(r.name, person_certs) }}{{ goat_badges(r.name, goat_holders()) }} <span class="lb-name-count" title="Days worked in this range">({{ r.name_count }})</span></td>
-                    {% if is_group %}<td>{{ r.top_wc }}</td>{% endif %}
-                    <td class="num">{{ r.avg_units|round|int }}</td>
-                    <td class="num pct">{% if r.avg_pct is none %}<span class="lb-no-goal" title="No goal configured for this work center">&mdash;</span>{% else %}{{ '%.0f' % (r.avg_pct * 100) }}%{% endif %}</td>
+                    {% if is_group %}<td data-label="Top work center">{{ r.top_wc }}</td>{% endif %}
+                    <td class="num" data-label="Average / day">{{ r.avg_units|round|int }}</td>
+                    <td class="num pct" data-label="Average %">{% if r.avg_pct is none %}<span class="lb-no-goal" title="No goal configured for this work center">&mdash;</span>{% else %}{{ '%.0f' % (r.avg_pct * 100) }}%{% endif %}</td>
                   </tr>
 {% endmacro %}
 
@@ -105,6 +107,8 @@
           {% endif %}
         </div>
 {% endmacro %}
+
+{% block main_attrs %} data-mobile-view="leaderboards"{% endblock %}
 
 {% block content %}
 <form class="lb-toolbar" method="get" action="/staffing/leaderboards">

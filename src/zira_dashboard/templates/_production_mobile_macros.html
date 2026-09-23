@@ -1,0 +1,94 @@
+{# Phone-only presentation. All values come from the same context as desktop. #}
+{% macro identity(row) -%}
+  {% set names = namespace(value='') %}
+  {% if not is_range %}
+    {% if row.current_operators %}
+      {% set names.value = row.current_operators | map(attribute='person_name') | join(' + ') %}
+    {% elif row.sole_producer_name %}
+      {% set names.value = row.sole_producer_name %}
+    {% elif row.no_one_here_now %}
+      {% set names.value = 'No one here now' %}
+    {% elif row.show_segment_worker_names or row.has_worker_history %}
+      {# A station with multiple earlier workers has no single current name. #}
+    {% elif row.who and row.who != row.name %}
+      {% set names.value = row.who %}
+    {% endif %}
+  {% endif %}
+  <strong>{{ names.value or row.name }}</strong>
+  {% if names.value %}<span class="rm-workcenter">{{ row.name }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro production(title, rows) %}
+<section class="rm-card">
+  <h2>{{ title }}</h2>
+  {% for b in rows %}
+    {% set goal = b.expected or 0 %}
+    {% set ratio = b.units / goal * 100 if goal > 0 else 0 %}
+    {% set fill = [[ratio / 1.2, 100] | min, 0] | max %}
+    <div class="rm-production-row {{ 'no-goal' if goal <= 0 else ('met' if b.units >= goal else 'below') }}">
+      <div class="rm-production-heading">
+        <div class="rm-identity">{{ identity(b) }}</div>
+        {% if goal > 0 %}<span class="rm-now">{{ 'Now' if is_today and not is_range else 'Goal' }}</span>{% endif %}
+      </div>
+      <details class="rm-production-detail">
+        <summary aria-label="{{ b.name }}: {{ b.units }} pallets{% if goal > 0 %}, {{ ratio | round(1) }}% of goal. Scale ends at 120%{% else %}, no goal available{% endif %}. Show details">
+          <span class="rm-production-track">
+            <span class="rm-production-fill" style="width: {{ fill }}%"></span>
+            {% if goal > 0 %}<span class="rm-now-marker" aria-hidden="true"></span>{% endif %}
+          </span>
+          {% if goal <= 0 %}<span class="rm-muted">{{ b.units }} pallets · No goal available</span>{% endif %}
+        </summary>
+        <div class="rm-detail-content">
+          <p><strong>{{ b.units }} pallets</strong>{% if goal > 0 %} · goal {{ goal }} · {{ ratio | round(1) }}% of goal{% endif %}</p>
+          <p class="rm-muted">Work center totals{% if b.current_operators | default([]) | length > 1 or b.has_worker_history %} · includes work across operators{% endif %}</p>
+          {% set operator_href = operator_links_by_wc.get(b.name) if operator_links_by_wc else none %}
+          {% if operator_href %}<a class="rm-operator-link" href="{{ operator_href }}">Open {{ b.name }} operator dashboard</a>{% endif %}
+          {% for s in b.segments | default([]) %}
+          <p><strong>{{ s.person_label }}</strong> · {{ s.time_label }}<br>{{ s.actual_units | round | int }} pallets · goal {{ s.goal_units | round | int }}</p>
+          {% endfor %}
+          {% if (can_operate is not defined or can_operate()) and assignments_todo_by_wc and b.name in assignments_todo_by_wc %}
+            {% set todo = assignments_todo_by_wc[b.name] %}
+            <button type="button" class="no-assign-btn" data-wc="{{ b.name }}" data-day="{{ today }}" data-start="{{ todo.first_iso }}" data-end="{{ todo.last_iso }}">Assign person</button>
+          {% endif %}
+        </div>
+      </details>
+    </div>
+  {% else %}<p class="rm-muted">No production data for this period.</p>{% endfor %}
+  {% if rows %}
+    {% set total_units = rows | sum(attribute='units') %}
+    {% set total_goal = rows | sum(attribute='expected') %}
+    <details class="rm-group-totals"><summary>Group totals</summary>
+      <p><strong>{{ total_units }} pallets</strong>{% if total_goal > 0 %} · goal {{ total_goal }} · {{ (total_units / total_goal * 100) | round(1) }}% of goal{% else %} · No goal available{% endif %}</p>
+    </details>
+  {% endif %}
+</section>
+{% endmacro %}
+
+{% macro progress(title, buckets, people, group_target_per_hour) %}
+<section class="rm-card">
+  <h2>{{ title }}</h2>
+  <p class="rm-muted">{{ people }} {{ 'person-days' if is_range else 'people' }}</p>
+  {% if buckets %}
+    {% set totals = namespace(actual=0, goal=0, max=1) %}
+    {% for b in buckets %}{% set totals.actual = totals.actual + b.actual %}{% set totals.goal = totals.goal + b.target %}{% endfor %}
+    {% set totals.max = [totals.actual, totals.goal, 1] | max %}
+    <div class="rm-chart-labels"><span>Daily progress</span><span>{{ totals.actual }} pallets</span></div>
+    <svg class="rm-cumulative" viewBox="0 0 300 100" role="img" aria-label="Cumulative production {{ totals.actual }} pallets, goal {{ totals.goal }}. Open interval details for all values.">
+      <line x1="0" y1="98" x2="300" y2="98" class="rm-axis" />
+      {% set running = namespace(actual=0, goal=0) %}
+      <polyline class="rm-goal-line" points="0,98 {% for b in buckets %}{% set running.goal = running.goal + b.target %}{{ loop.index / buckets|length * 300 }},{{ 98 - running.goal / totals.max * 90 }} {% endfor %}" />
+      <polyline class="rm-actual-line" points="0,98 {% for b in buckets %}{% set running.actual = running.actual + b.actual %}{{ loop.index / buckets|length * 300 }},{{ 98 - running.actual / totals.max * 90 }} {% endfor %}" />
+    </svg>
+    <div class="rm-chart-labels rm-muted"><span>{{ buckets[0].label }}</span><span>{{ buckets[-1].label }}</span></div>
+    <div class="rm-chart-legend"><span>Solid: pallets</span><span>Dashed: goal</span></div>
+    <details class="rm-intervals">
+      <summary>15-minute progress and details</summary>
+      <p>Goal <strong>{{ group_target_per_hour | round | int }}</strong>/hr · <strong>{{ (group_target_per_hour / 4) | round | int }}</strong>/15 min</p>
+      <table><caption>{{ title }} · pallets per interval</caption><thead><tr><th scope="col">Time</th><th scope="col">Pallets</th><th scope="col">Goal</th></tr></thead><tbody>
+      {% for b in buckets %}<tr><th scope="row">{{ b.label }}{% if b.in_progress %}<span class="rm-muted"> · current</span>{% endif %}</th><td>{{ b.actual }}</td><td>{{ b.target }}</td></tr>{% endfor %}
+      </tbody></table>
+    </details>
+  {% else %}<p class="rm-muted">No shift data for this period.</p>{% endif %}
+</section>
+{% endmacro %}
+

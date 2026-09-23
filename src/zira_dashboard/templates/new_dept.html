@@ -8,7 +8,7 @@
    department_downtime_report
    with context %}
 {% from "_cumulative_progress_chart.html" import cumulative_progress_chart with context %}
-{% block html_attrs %}{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}{% endblock %}
+{% block html_attrs %}{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% else %} data-production-mobile{% endif %}{% endblock %}
 {% block title %}{% if tv_mode %}TV · {% endif %}Departments — New{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
@@ -20,6 +20,7 @@
 {% endif %}
 <style>{{ goat_badges_css() }}</style>
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
+{% if not tv_mode %}<link rel="stylesheet" href="/static/production-mobile.css?v={{ static_v('production-mobile.css') }}">{% endif %}
 {% endblock %}
 {% block header %}
 {% if tv_mode %}
@@ -79,6 +80,7 @@
 {%- endmacro %}
 
 {% block content %}
+{% if not tv_mode %}{% include "_new_mobile.html" %}{% endif %}
   <div class="grid-stack"
        data-layout-page="new"
        data-tv-mode="{{ '1' if tv_mode else '0' }}"

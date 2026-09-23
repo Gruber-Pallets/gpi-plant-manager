@@ -1,0 +1,20 @@
+/* Shared phone navigation. Content layouts live with their own dashboards. */
+.pm-navigation, .pm-menu-button { display: none; }
+@media (max-width: 760px) {
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) body { min-width: 0; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) body > header { padding: 12px; gap: 8px; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .brand-row { flex: 1; min-width: 0; flex-wrap: wrap; gap: 8px; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .brand { flex: 1; min-width: 0; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .brand h1 { font-size: 18px; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .brand img { width: 32px; height: auto; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .brand-row nav { display: none; flex-basis: 100%; flex-wrap: wrap; gap: 4px; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .brand-row nav.pm-menu-open { display: flex; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .brand-row nav a { min-height: 44px; display: inline-flex; align-items: center; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .dash-subnav { display: none; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .pm-menu-button { display: block; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .pm-navigation { display: block; padding: 10px 12px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .pm-navigation label { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .pm-navigation select,
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .pm-menu-button { min-height: 44px; min-width: 0; max-width: 100%; width: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--fg); font: inherit; font-size: 16px; }
+  html[data-performance-mobile]:not([data-recycling-mobile]):not([data-tv-theme]) .pm-navigation select { width: 100%; }
+}

@@ -1,16 +1,5 @@
-{% from '_production_mobile_macros.html' import production, progress, identity with context %}
-<div class="rm-page">
-  <h1>Recycling</h1>
-  <p class="rm-refreshed">Refreshed {{ refreshed_at }}{% if range_includes_today %} · updates every minute{% endif %}</p>
-  <div class="rm-kpis">
-    <section class="rm-card"><h2>Pallets processed</h2><strong class="rm-kpi">{{ '{:,}'.format(total_units) }}</strong></section>
-    <section class="rm-card"><h2>Pallets / hr / person</h2><strong class="rm-kpi">{{ pph_per_person }}</strong><details><summary>Without Dismantler 4</summary><p>{{ pph_per_person_ex_d4 }} pallets / hr / person, excluding Dismantler 4's pallets.</p></details></section>
-  </div>
-  <section class="rm-card"><div class="rm-chart-labels"><h2>Uptime</h2><strong>{{ uptime_pct | round | int }}%</strong></div><div class="rm-uptime-track {{ 'rm-uptime-good' if uptime_pct >= 90 else ('rm-uptime-warn' if uptime_pct >= 80 else 'rm-uptime-bad') }}" role="img" aria-label="Uptime {{ uptime_pct | round | int }}%"><span style="width: {{ [[uptime_pct, 100] | min, 0] | max }}%"></span></div></section>
-  {{ production('Dismantlers', dismantler_bars) }}
-  {{ production('Repairs', repair_bars) }}
   <section class="rm-card">
-    <h2>Downtime report</h2>
+    <h2>{{ widget_title('downtime-report' if new_bars is defined else 'downtime-row', 'Downtime report') }}</h2>
     {% if elapsed_minutes > 0 and downtime_rows %}
       {% set scale = [downtime_rows | map(attribute='down') | max, 1] | max %}
       <div class="rm-downtime-bars">
@@ -31,6 +20,3 @@
       </details>
     {% else %}<p class="rm-muted">No tracked downtime for this period.</p>{% endif %}
   </section>
-  {{ progress('Dismantlers · progress', dismantler_progress, dismantler_people, dismantler_group_target) }}
-  {{ progress('Repairs · progress', repair_progress, repair_people, repair_group_target) }}
-</div>

@@ -1,6 +1,10 @@
 {% extends "_staffing_base.html" %}
 {% block title %}Trophy Case{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="/static/mobile-people-rankings.css?v={{ static_v('mobile-people-rankings.css') }}">
+{% endblock %}
+
 {% block styles %}
   .tc-section { margin-bottom: 2rem; }
   .tc-section h2 { margin-bottom: 0.6rem; }
@@ -43,6 +47,8 @@
   .tc-name-link { color: inherit; text-decoration: none; border-bottom: 1px dotted transparent; }
   .tc-name-link:hover { border-bottom-color: currentColor; }
 {% endblock %}
+
+{% block main_attrs %} data-mobile-view="trophy_case"{% endblock %}
 
 {% block content %}
 <h1 style="margin-top:0">🏆 Trophy Case</h1>

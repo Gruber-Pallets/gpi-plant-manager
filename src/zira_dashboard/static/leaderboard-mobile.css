@@ -1,0 +1,37 @@
+/* The existing leaderboard remains the sole desktop and TV presentation. */
+.lm-page { display: none; }
+@media (max-width: 760px) {
+  html:not([data-tv-theme]) .recycling-leaderboard-page .rlb-main { padding: 12px; }
+  html:not([data-tv-theme]) .recycling-leaderboard-page .rlb-main > :not(.lm-page) { display: none; }
+  html:not([data-tv-theme]) .recycling-leaderboard-page .lm-page { display: block; font-size: 16px; line-height: 1.4; }
+  .lm-page * { min-width: 0; box-sizing: border-box; }
+  .lm-range { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  .lm-page summary { min-height: 44px; cursor: pointer; display: flex; align-items: center; gap: 8px; list-style: none; }
+  .lm-page summary::-webkit-details-marker { display: none; }
+  .lm-page summary::after { content: '⌄'; margin-left: auto; }
+  .lm-page details[open] > summary::after { content: '⌃'; }
+  .lm-page summary:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; border-radius: 4px; }
+  .lm-page details p { margin: 0 0 10px; }
+  .lm-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .lm-panel h2 { font-size: 21px; line-height: 1.25; margin: 0; overflow-wrap: anywhere; }
+  .lm-sub { color: var(--muted); font-size: 13px; margin: 3px 0 10px; }
+  .lm-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 0 6px 28px; color: var(--muted); font-size: 12px; margin-top: 12px; }
+  .lm-people { list-style: none; padding: 0; margin: 0; }
+  .lm-person { display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(0, 1fr); gap: 6px 8px; border-top: 1px solid var(--border); padding: 12px 0; }
+  .lm-rank { font-size: 14px; color: var(--muted); padding-top: 2px; }
+  .lm-name { grid-column: 2 / -1; font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
+  .lm-score { grid-column: 2; font-variant-numeric: tabular-nums; }
+  .lm-score.l30 { grid-column: 3; }
+  .lm-score strong { display: block; font-size: 22px; font-weight: 650; line-height: 1.2; overflow-wrap: anywhere; }
+  .lm-score.l30 strong { color: var(--green, #15803d); }
+  .lm-score small, .lm-amount small { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+  .lm-ineligible { font-size: 13px; color: var(--muted); }
+  .lm-rules { border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  .lm-month { background: color-mix(in srgb, #d5a137 10%, var(--panel)); margin-top: 14px; padding: 10px 12px; border-radius: 8px; }
+  .lm-month h3 { font-size: 15px; color: var(--fg); margin: 0 0 4px; }
+  .lm-award { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 8px 0; }
+  .lm-award + .lm-award { border-top: 1px solid var(--border); }
+  .lm-award > strong { font-size: 16px; overflow-wrap: anywhere; }
+  .lm-award > .lm-sub { grid-column: 1; margin: 0; overflow-wrap: anywhere; }
+  .lm-amount { grid-column: 2; grid-row: 1 / 3; align-self: center; text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
+}

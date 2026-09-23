@@ -102,6 +102,7 @@ global.window = {gpiAccess: {admin: false}, innerHeight: 1000, addEventListener:
 global.requestAnimationFrame = fn => fn();
 global.fetch = () => {throw Error('unexpected write');};
 global.document = {
+  documentElement: {hasAttribute: () => false},
   querySelector: selector => selector === '.grid-stack'
     ? {dataset: {tvMode: tv ? '1' : '0', layoutPage: 'new'}} : null,
   getElementById: id => {
@@ -153,7 +154,7 @@ def test_work_center_award_links_preserve_tv_and_limit_visitors(role, tv_mode):
 
     html = env(role).get_template('wc_dashboard.html').render(
         tv_mode=tv_mode, layout={}, customs={}, wc_name='Repair 1', slug='repair-1',
-        kpi={'pallets_per_hour':0}, pallets={'target_today':0, 'units_today':0, 'target_full_day':0},
+        kpi={'pallets_per_hour':0, 'up_time_pct':0}, downtime_row={'down':0, 'working':0, 'working_pct':0}, pallets={'target_today':0, 'units_today':0, 'target_full_day':0},
         downtime_elapsed_minutes=0, month=9, year=2026,
         ribbons={'group':'Repair','entries':[{'name':'Maria','position':1,'units':100,'day':date(2026,9,21)}]})
     assert 'Maria' in html

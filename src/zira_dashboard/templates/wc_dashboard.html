@@ -24,7 +24,7 @@
   {%- set c = customs.get(id, {}).get('color') -%}
   {%- if c -%}style="--wc: {{ c }}; {{ role }}: {{ c }} !important"{%- endif -%}
 {%- endmacro %}
-{% block html_attrs %}{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% endif %}{% endblock %}
+{% block html_attrs %}{% if tv_mode %} data-tv-theme="{{ tv_theme or 'dark' }}"{% else %} data-production-mobile{% endif %}{% endblock %}
 {% block title %}{% if tv_mode %}TV · {% endif %}{{ wc_name }}{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="/static/vendor/gridstack.min.css?v={{ static_v('vendor/gridstack.min.css') }}">
@@ -38,6 +38,7 @@
 {% endif %}
 <link rel="stylesheet" href="/static/dashboards-subnav.css?v={{ static_v('dashboards-subnav.css') }}">
 <style>{{ goat_badges_css() }}</style>
+{% if not tv_mode %}<link rel="stylesheet" href="/static/production-mobile.css?v={{ static_v('production-mobile.css') }}">{% endif %}
 {% endblock %}
 {% block body_attrs %} class="wc-dashboard"{% endblock %}
 {% block header %}
@@ -109,6 +110,7 @@
 {% endblock %}
 
 {% block content %}
+{% if not tv_mode %}{% include "_operator_mobile.html" %}{% endif %}
 <div class="grid-stack" data-layout-page="operator" data-tv-mode="{{ '1' if tv_mode else '0' }}" data-fallback-rows="25">
 
   {# Pallets / hr KPI — the only standalone KPI now; Units / Up Time /
@@ -315,6 +317,7 @@
 {% endblock %}
 {% block footer %}{% endblock %}
 {% block scripts %}
+{% if not tv_mode %}<script defer src="/static/production-mobile.js?v={{ static_v('production-mobile.js') }}"></script>{% endif %}
 <script src="/static/vendor/gridstack-all.js?v={{ static_v('vendor/gridstack-all.js') }}"></script>
 {# Gridstack init / layout persistence / WC picker / widget edit controls —
    shared with /recycling; parameterized by the data attributes on

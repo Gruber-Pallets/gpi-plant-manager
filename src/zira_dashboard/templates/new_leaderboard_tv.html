@@ -6,6 +6,7 @@
    has no site suffix), so it overrides the whole <title> element. #}
 {% block title_tag %}{% if is_tv %}<title>New-Leaderboard</title>{% else %}<title>New-Leaderboard - GPI Plant Manager</title>{% endif %}{% endblock %}
 {% block head %}
+{% if not is_tv %}<link rel="stylesheet" href="/static/leaderboard-mobile.css?v={{ static_v('leaderboard-mobile.css') }}">{% endif %}
 {% if is_tv %}
 <link rel="stylesheet" href="/static/tv-mode.css?v={{ static_v('tv-mode.css') }}">
 {% else %}
@@ -33,6 +34,10 @@
 {% block main_attrs %} class="rlb-main"{% endblock %}
 {% block footer %}{% endblock %}
 {% block content %}
+    {% if not is_tv %}
+    {% set leaderboard_department = "new" %}
+    {% include "_leaderboard_mobile.html" %}
+    {% endif %}
     <div class="rlb-range">
       <span>YTD: {{ data.ytd_start.strftime('%b %-d') }}-{{ data.ytd_end.strftime('%b %-d') }}</span>
       <span>L30: {{ data.l30_start.strftime('%b %-d') }}-{{ data.l30_end.strftime('%b %-d') }}</span>

@@ -1,0 +1,64 @@
+{# Phone-only department leaderboards. All values come from the same data as TV. #}
+{% macro standings(title, block) %}
+<section class="lm-panel">
+  <h2>{{ title }}</h2>
+  <p class="lm-sub">Pallets per full day · ranked by year-to-date average</p>
+  {% if block.rows %}
+  <div class="lm-columns" aria-hidden="true"><span>Year to date</span><span>Last 30 days</span></div>
+  <ol class="lm-people">
+  {% for row in block.rows %}
+    <li class="lm-person">
+      <span class="lm-rank" aria-label="Rank {{ row.rank }}">{{ row.rank }}</span>
+      <strong class="lm-name">{{ row.name }}</strong>
+      {% for key, label in [('ytd', 'Year to date'), ('l30', 'Last 30 days')] %}
+      {% set score = row[key] %}
+      <div class="lm-score {{ key }}" aria-label="{{ label }}">
+        {% if score.eligible %}<strong>{{ "%.1f"|format(score.avg_units) }}</strong><small>{{ score.days }} days</small>
+        {% else %}<span class="lm-ineligible">Not enough days</span>{% endif %}
+      </div>
+      {% endfor %}
+    </li>
+  {% endfor %}
+  </ol>
+  {% else %}<p class="lm-sub">No days yet.</p>{% endif %}
+  <details class="lm-rules"><summary>Qualifying days</summary><p>At least {{ block.thresholds.ytd }} days for the year-to-date average and {{ block.thresholds.l30 }} days for the last 30 days.</p></details>
+</section>
+{% endmacro %}
+{% macro award(role, winner) %}
+<div class="lm-award">
+  {% if winner %}
+  <strong>{{ winner.name }}</strong>
+  <span class="lm-sub">{{ role }} · {{ winner.day.strftime('%b %-d, %Y') }}</span>
+  <span class="lm-amount">{{ "%.0f"|format(winner.amount) }}<small>pallets</small></span>
+  {% else %}<strong>{{ role }}</strong><span class="lm-sub">No qualifying day</span>{% endif %}
+</div>
+{% endmacro %}
+<div class="lm-page">
+  <details class="lm-range"><summary>{{ data.ytd_end.strftime('%Y') }} · through {{ data.ytd_end.strftime('%B %-d') }}</summary>
+    <p>Year to date: {{ data.ytd_start.strftime('%b %-d, %Y') }} – {{ data.ytd_end.strftime('%b %-d, %Y') }}<br>Last 30 days: {{ data.l30_start.strftime('%b %-d, %Y') }} – {{ data.l30_end.strftime('%b %-d, %Y') }}</p>
+  </details>
+  {% if leaderboard_department == 'new' and data.error_message %}
+    <section class="lm-panel"><h2>{{ data.error_message }}</h2></section>
+  {% elif leaderboard_department == 'new' and not data.active_families %}
+    <section class="lm-panel"><h2>Waiting for qualifying Zira production.</h2></section>
+  {% else %}
+    {% if leaderboard_department == 'new' %}
+      {% for family in data.active_families %}{{ standings(family, data.families[family]) }}{% endfor %}
+    {% else %}
+      {{ standings('Repairs', data.roles['Repair']) }}
+      {{ standings('Dismantlers', data.roles['Dismantler']) }}
+    {% endif %}
+    <section class="lm-panel lm-ribbons"><h2>Gold Ribbons</h2>
+      <p class="lm-sub">{{ 'Best normalized full day' if leaderboard_department == 'new' else 'Best single qualifying day' }}</p>
+      {% for month in data.ribbons %}
+      <div class="lm-month"><h3>{{ month.month_label }}</h3>
+        {% if leaderboard_department == 'new' %}
+          {% for family in data.active_families %}{{ award(family, month.winners[family]) }}{% endfor %}
+        {% else %}
+          {{ award('Repair', month.repair) }}{{ award('Dismantler', month.dismantler) }}
+        {% endif %}
+      </div>
+      {% endfor %}
+    </section>
+  {% endif %}
+</div>

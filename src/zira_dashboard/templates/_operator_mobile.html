@@ -1,0 +1,23 @@
+{# Keep work-center totals separate from any individual's production credit. #}
+{% set is_range = false %}
+{% set operator_bar = dict(name=wc_name, units=pallets.units_today, expected=pallets.target_today,
+    current_operators=current_operator_rows if is_live_operator_display else [],
+    who=operators_display if not is_live_operator_display else '', no_one_here_now=is_live_operator_display and not current_operator_rows,
+    has_worker_history=false, segments=[]) %}
+{% from '_production_mobile_macros.html' import production, identity with context %}
+<div class="rm-page pm-page">
+ <h1>Operator</h1>
+ <p class="rm-refreshed">{{ wc_name }} · {{ operator_day }}</p>
+ <form class="pm-date" method="get"><label>Day <input type="date" name="day" value="{{ operator_day }}"></label><button type="submit">Show day</button></form>
+ <div class="rm-kpis">
+  <section class="rm-card"><h2>Pallets processed</h2><strong class="rm-kpi">{{ pallets.units_today }}</strong></section>
+  <section class="rm-card"><h2>{{ widget_title('kpi-pph', 'Pallets / hr') }}</h2><strong class="rm-kpi">{{ kpi.pallets_per_hour }}</strong></section>
+ </div>
+ {{ production(widget_title('pallets-banner', operator_day_label ~ ' · Pallets'), [operator_bar]) }}
+ <section class="rm-card"><h2>Shift details</h2><p>Full day goal: {{ pallets.target_full_day }} pallets</p><p>{% if shift_start_label %}Start · {{ shift_start_label }}{% endif %}{% if now_label %} · {{ 'Now' if is_today else 'End' }} · {{ now_label }}{% endif %}</p><p>Work center totals include all operators for this day.</p></section>
+ <section class="rm-card"><div class="rm-chart-labels"><h2>Uptime</h2><strong>{{ kpi.up_time_pct }}%</strong></div><div class="rm-uptime-track" role="img" aria-label="Uptime {{ kpi.up_time_pct }}%"><span style="width: {{ [[kpi.up_time_pct, 100] | min, 0] | max }}%"></span></div></section>
+ {% set downtime_rows = [dict(name=wc_name, who=operator_bar.who, current_operators=operator_bar.current_operators, no_one_here_now=operator_bar.no_one_here_now, down=downtime_row.down, working=downtime_row.working, working_pct=downtime_row.working_pct)] %}
+ {% set elapsed_minutes = downtime_elapsed_minutes %}
+ {% include '_production_downtime_mobile.html' %}
+ {% include '_production_progress_mobile.html' %}
+</div>

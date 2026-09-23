@@ -3,6 +3,8 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="/static/leaderboards.css?v={{ static_v('leaderboards.css') }}">
+
+<link rel="stylesheet" href="/static/mobile-people-rankings.css?v={{ static_v('mobile-people-rankings.css') }}">
 {% endblock %}
 
 {% block styles %}
@@ -23,6 +25,8 @@
   .fk-note { color: var(--muted); font-size: 0.78rem; margin: 0.4rem 0 0; }
   .fk-empty { color: var(--muted); font-style: italic; font-size: 0.85rem; }
 {% endblock %}
+
+{% block main_attrs %} data-mobile-view="forklift_leaderboards"{% endblock %}
 
 {% block content %}
 <form class="lb-toolbar" method="get" action="/staffing/forklift">
@@ -53,10 +57,10 @@
         <tbody>
           {% for r in lb.overall %}
             <tr class="{% if loop.index <= 3 %}fk-medal-{{ loop.index }}{% endif %}">
-              <td class="rank">{{ loop.index }}</td>
-              <td class="op">{% if tv_mode or can_operate is not defined or can_operate() %}<a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a>{% else %}<span>{{ r.display_name or r.name }}</span>{% endif %}</td>
-              <td class="num">{{ '%.0f'|format(r.score) }}</td>
-              <td class="num">{{ r.days }}</td>
+              <td class="rank" data-label="Rank">{{ loop.index }}</td>
+              <td class="op" data-label="Driver">{% if tv_mode or can_operate is not defined or can_operate() %}<a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a>{% else %}<span>{{ r.display_name or r.name }}</span>{% endif %}</td>
+              <td class="num" data-label="Score">{{ '%.0f'|format(r.score) }}</td>
+              <td class="num" data-label="Days">{{ r.days }}</td>
             </tr>
           {% endfor %}
         </tbody>
@@ -74,10 +78,10 @@
         <tbody>
           {% for r in lb.most_calls %}
             <tr class="{% if loop.index <= 3 %}fk-medal-{{ loop.index }}{% endif %}">
-              <td class="rank">{{ loop.index }}</td>
-              <td class="op">{% if tv_mode or can_operate is not defined or can_operate() %}<a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a>{% else %}<span>{{ r.display_name or r.name }}</span>{% endif %}</td>
-              <td class="num">{{ r.calls }}</td>
-              <td class="num"><span class="fk-ontime">{{ r.on_time }}</span> / <span class="fk-late">{{ r.late }}</span></td>
+              <td class="rank" data-label="Rank">{{ loop.index }}</td>
+              <td class="op" data-label="Driver">{% if tv_mode or can_operate is not defined or can_operate() %}<a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a>{% else %}<span>{{ r.display_name or r.name }}</span>{% endif %}</td>
+              <td class="num" data-label="Calls">{{ r.calls }}</td>
+              <td class="num" data-label="On-time/Late"><span class="fk-ontime">{{ r.on_time }}</span> / <span class="fk-late">{{ r.late }}</span></td>
             </tr>
           {% endfor %}
         </tbody>
@@ -94,10 +98,10 @@
         <tbody>
           {% for r in lb.on_time %}
             <tr class="{% if loop.index <= 3 %}fk-medal-{{ loop.index }}{% endif %}">
-              <td class="rank">{{ loop.index }}</td>
-              <td class="op">{% if tv_mode or can_operate is not defined or can_operate() %}<a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a>{% else %}<span>{{ r.display_name or r.name }}</span>{% endif %}</td>
-              <td class="num pct">{{ '%.1f'|format(r.ontime_pct) }}%</td>
-              <td class="num">{{ r.calls }}</td>
+              <td class="rank" data-label="Rank">{{ loop.index }}</td>
+              <td class="op" data-label="Driver">{% if tv_mode or can_operate is not defined or can_operate() %}<a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a>{% else %}<span>{{ r.display_name or r.name }}</span>{% endif %}</td>
+              <td class="num pct" data-label="On-time %">{{ '%.1f'|format(r.ontime_pct) }}%</td>
+              <td class="num" data-label="Calls">{{ r.calls }}</td>
             </tr>
           {% endfor %}
         </tbody>
@@ -115,10 +119,10 @@
         <tbody>
           {% for r in lb.fastest %}
             <tr class="{% if loop.index <= 3 %}fk-medal-{{ loop.index }}{% endif %}">
-              <td class="rank">{{ loop.index }}</td>
-              <td class="op">{% if tv_mode or can_operate is not defined or can_operate() %}<a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a>{% else %}<span>{{ r.display_name or r.name }}</span>{% endif %}</td>
-              <td class="num">{{ '%.1f'|format((r.avg_ms or 0) / 1000.0) }}s</td>
-              <td class="num">{{ r.calls }}</td>
+              <td class="rank" data-label="Rank">{{ loop.index }}</td>
+              <td class="op" data-label="Driver">{% if tv_mode or can_operate is not defined or can_operate() %}<a href="/staffing/people/{{ r.display_name or r.name }}">{{ r.display_name or r.name }}</a>{% else %}<span>{{ r.display_name or r.name }}</span>{% endif %}</td>
+              <td class="num" data-label="Avg response">{{ '%.1f'|format((r.avg_ms or 0) / 1000.0) }}s</td>
+              <td class="num" data-label="Calls">{{ r.calls }}</td>
             </tr>
           {% endfor %}
         </tbody>

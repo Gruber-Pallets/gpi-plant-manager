@@ -29,7 +29,8 @@ def test_wc_dashboard_only_includes_ribbon_in_tv_header_call():
     html = _read("wc_dashboard.html")
     # Non-TV path must NOT include the ribbon partial (spec: TV only).
     assert html.count('include "_ribbon_winners_banner.html"') == 1
-    tv_call = html.split("{% if tv_mode %}", 1)[1].split("{% else %}", 1)[0]
+    header = html.split("{% block header %}", 1)[1].split("{% endblock %}", 1)[0]
+    tv_call = header.split("{% if tv_mode %}", 1)[1].split("{% else %}", 1)[0]
     assert 'include "_ribbon_winners_banner.html"' in tv_call
 
 

@@ -1,0 +1,99 @@
+/* New and Operator phone cards only. */
+html[data-production-mobile] .pm-page, .pm-date { display: none; }
+@media (max-width: 760px) {
+  html[data-production-mobile] { --rm-danger: #b91c1c; --rm-down-fill: #f4b4b4; }
+  html[data-production-mobile] .rm-page { display: block; font-size: 16px; line-height: 1.45; }
+  html[data-production-mobile] .rm-page * { box-sizing: border-box; }
+  html[data-production-mobile] .rm-page h1 { font-size: 22px; margin: 0; }
+  html[data-production-mobile] .rm-refreshed { color: var(--muted); font-size: 13px; margin: 2px 0 12px; }
+  html[data-production-mobile] .rm-card { min-width: 0; padding: 14px; margin: 0 0 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--fg); }
+  html[data-production-mobile] .rm-card h2 { font-size: 16px; margin: 0 0 12px; line-height: 1.3; }
+  html[data-production-mobile] .rm-card p { margin: 8px 0; overflow-wrap: anywhere; }
+  html[data-production-mobile] .rm-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  html[data-production-mobile] .rm-kpis h2 { font-size: 13px; font-weight: 500; color: var(--muted); }
+  html[data-production-mobile] .rm-kpi { display: block; font-size: 28px; overflow-wrap: anywhere; }
+  html[data-production-mobile] .rm-kpis details { font-size: 13px; }
+  html[data-production-mobile] .rm-muted, html[data-production-mobile] .rm-workcenter { color: var(--muted); font-size: 13px; }
+  html[data-production-mobile] .rm-identity { min-width: 0; overflow-wrap: anywhere; }
+  html[data-production-mobile] .rm-identity a { color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+  html[data-production-mobile] .rm-workcenter { margin-left: 4px; }
+  html[data-production-mobile] .rm-production-row { margin: 0 0 8px; }
+  html[data-production-mobile] .rm-production-heading { display: grid; grid-template-columns: minmax(0, 75%) minmax(0, 16.666667%) 1fr; align-items: end; }
+  html[data-production-mobile] .rm-production-heading .rm-identity { padding-right: 6px; }
+  html[data-production-mobile] .rm-now { text-align: center; font-size: 13px; color: var(--muted); }
+  html[data-production-mobile] .rm-production-detail { margin: 0; }
+  html[data-production-mobile] .rm-production-detail > summary { list-style: none; min-height: 44px; padding: 4px 0 24px; cursor: pointer; }
+  html[data-production-mobile] .rm-production-detail > summary::-webkit-details-marker { display: none; }
+  html[data-production-mobile] .rm-production-track { display: block; position: relative; height: 16px; border-radius: 5px; background: var(--panel-2); }
+  html[data-production-mobile] .rm-production-fill { display: block; height: 100%; border-radius: 5px; background: var(--good); }
+  html[data-production-mobile] .below .rm-production-fill { background: var(--rm-danger); }
+  html[data-production-mobile] .no-goal .rm-production-fill { background: var(--muted); }
+  html[data-production-mobile] .rm-now-marker { position: absolute; left: 83.333333%; top: -3px; height: 22px; border-left: 2px solid var(--fg); }
+  html[data-production-mobile] .rm-detail-content { padding: 0 0 12px; }
+  html[data-production-mobile] .rm-card details:not(.rm-production-detail) > summary { min-height: 44px; padding: 10px 0; cursor: pointer; }
+  html[data-production-mobile] .rm-operator-link { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 0; color: var(--accent); overflow-wrap: anywhere; }
+  html[data-production-mobile] .rm-detail-content button { min-height: 44px; min-width: 44px; padding: 8px 12px; }
+  html[data-production-mobile] .rm-downtime-bars { overflow: hidden; border-radius: 8px; }
+  html[data-production-mobile] .rm-downtime-row { position: relative; min-height: 64px; background: var(--panel-2); border-bottom: 1px solid var(--panel); }
+  html[data-production-mobile] .rm-downtime-fill { position: absolute; inset: 0 auto 0 0; background: var(--rm-down-fill); }
+  html[data-production-mobile] .rm-downtime-label { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 64px; padding: 12px; }
+  html[data-production-mobile] .rm-downtime-label .rm-workcenter { display: block; margin: 0; color: var(--fg); }
+  html[data-production-mobile] .rm-downtime-minutes { white-space: nowrap; }
+  html[data-production-mobile] .rm-chart-labels { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+  html[data-production-mobile] .rm-chart-labels h2 { margin: 0 0 8px; }
+  html[data-production-mobile] .rm-downtime-bars + .rm-chart-labels { margin-top: 6px; }
+  html[data-production-mobile] .rm-uptime-track { height: 10px; border-radius: 5px; background: var(--panel-2); overflow: hidden; }
+  html[data-production-mobile] .rm-uptime-track span { display: block; height: 100%; background: var(--good); }
+  html[data-production-mobile] .rm-uptime-warn span { background: #b45309; }
+  html[data-production-mobile] .rm-uptime-bad span { background: var(--rm-danger); }
+  html[data-production-mobile] .rm-cumulative { display: block; width: 100%; height: auto; margin-top: 12px; overflow: visible; }
+  html[data-production-mobile] .rm-cumulative polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+  html[data-production-mobile] .rm-axis { stroke: var(--border); }
+  html[data-production-mobile] .rm-goal-line { stroke: var(--muted); stroke-dasharray: 5 4; }
+  html[data-production-mobile] .rm-actual-line { stroke: var(--good); }
+  html[data-production-mobile] .rm-chart-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--muted); margin: 6px 0; }
+  html[data-production-mobile] .assign-popover { position: fixed !important; left: 12px !important; right: 12px; top: auto !important; bottom: 12px; width: auto; max-width: calc(100% - 24px); display: flex; flex-wrap: wrap; gap: 8px; z-index: 1100; }
+  html[data-production-mobile] .assign-popover .assign-pick { flex: 1 1 100%; min-width: 0; width: 100%; min-height: 44px; font-size: 16px; }
+  html[data-production-mobile] .assign-popover .assign-save { min-height: 44px; font-size: 16px; }
+  html[data-production-mobile] .assign-popover .assign-status { max-width: 100%; overflow-wrap: anywhere; }
+  html[data-production-mobile] .rm-intervals table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 14px; }
+  html[data-production-mobile] .rm-intervals th, html[data-production-mobile] .rm-intervals td { padding: 8px 4px; text-align: right; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  html[data-production-mobile] .rm-intervals th:first-child { text-align: left; }
+  html[data-production-mobile] .rm-intervals caption { text-align: left; font-size: 13px; color: var(--muted); }
+}
+@media (max-width: 760px) {
+ html[data-production-mobile] main { padding: 12px; }
+ html[data-production-mobile] .grid-stack, html[data-production-mobile] main > .footer { display: none; }
+ html[data-production-mobile] .pm-page { display: block; }
+ html[data-production-mobile] .operator-strip-right, html[data-production-mobile] .edit-bar { display: none; }
+ html[data-production-mobile] .operator-strip, html[data-production-mobile] .operator-strip-left { min-width: 0; flex-wrap: wrap; }
+ html[data-production-mobile] .wc-picker-select { width: 100%; max-width: 100%; min-width: 0; min-height: 44px; font-size: 16px; }
+ html[data-production-mobile] .operator-strip-left { width: 100%; }
+ html[data-production-mobile] .operator-strip-op { white-space: normal; overflow-wrap: anywhere; }
+ html[data-production-mobile] .pm-date { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+ html[data-production-mobile] .pm-date input, html[data-production-mobile] .pm-date button { min-height: 44px; min-width: 0; max-width: 100%; font: inherit; }
+ html[data-production-mobile] .rm-card h2, html[data-production-mobile] .rm-page h1 { overflow-wrap: anywhere; }
+ html[data-production-mobile] .grid-stack[data-layout-page="operator"] { display: block; height: auto !important; min-height: 0 !important; }
+ html[data-production-mobile] .grid-stack[data-layout-page="operator"] > .grid-stack-item { display: none; }
+ html[data-production-mobile] .grid-stack[data-layout-page="operator"] > [gs-id="goat-race"],
+ html[data-production-mobile] .grid-stack[data-layout-page="operator"] > [gs-id="monthly-ribbons"] { display: block; position: static !important; width: 100% !important; height: auto !important; margin: 0 0 12px; }
+ html[data-production-mobile] .grid-stack-item-content { position: static !important; height: auto !important; padding: 14px; overflow: visible; }
+ html[data-production-mobile] .widget-edit-btn { display: none; }
+ html[data-production-mobile] .gr-footer { flex-wrap: wrap; }
+ html[data-production-mobile] .gr-record, html[data-production-mobile] .ribbons-list .name { overflow-wrap: anywhere; min-width: 0; white-space: normal; }
+ html[data-production-mobile] .ribbons-list li { flex-wrap: wrap; }
+ html[data-production-mobile] .ribbons-list .name a { display: inline-flex; align-items: center; min-height: 44px; }
+ html[data-production-mobile] .goat-alert, html[data-production-mobile] .goat-watch-row, html[data-production-mobile] .ribbon-announce { flex-wrap: wrap; overflow-wrap: anywhere; }
+}
+@media (max-width: 760px) {
+ html[data-production-mobile] .wc-dashboard .grid-stack-item-content { container-type: normal; padding: 14px !important; }
+ html[data-production-mobile] .wc-dashboard .grid-stack-item-content h3 { font-size: 16px; white-space: normal; overflow-wrap: anywhere; margin: 0 0 12px; }
+ html[data-production-mobile] .wc-dashboard .gr-record { white-space: normal; overflow: visible; font-size: 14px; }
+ html[data-production-mobile] .wc-dashboard .gr-ratio, html[data-production-mobile] .wc-dashboard .gr-label { font-size: 16px; }
+ html[data-production-mobile] .wc-dashboard .gr-num, html[data-production-mobile] .wc-dashboard .gr-icon { font-size: 32px; }
+ html[data-production-mobile] .wc-dashboard .ribbons-list .name { white-space: normal; overflow: visible; flex: 1 1 100%; }
+ html[data-production-mobile] .wc-dashboard .ribbons-list li,
+ html[data-production-mobile] .wc-dashboard .ribbons-list .date,
+ html[data-production-mobile] .wc-dashboard .ribbons-list .units { font-size: 16px; }
+ html[data-production-mobile] .wc-dashboard .ribbons-list .medal { font-size: 24px; }
+}

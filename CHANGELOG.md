@@ -12,6 +12,14 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-23
 
+### More dashboards fit your phone
+
+#### Features
+
+- **Read rankings without zooming.** Names, scores, and awards are easier to read on a phone.
+- **Check New and Operator progress.** Clear goal bars and larger downtime bars match the Recycling view.
+- **Move around more easily.** Bigger controls and a simple dashboard menu make phone use easier. People and trophy pages fit smaller screens too. Laptop and TV views stay the same.
+
 ### Recycling is easier to use on a phone
 
 #### Features

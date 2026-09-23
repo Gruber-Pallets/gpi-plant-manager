@@ -1,0 +1,30 @@
+{% macro progress(title, buckets, people, group_target_per_hour) %}
+<section class="rm-card">
+  <h2>{{ title }}</h2>
+  {% if new_bars is defined %}<p class="rm-muted">{{ new_people }} {{ 'person-days' if is_range else 'people' }}</p>{% endif %}
+
+  {% if buckets %}
+    {% set totals = namespace(actual=0, goal=0, max=1) %}
+    {% for b in buckets %}{% set totals.actual = totals.actual + b.actual %}{% set totals.goal = totals.goal + b.target %}{% endfor %}
+    {% set totals.max = [totals.actual, totals.goal, 1] | max %}
+    <div class="rm-chart-labels"><span>Daily progress</span><span>{{ totals.actual }} pallets</span></div>
+    <svg class="rm-cumulative" viewBox="0 0 300 100" role="img" aria-label="Cumulative production {{ totals.actual }} pallets, goal {{ totals.goal }}. Open interval details for all values.">
+      <line x1="0" y1="98" x2="300" y2="98" class="rm-axis" />
+      {% set running = namespace(actual=0, goal=0) %}
+      <polyline class="rm-goal-line" points="0,98 {% for b in buckets %}{% set running.goal = running.goal + b.target %}{{ loop.index / buckets|length * 300 }},{{ 98 - running.goal / totals.max * 90 }} {% endfor %}" />
+      <polyline class="rm-actual-line" points="0,98 {% for b in buckets %}{% set running.actual = running.actual + b.actual %}{{ loop.index / buckets|length * 300 }},{{ 98 - running.actual / totals.max * 90 }} {% endfor %}" />
+    </svg>
+    <div class="rm-chart-labels rm-muted"><span>{{ buckets[0].label }}</span><span>{{ buckets[-1].label }}</span></div>
+    <div class="rm-chart-legend"><span>Solid: pallets</span><span>Dashed: goal</span></div>
+    <details class="rm-intervals">
+      <summary>{{ widget_title('new-progress' if new_bars is defined else 'progress-15min', '15-minute progress and details') }}</summary>
+      <p>Goal {% if new_bars is defined %}<strong>{{ new_group_target|round|int }}</strong>/hr · {% endif %}<strong>{{ (new_group_target / 4)|round|int if new_bars is defined else progress_bucket_target }}</strong>/15 min</p>
+      <table><caption>{{ title }} · pallets per interval</caption><thead><tr><th scope="col">Time</th><th scope="col">Pallets</th><th scope="col">Goal</th></tr></thead><tbody>
+      {% for b in buckets %}<tr><th scope="row">{{ b.label }}{% if b.in_progress %}<span class="rm-muted"> · current</span>{% endif %}</th><td>{{ b.actual }}</td><td>{{ b.target }}</td></tr>{% endfor %}
+      </tbody></table>
+    </details>
+  {% else %}<p class="rm-muted">No shift data for this period.</p>{% endif %}
+</section>
+{% endmacro %}
+
+{% if new_bars is defined %}{{ progress(widget_title('new-cumulative', 'All New · Daily progress'), new_progress, new_people, new_group_target) }}{% else %}{{ progress(widget_title('cumulative-daily', 'Daily progress'), progress_buckets, none, 0) }}{% endif %}
