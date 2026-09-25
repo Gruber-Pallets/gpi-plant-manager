@@ -211,13 +211,53 @@ def test_exact_center_protocol_pairs_only_on_day_one():
 def test_non_planned_day_returns_empty_effect():
     from zira_dashboard import rotation_training
 
-    # Saturday is not a working day, so it is never a planned block day.
+    # Sunday remains outside the training schedule.
     effect = rotation_training.effect_for_day(
-        _block(start_day=date(2026, 7, 14)), date(2026, 7, 18)
+        _block(start_day=date(2026, 7, 14)), date(2026, 7, 19)
     )
     assert effect.locked_people == {}
     assert effect.temporary_extra_people == {}
     assert tuple(effect.warnings) == ()
+
+
+@pytest.mark.parametrize("start_day,needs_trainer", [
+    (date(2026, 7, 18), True),
+    (date(2026, 7, 16), False),
+])
+def test_unpublished_saturday_allows_active_training(start_day, needs_trainer):
+    from zira_dashboard import rotation_training
+
+    block = _block(start_day=start_day, work_center="Tablets")
+    saturday = date(2026, 7, 18)
+    effect = rotation_training.effect_for_day(block, saturday)
+
+    assert effect.locked_work_centers == {"Tablets": ["Trainee"]}
+    assert effect.temporary_extra_work_centers == (
+        {"Tablets": ["Trainer"]} if needs_trainer else {}
+    )
+    # Merely opening a Saturday draft must not consume a training day.
+    assert saturday not in rotation_training.planned_block_days(block, {})
+
+
+@pytest.mark.parametrize("status,start_day,days,absent", [
+    ("paused", date(2026, 7, 16), 5, False),
+    ("completed", date(2026, 7, 16), 5, False),
+    ("active", date(2026, 7, 20), 5, False),
+    ("active", date(2026, 7, 16), 2, False),
+    ("active", date(2026, 7, 16), 5, True),
+])
+def test_saturday_training_preserves_eligibility_guards(status, start_day, days, absent):
+    from zira_dashboard import rotation_training
+
+    saturday = date(2026, 7, 18)
+    effect = rotation_training.effect_for_day(
+        _block(status=status, start_day=start_day, planned_attended_days=days,
+               work_center="Tablets"),
+        saturday,
+        absence_by_day={saturday: {"Trainee"}} if absent else {},
+    )
+    assert effect.locked_work_centers == {}
+    assert effect.temporary_extra_work_centers == {}
 
 
 def test_day_after_the_block_window_returns_empty_effect():

@@ -53,12 +53,16 @@ _MAX_SCAN_DAYS = 366
 def planned_block_days(
     block: rotation_store.TrainingBlock,
     absence_by_day: Mapping[date, set[str]],
+    *,
+    scheduling_day: date | None = None,
 ) -> list[date]:
     """Return the block's attended working days.
 
     Walks forward from ``block.start_day`` collecting working days on which the
     trainee is not on a full-day absence, until ``planned_attended_days`` days
     are gathered. Absent days do not count, so the block naturally extends.
+    While building a Saturday schedule, include that candidate day even before
+    publication. Other unpublished Saturdays still do not consume training days.
     """
     out: list[date] = []
     outcomes = getattr(block, "day_statuses", {})
@@ -68,7 +72,10 @@ def planned_block_days(
         if cursor in outcomes:
             if outcomes[cursor] == "attended":
                 out.append(cursor)
-        elif shift_config.is_workday(cursor) and block.trainee_name not in absence_by_day.get(cursor, set()):
+        elif (
+            (cursor == scheduling_day and cursor.weekday() == 5)
+            or shift_config.is_workday(cursor)
+        ) and block.trainee_name not in absence_by_day.get(cursor, set()):
             out.append(cursor)
         cursor += timedelta(days=1)
     return out
@@ -83,7 +90,8 @@ def effect_for_day(
     """Return this block's effect for ``day``.
 
     The day-one attended day pairs the trainee with the level-3 trainer; later
-    attended days reserve only the trainee. A non-attended day (weekend, before
+    attended days reserve only the trainee. Saturday drafts are eligible before
+    publication. A non-attended day (Sunday, before
     the block, past the window, or a trainee absence) yields an empty effect.
     A manual conflicting assignment for the trainee or trainer produces a
     warning and does not displace the manual choice.
@@ -93,7 +101,7 @@ def effect_for_day(
     absence_by_day = absence_by_day or {}
     manual = set(manual_assignees or ())
 
-    planned = planned_block_days(block, absence_by_day)
+    planned = planned_block_days(block, absence_by_day, scheduling_day=day)
     if day not in planned:
         return _EMPTY_EFFECT
 

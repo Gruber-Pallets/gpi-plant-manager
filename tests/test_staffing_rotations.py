@@ -5846,6 +5846,30 @@ def test_training_picker_reservations_include_only_exact_protocol_trainees(monke
     }
 
 
+def test_saturday_draft_exposes_trainee_and_preserves_publish_training_rules(monkeypatch):
+    from zira_dashboard import rotation_store, rotation_training
+    from zira_dashboard.routes import staffing as staffing_route
+
+    saturday = date(2026, 9, 26)
+    block = rotation_store.TrainingBlock(
+        id=1, trainee_name="Daniel G.", trainer_name="Juan D.", skill="Tablets",
+        work_center="Tablets", start_day=saturday, planned_attended_days=6, status="active",
+    )
+    monkeypatch.setattr(rotation_store, "active_blocks_for_day", lambda _: [block])
+    monkeypatch.setattr(staffing_route, "_absence_by_day_for_block", lambda *_: {})
+    monkeypatch.setattr(rotation_training.shift_config, "is_workday", lambda d: d.weekday() < 5)
+
+    assert staffing_route._training_picker_reservations_for_day(saturday, []) == {
+        "Tablets": {"Daniel G."}
+    }
+    trainees, needs_partner, extra_seats = staffing_route._training_validation_context(
+        saturday, {"Tablets": ["Daniel G.", "Juan D."]},
+    )
+    assert trainees == {"Tablets": {"Daniel G."}}
+    assert needs_partner == {"Tablets": {"Daniel G."}}
+    assert extra_seats == {"Tablets": {"Juan D."}}
+
+
 def test_first_future_staffing_view_does_not_seed_when_time_off_read_fails(monkeypatch):
     saved = []
 

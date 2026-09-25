@@ -10,6 +10,12 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
      changed and how it helps; skip developer-only details, code names, routes,
      and implementation steps; explain any unfamiliar word right away. -->
 
+## 2026-09-25
+
+### Schedule trainees on Saturday
+
+- People in active training can now be picked for their training station while you build a Saturday schedule. They still need a trainer on their first day.
+
 ## 2026-09-23
 
 ### More dashboards fit your phone
