@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-25
 
+### Less clutter on the schedule
+
+- Removed the saved schedule bubble. Save progress and errors still appear when needed.
+
 ### Schedule trainees on Saturday
 
 - People in active training can now be picked for their training station while you build a Saturday schedule. They still need a trainer on their first day.
