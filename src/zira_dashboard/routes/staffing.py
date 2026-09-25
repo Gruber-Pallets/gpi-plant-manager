@@ -2490,6 +2490,7 @@ def _save_staffing_schedule_for_state(
             full_day_off_names = {
                 entry["name"] for entry in _safe_time_off_entries(d) if entry.get("hours") is None
             }
+            trainees, partners, _ = _training_validation_context(d, assignments)
             publish_block = sr.validate_publish(
                 saturday_bundle,
                 assignments,
@@ -2497,6 +2498,9 @@ def _save_staffing_schedule_for_state(
                 full_day_off_names,
                 available_names=saturday_available_names,
                 require_coverage=False,
+                training_trainees_by_center=trainees,
+                training_requires_partner_by_center=partners,
+                certification_skills=rotation_store.certification_skill_names() if trainees else (),
             )
         except Exception:
             log.exception("Saturday publish validation failed for %s", d)

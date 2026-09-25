@@ -102,6 +102,7 @@ def _patch_holiday_save(
     default_updates: list[tuple[object, dict]] = []
     current = schedule or staffing.Schedule(day=BLACK_FRIDAY, assignments={})
 
+    monkeypatch.setattr(staffing_routes.rotation_store, "active_blocks_for_day", lambda _day: [])
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair,))
     monkeypatch.setattr(optional_workday, "for_day", lambda _day: _holiday())
     monkeypatch.setattr(

@@ -157,6 +157,10 @@ def validate_publish(
     full_day_off_names,
     available_names=None,
     require_coverage: bool = True,
+    *,
+    training_trainees_by_center=None,
+    training_requires_partner_by_center=None,
+    certification_skills=(),
 ) -> list[str]:
     """Return every reason a recruited Saturday schedule cannot be published."""
     openings_by_name = {opening.wc_name: opening for opening in bundle.openings}
@@ -166,6 +170,9 @@ def validate_publish(
         if item.status == "committed"
     }
     available = set(committed) if available_names is None else set(available_names)
+    training_trainees_by_center = training_trainees_by_center or {}
+    training_requires_partner_by_center = training_requires_partner_by_center or {}
+    certification_skills = set(certification_skills)
     reasons: list[str] = []
     seen: set[str] = set()
     assigned_names: set[str] = set()
@@ -173,6 +180,19 @@ def validate_publish(
 
     for wc_name, names in (assignments or {}).items():
         opening = openings_by_name.get(wc_name)
+        trainees = set(training_trainees_by_center.get(wc_name, ()))
+        needs_partner = set(training_requires_partner_by_center.get(wc_name, ()))
+        trainer_present = opening is not None and any(
+            partner not in trainees
+            and partner in available
+            and partner not in full_day_off_names
+            and (trainer := people_by_name.get(partner)) is not None
+            and trainer.active
+            and not trainer.reserve
+            and all(trainer.level(skill) >= (1 if skill in certification_skills else 3)
+                    for skill in opening.required_skills)
+            for partner in names
+        )
         for name in names:
             if name in seen:
                 reasons.append(f"{name} is assigned more than once.")
@@ -188,7 +208,9 @@ def validate_publish(
                 reasons.append(f"{name} has approved full-day time off.")
             if opening is not None:
                 is_qualified = person is not None and all(
-                    person.level(skill) >= 1 for skill in opening.required_skills
+                    person.level(skill) >= 1
+                    or (name in trainees and skill not in certification_skills)
+                    for skill in opening.required_skills
                 )
                 if not is_qualified:
                     qualification_label = (
@@ -196,6 +218,8 @@ def validate_publish(
                         if len(opening.required_skills) == 1 else wc_name
                     )
                     reasons.append(f"{name} is no longer qualified for {qualification_label}.")
+                elif name in needs_partner and not trainer_present:
+                    reasons.append(f"{name} needs a level 3 trainer at {wc_name} on the first training day.")
                 elif name in available and person is not None and person.active and name not in full_day_off_names:
                     qualified_count[wc_name] += 1
 

@@ -12,6 +12,10 @@ Latest updates to GPI Plant Manager. Newest first. Each day is split by deployme
 
 ## 2026-09-25
 
+### Publish Saturday training schedules
+
+- Fixed a warning that blocked Saturday schedules for people in active training. First-day trainees still need a trained partner at their station.
+
 ### Less clutter on the schedule
 
 - Removed the saved schedule bubble. Save progress and errors still appear when needed.

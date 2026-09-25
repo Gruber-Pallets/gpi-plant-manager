@@ -272,6 +272,34 @@ def test_publish_accepts_level_one_qualified_operator():
     ) == []
 
 
+@pytest.mark.parametrize("first_day,trainer_level,certificate,expected", [
+    (True, 3, 1, None),
+    (False, 0, 1, None),
+    (True, 0, 1, "level 3 trainer"),
+    (True, 2, 1, "level 3 trainer"),
+    (True, 3, 0, "no longer qualified"),
+])
+def test_saturday_publish_honors_training_requirements(first_day, trainer_level, certificate, expected):
+    bundle = SimpleNamespace(
+        openings=[SimpleNamespace(wc_name="Tablets", required_skills=("Tablets", "Certificate"), requested_count=1)],
+        commitments=[],
+    )
+    reasons = sr.validate_publish(
+        bundle, {"Tablets": ["Daniel", "Juan"]},
+        {"Daniel": _person("Daniel", Tablets=0, Certificate=certificate),
+         "Juan": _person("Juan", Tablets=trainer_level, Certificate=1)},
+        set(), available_names={"Daniel", "Juan"}, require_coverage=False,
+        training_trainees_by_center={"Tablets": {"Daniel"}},
+        training_requires_partner_by_center={"Tablets": {"Daniel"}} if first_day else {},
+        certification_skills={"Certificate"},
+    )
+    daniel_reasons = [reason for reason in reasons if "Daniel" in reason]
+    if expected is None:
+        assert daniel_reasons == []
+    else:
+        assert any(expected in reason for reason in daniel_reasons)
+
+
 @pytest.mark.parametrize(
     ("assignments", "people", "full_day_off_names", "expected"),
     [
@@ -348,7 +376,19 @@ def test_recruiting_saturday_stays_blank_before_the_deadline(monkeypatch):
     assert saved == []
 
 
-def test_post_deadline_publish_uses_only_requested_saturday_positions(monkeypatch):
+@pytest.mark.parametrize("training", [False, True])
+def test_post_deadline_publish_uses_only_requested_saturday_positions(monkeypatch, training):
+    from zira_dashboard import rotation_store, rotation_training
+
+    block = rotation_store.TrainingBlock(
+        id=1, trainee_name="Ana", trainer_name="Trainer", skill="Repair",
+        work_center="Repair 1", start_day=date(2026, 7, 24),
+        planned_attended_days=6, status="active",
+    )
+    monkeypatch.setattr(rotation_store, "active_blocks_for_day", lambda _: [block] if training else [])
+    monkeypatch.setattr(rotation_store, "certification_skill_names", lambda: set())
+    monkeypatch.setattr(staffing_routes, "_absence_by_day_for_block", lambda *_: {})
+    monkeypatch.setattr(rotation_training.shift_config, "is_workday", lambda d: d.weekday() < 5)
     bundle = _repair_only_bundle()
     saved = []
     marked = []
@@ -357,7 +397,7 @@ def test_post_deadline_publish_uses_only_requested_saturday_positions(monkeypatc
     monkeypatch.setattr(staffing_routes.staffing, "LOCATIONS", (repair, unrelated))
     monkeypatch.setattr(staffing_routes.work_centers_store, "min_ops", lambda loc: loc.min_ops)
     monkeypatch.setattr(staffing_routes.staffing, "load_schedule", lambda _day: staffing.Schedule(day=SATURDAY, assignments={}))
-    monkeypatch.setattr(staffing_routes.staffing, "load_roster", lambda: [_person("Ana", Repair=3)])
+    monkeypatch.setattr(staffing_routes.staffing, "load_roster", lambda: [_person("Ana", Repair=0 if training else 3)])
     monkeypatch.setattr(
         staffing_routes.staffing,
         "save_schedule",
